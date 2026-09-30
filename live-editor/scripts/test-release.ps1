@@ -11,7 +11,7 @@ if (!$OutputRoot) { $OutputRoot = Join-Path (Join-Path $ProjectRoot '.tools\rele
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $OutputRoot) { throw 'Extraction test requires a new empty destination.' }
 $extension = [IO.Path]::GetExtension($Package).ToLowerInvariant()
-if ($extension -notin @('.exe','.zip')) { throw 'Expected a ZIP or self-extracting release EXE.' }
+if ($extension -notin @('.7z','.zip')) { throw 'Expected a portable ZIP or 7z. Test setup.exe with test-installer.ps1.' }
 New-Item -ItemType Directory -Path $OutputRoot | Out-Null
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $peakBytes = [long]0
@@ -19,16 +19,17 @@ if ($extension -eq '.zip') {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::ExtractToDirectory($Package, $OutputRoot)
 } else {
-$process = Start-Process -FilePath $Package -ArgumentList ('-o"' + $OutputRoot + '" -y') -WindowStyle Hidden -PassThru
+$sevenZip = Join-Path $ProjectRoot '.tools\release-tools\7zip\7z.exe'
+$process = Start-Process -FilePath $sevenZip -ArgumentList ('x "' + $Package + '" -o"' + $OutputRoot + '" -y') -WindowStyle Hidden -PassThru
 $peakBytes = [long]0
 try {
     while (!$process.HasExited) {
         $process.Refresh()
         $peakBytes = [Math]::Max($peakBytes, $process.PeakWorkingSet64)
-        if ($clock.Elapsed.TotalSeconds -gt 120) { $process.Kill(); throw 'Self-extraction timed out.' }
+        if ($clock.Elapsed.TotalSeconds -gt 120) { $process.Kill(); throw 'Portable extraction timed out.' }
         Start-Sleep -Milliseconds 100
     }
-    if ($process.ExitCode -ne 0) { throw "Self-extraction failed: $($process.ExitCode)" }
+    if ($process.ExitCode -ne 0) { throw "Portable extraction failed: $($process.ExitCode)" }
 } finally { $process.Dispose() }
 }
 $clock.Stop()

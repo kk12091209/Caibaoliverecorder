@@ -69,7 +69,10 @@ export class Media {
   constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions } = {}) { this.store = store; this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
   prepareNext(id,options){return this.renderer.prepareNext(id,options);}
   invalidatePreparation(id){this.renderer.invalidate(id);}
-  hasForegroundWork(){return this.processing||this.enqueues.size>0||this.previews.size>0||[...this.probes].some(probe=>!probe.background)||this.saves.size>0||this.savePreparations.size>0||[...this.children].some(child=>!this.backgroundChildren.has(child));}
+  // Preview and audio analysis can run beside preparation. Cleanup still uses
+  // the default broad check, so their readers/processes remain protected.
+  interactiveChildren = new Set();
+  hasForegroundWork({includeInteractive=true}={}){return this.processing||this.enqueues.size>0||(includeInteractive&&this.previews.size>0)||[...this.probes].some(probe=>!probe.background)||this.saves.size>0||this.savePreparations.size>0||[...this.children].some(child=>!this.backgroundChildren.has(child)&&(includeInteractive||!this.interactiveChildren.has(child)));}
   assertSessionAvailable(id) {if(this.closed)throw new Error('视频服务已关闭。');if(this.blockedSessions.has(id)||this.store.deletions?.has(id))throw new Error('素材正在删除，请稍后再试。');}
   async cancelPreviews(id) {
     this.blockedSessions.set(id,(this.blockedSessions.get(id)||0)+1);
@@ -94,16 +97,16 @@ export class Media {
     child.once('close',()=>this.temporaryWorkspaces.childExited(ticket,child.pid));
     return child;
   }
-  process(args, { input, output, signal, progress, cwd, background=false } = {}) {
+  process(args, { input, output, signal, progress, cwd, background=false, interactive=false } = {}) {
     signal=Media.prototype.exportSignal.call(this,signal);
     const exportSignal=this.exportContext?.getStore()?.controller.signal;
     if(this.closed)return Promise.reject(new Error('视频服务已关闭。'));
     if(signal?.aborted)return Promise.reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));
     const child = this.spawnTracked(this.ffmpeg, ['-hide_banner','-loglevel','warning','-nostdin',...args], { cwd, windowsHide: true, stdio: ['pipe', output ? 'pipe' : 'ignore', 'pipe'] },cwd);
-    this.children.add(child);if(background)this.backgroundChildren.add(child); let log = '';
+    this.children.add(child);if(background)this.backgroundChildren.add(child);if(interactive)this.interactiveChildren.add(child); let log = '';
     try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     child.stderr.on('data', b => { log = (log+b).slice(-16000); progress?.(log); });
-    const done = new Promise((resolve, reject) => { let spawnError;child.once('error', error=>{spawnError=error;}); child.once('close', code => { this.children.delete(child);this.backgroundChildren.delete(child); if (signal?.aborted) resolve(); else if(spawnError)reject(spawnError);else if(code===0)resolve();else reject(new Error(`视频处理失败 (${code})：${log.slice(-1200)}`)); }); });
+    const done = new Promise((resolve, reject) => { let spawnError;child.once('error', error=>{spawnError=error;}); child.once('close', code => { this.children.delete(child);this.backgroundChildren.delete(child);this.interactiveChildren.delete(child); if (signal?.aborted) resolve(); else if(spawnError)reject(spawnError);else if(code===0)resolve();else reject(new Error(`视频处理失败 (${code})：${log.slice(-1200)}`)); }); });
     const abort = () => child.kill(); signal?.addEventListener('abort', abort, { once: true });
     const inputDone = input ? pipeline(Readable.from(input,{objectMode:false,highWaterMark:256*1024}), child.stdin).catch(e => { if (!['EPIPE','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE'].includes(e.code) && !signal?.aborted) { child.kill(); throw e; } }) : (child.stdin.end(), Promise.resolve());
     const outputDone = output ? pipeline(child.stdout, output).catch(e => { child.kill(); if (!signal?.aborted) throw e; }) : Promise.resolve();
@@ -147,7 +150,6 @@ export class Media {
     finally{await this.temporaryWorkspaces.finish(dir);}
   }
   async preview(sessionId, start, response, signal) {
-    if(this.preparation)await this.preparation.yieldForForeground();
     this.assertSessionAvailable(sessionId);
     if(!this.store.session(sessionId))throw new Error('素材不存在或已删除。');
     if (this.previews.size >= 3) throw new Error('同时预览数量已达上限，请关闭其他预览窗口。');
@@ -162,7 +164,7 @@ export class Media {
       active.done=this.process(['-fflags','+genpts','-probesize','1000000','-analyzeduration','1000000','-f','flv','-i','pipe:0','-ss',String(Math.max(0,start-base)),
         '-t','90','-map','0:v:0','-map','0:a:0?','-vf',"scale=w='min(1280,iw)':h=-2",'-c:v','libx264','-preset','ultrafast','-crf','24','-threads','2','-pix_fmt','yuv420p','-g','30','-bf','0',
         '-c:a','aac','-b:a','128k','-movflags','frag_keyframe+empty_moov+default_base_moof','-flush_packets','1','-f','mp4','pipe:1'],
-      {input:sourceStream(this.store,source.id,start,start+90,{follow:true,signal}),output:response,signal});
+      {input:sourceStream(this.store,source.id,start,start+90,{follow:true,signal}),output:response,signal,interactive:true});
       await active.done;
     } finally { this.previews.delete(token); }
   }

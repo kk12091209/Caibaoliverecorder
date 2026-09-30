@@ -1,10 +1,10 @@
 # Windows 精简发布
 
-发布物包括 Windows 兼容的标准 ZIP、7z 和自解压 EXE，内容相同。ZIP 可用 Windows 自带解压功能打开。用户双击选择目录后，再启动里面的 `录播机.exe`；不需要安装 Node、FFmpeg 或开发 SDK。自解压层使用标准 7-Zip SFX，不请求管理员权限、不写注册表、不自动启动程序。另有相同内容的 `.7z` 包供熟悉压缩软件的用户使用。用户只需下载其中一个。
+发布物包括标准 ZIP、7z 便携包，以及 `-setup.exe` 中文安装包。ZIP 可用 Windows 自带解压功能打开。安装版使用 Inno Setup 6.7.3 的现代中文向导，支持选择目录、快捷方式、Windows 卸载记录和程序目录的卸载入口；仅为当前用户安装，不需要管理员权限。三种包使用同一套运行文件，用户只需下载其中一个，不需要安装 Node、FFmpeg 或开发 SDK。
 
-上一版 `0.1.0-preview.20260929.5` 本地实测：自解压 EXE **84,672,052 字节（84.67 MB）**，自解压用时 5.479 秒、峰值工作集约 150 MiB，逐文件哈希、Node SQLite 和软件编码验证通过。每个新版仍须重新构建和验证，以对应版本的体积报告为准。这些是本机数据，不代表所有电脑的耗时，也不代表已在一台全新 Windows 系统上验收。
+每个版本都重新构建、核对体积和文件哈希，以对应 Release 的体积报告为准。本机安装与功能测试不代表已在一台全新 Windows 系统上验收。
 
-7z / 自解压包的下载体积门槛按严格的 100,000,000 字节计算，构建超限会失败。标准 ZIP 使用 Deflate，压缩率较低，不适用该门槛；体积单独记录在报告中，不声称 ZIP 小于 100 MB。解压体积、用户后续录像和系统 WebView2 运行时另计。Windows 10/11 x64 必须已有 .NET Framework 4.7.2+ 和 WebView2 Evergreen；缺少时需从微软另行下载安装。
+安装包的下载体积门槛按严格的 100,000,000 字节计算，构建超限会失败。标准 ZIP 使用 Deflate，压缩率较低，不适用该门槛；体积单独记录在报告中，不声称 ZIP 小于 100 MB。解压体积、用户后续录像和系统 WebView2 运行时另计。Windows 10/11 x64 必须已有 .NET Framework 4.7.2+ 和 WebView2 Evergreen；缺少时需从微软另行下载安装。
 
 ## 用户目录布局
 
@@ -31,7 +31,7 @@
 发布脚本兼容 Windows PowerShell 5.1 与 PowerShell 7；`.ps1` 文件保留 UTF-8 BOM，确保 Windows 自带 PowerShell 正确读取“录播机.exe”等中文路径。下载使用 `-UseBasicParsing`，不依赖 Internet Explorer 初始化。
 
 1. 在源码的 `live-editor` 目录先执行 `. ./scripts/dev-env.ps1`，使当前进程的缓存和临时文件留在源码仓库 `.tools` 下；然后恢复依赖、运行 `npm test`、`npm run build`，构建 `desktop/build.ps1`。
-2. 运行 `scripts/prepare-release-tools.ps1 -Destination <工具缓存>`。这只下载并解压开发用工具，不安装系统软件。固定版本和 SHA-256 校验防止静默换版。
+2. 运行 `scripts/prepare-release-tools.ps1 -Destination <工具缓存>`。下载并校验固定版本的 7-Zip、FFmpeg 与 Inno Setup。Inno 编译器仅为当前开发用户安装在工具缓存中，不创建快捷方式或文件关联；不改变全局环境变量。安装器构建也校验编译器 SHA-256。
 3. 准备运行时目录中的 `node/node.exe`（Node 24.12.0）及自包含 .NET 8 录制核心 `recorder`。`-RuntimeRoot` 直接指向这个运行时目录；不指定时依次查找 `ProjectRoot/程序组件/runtime`、`ProjectRoot/runtime`、`ProjectRoot` 父目录的 `程序组件/runtime`。保留恢复过的 NuGet 缓存以收集许可。脚本不会运行现有录制服务，也不会打开现有用户数据库。
 4. 在 PowerShell 中运行：
 
@@ -40,14 +40,16 @@
   -AppRoot '<最新 live-editor 源码目录>' `
   -DesktopRoot '<desktop/package 目录>' `
   -RuntimeRoot '<包含 node 与 recorder 的 runtime 目录>' `
-  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.0'
+  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.1'
 ```
 
-输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。输出包含 `.zip`、`.exe`、`.7z`、体积/哈希报告、未压缩工作目录；`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256，所有路径仍相对于解压后的应用根目录。SFX 包的内容与 `.7z` 完全一致；外层 EXE 图标在追加归档前写入临时解压模板，不改变原始工具。
+输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。输出包含 `.zip`、`-setup.exe`、`.7z`、体积/哈希报告、未压缩工作目录；`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256。安装版额外加入安装器许可、卸载程序与卸载快捷方式。安装器脚本与中文翻译许可位于 `installer`。
 
-压缩使用 128 MiB LZMA2 字典，主要用于复用 FFmpeg 与 FFprobe 之间的重复数据；它增加的是解压期间约 128 MiB 级的字典内存，不改变软件运行时内存。压缩任务本身属于开发发布步骤，内存需求明显高于解压。没有使用启动时重复解压的单文件应用方案。
+7z 和安装包使用 128 MiB LZMA2 字典，主要复用 FFmpeg 与 FFprobe 之间的重复数据。字典只增加解压期间的内存，不改变软件运行时内存。压缩任务本身属于开发发布步骤，内存需求高于解压。没有使用启动时重复解压的单文件应用方案。
 
-完成后分别运行 `scripts/test-release.ps1 -Package <ZIP或自解压EXE> -OutputRoot <新的测试解压目录>`，实际执行自解压、以 UTF-8 读取含中文路径的清单并核对每个文件的 SHA-256、检查顶层仅有四项、默认视频目录为空、没有未列出的文件和隐私数据，再验证随包 Node SQLite 与 FFmpeg 软件编码。新布局清单的 `layoutVersion` 为 2；验证脚本只接受当前的“程序组件”布局。录制、预览、三种导出模式和桌面启动仍需在隔离数据目录进一步冒烟；不要使用真实录像目录进行发布测试。
+完成后分别运行 `scripts/test-release.ps1 -Package <ZIP或7z> -OutputRoot <新的测试解压目录>`，核对逐文件 SHA-256、顶层四项、空视频目录、隐私排除，并验证随包 Node SQLite 与 FFmpeg 软件编码。新布局清单的 `layoutVersion` 为 2。
+
+再运行 `scripts/test-installer.ps1 -Stage <未压缩工作目录> -ToolsRoot <工具缓存>`。脚本编译独立 QA 身份，在 `.tools/release-qa` 实际执行安装、升级与卸载；检查卸载文件、Windows 卸载记录、文件哈希、工作中拒绝维护、空闲安全退出，以及录像/编辑数据库/导出视频在升级和卸载后仍存在。安装与卸载不强制结束正在录制或处理的后台。卸载只删除安装器登记的程序文件，不递归清空应用目录。旧便携版不创建卸载记录，若仍在运行则要求用户先退出。录制、预览和三种导出仍需隔离目录冒烟；不得使用真实录像目录。
 
 ## 包含与排除
 
@@ -59,7 +61,7 @@
 
 ## 许可与公开发布
 
-包内 `程序组件/LICENSE` 与 `程序组件/licenses` 保留项目 GPL-3.0、Node 及其第三方声明、对应 .NET 运行时声明、WebView2、Vue、Lucide、FFmpeg 和 7-Zip 许可，以及录制核心 NuGet 依赖的版本、作者、版权、许可文件/元数据。仍须在公开发布时提供本项目该版本的完整对应源码（包括录制核心改动与构建脚本）和 GPL 组件的对应源码获取渠道；仅放二进制或指向不对应版本的最新源码不够。本项目的发布仓库为 https://github.com/kk12091209/-；打包脚本只生成本地文件，不会自动上传。
+包内 `程序组件/LICENSE` 与 `程序组件/licenses` 保留项目 GPL-3.0、Node 及其第三方声明、对应 .NET 运行时声明、WebView2、Vue、Lucide、FFmpeg 和 7-Zip 许可，以及录制核心 NuGet 依赖的版本、作者、版权、许可文件/元数据。仍须在公开发布时提供本项目该版本的完整对应源码（包括录制核心改动与构建脚本）和 GPL 组件的对应源码获取渠道；仅放二进制或指向不对应版本的最新源码不够。本项目的发布仓库为 https://github.com/kk12091209/Caibaoliverecorder；打包脚本只生成本地文件，不会自动上传。
 
 脚本默认生成本地候选。公开构建必须额外传入 `-ForPublic -SourceUrl '<本项目该版本的完整源码归档或标签HTTPS地址>'`。脚本会拒绝缺失地址及直接把上游仓库当成修改版源码的做法；发布者仍须核实该地址确实包含完整且对应版本的源码、构建说明与依赖源码取得方式，不能把 URL 参数检查当成完整许可审计。
 

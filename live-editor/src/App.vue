@@ -3,6 +3,7 @@ import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick 
 import DanmakuOverlay from './components/DanmakuOverlay.vue';
 import TimelineSignals from './components/TimelineSignals.vue';
 import TimelineNavigator from './components/TimelineNavigator.vue';
+import TimelineMarker from './components/TimelineMarker.vue';
 import { signalWindow, viewWindow, windowPercent, visibleRange, panWindow, zoomWindow } from './timeline-signals.js';
 import appIcon from './assets/app-icon.png';
 import { roomRecordEnabled, roomStatus } from './room-status.js';
@@ -39,6 +40,7 @@ const exportScope=ref('clips'),exportTarget=ref(null),exportRanges=ref([]),expor
 const pendingCleanup=computed(()=>state.value.pendingCleanup||[]);
 const draftStart=computed(()=>markerTime('start',startMarked.value));
 const draftEnd=computed(()=>markerTime('end',endMarked.value));
+const draftDuration=computed(()=>draftStart.value!==null&&draftEnd.value!==null&&draftEnd.value>draftStart.value?draftEnd.value-draftStart.value:null);
 const clockBounds=computed(()=>recordingTimeBounds(activeSession.value,detail.value?.sources||[],duration.value));
 const selectionReady=computed(()=>!!selected.value&&detail.value?.id===selected.value);
 const canUseRecordingTime=computed(()=>selectionReady.value&&activeSession.value?.room>0&&!!clockBounds.value);
@@ -121,7 +123,7 @@ function preparationReason(entry){
   if(entry?.status==='ready')return '';
   if(!preparationEnabled.value)return '自动预处理已关闭，请在设置中开启。';
   if(entry?.status==='error')return entry.error||'预处理暂未完成，可稍后重试。';
-  if(entry?.status==='preparing')return '播放、剪辑和导出优先，可随时暂停。';
+  if(entry?.status==='preparing')return '预览和选段可同时进行，正式导出时暂缓，可随时暂停。';
   const reasons={recording:'正在录制，空闲后继续。',connection:'等待录制核心连接。',preview:'播放优先，预览结束后继续。',export:'正在导出，完成后继续。',indexing:'素材正在整理，完成后继续。',compaction:'素材正在整理，完成后继续。',source:'素材尚未准备好，稍后继续。',space:'磁盘可用空间不足，腾出空间后继续。',disabled:'自动预处理已关闭，请在设置中开启。',foreground:'当前操作优先，空闲后继续。',idle:'等待空闲后开始。',user:'已手动暂停，可随时继续。'};
   return reasons[entry?.reason]||(['queued','waiting'].includes(entry?.status)?'等待后台空闲。':entry?.status==='paused'?'已手动暂停，可随时继续。':'');
 }
@@ -147,7 +149,6 @@ async function actPreparation(session){
   finally{preparationBusyIds.value=preparationBusyIds.value.filter(value=>value!==id);}
 }
 function timelinePercent(time){return windowPercent(time,viewport.value.from,viewport.value.to);}
-function markerLabelStyle(time){return {'--label-shift':`max(0px, calc(80px - ${timelinePercent(time)}cqw))`};}
 function inViewport(time){return time!==null&&Number.isFinite(time)&&time>=viewport.value.from&&time<=viewport.value.to;}
 function rangeStyle(range){return {left:range.left+'%',width:range.width+'%'};}
 function setTimelineWindow(window){if(window===null&&timelineWindow.value===null)return;if(window&&timelineWindow.value&&window.from===timelineWindow.value.from&&window.to===timelineWindow.value.to)return;timelineWindow.value=window;}
@@ -208,6 +209,13 @@ function setMark(which){
   const stamp=recordingTimeAt(position.value,activeSession.value,detail.value?.sources||[]),text=Number.isFinite(stamp)?toRecordingInput(stamp):'';
   if(which==='start'){startMarked.value=true;startDateText.value=text;}else{endMarked.value=true;endDateText.value=text;}
 }
+function dragMark(which,time){
+  markText(which,time);
+  const stamp=recordingTimeAt(time,activeSession.value,detail.value?.sources||[]),text=Number.isFinite(stamp)?toRecordingInput(stamp):'';
+  if(which==='start'){startMarked.value=true;startDateText.value=text;}else{endMarked.value=true;endDateText.value=text;}
+}
+function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
+function clearDraftMarks(){startMarked.value=false;endMarked.value=false;}
 function resetSelection(){selectionGeneration++;generation++;selected.value=null;detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();previewUrl.value='';loading.value=false;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];overlayFeed.value=[];position.value=0;startMarked.value=false;endMarked.value=false;}
 function applyState(value){state.value=value;if(selected.value&&!value.sessions.some(s=>s.id===selected.value))resetSelection();}
 function closeContext(){sessionMenu.value=null;jobMenu.value=null;}
@@ -295,7 +303,7 @@ async function choose(id){
   try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;startText.value=format(0,true);endText.value=format(Math.min(10,result.duration),true);if(!canUseRecordingTime.value)positionMode.value='video';syncRecordingTexts();query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
-async function save(){if(saving.value||!selectionReady.value)return;const id=selected.value,version=selectionGeneration;saving.value=true;try{const result=await api(`sessions/${id}/edit`,{...edit.value,filterLottery:true});if(selected.value===id&&version===selectionGeneration)edit.value=result;}catch(e){tell(e.message);if(selected.value===id&&version===selectionGeneration){const result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration)edit.value=result.edit;}}finally{saving.value=false;}}
+async function save(){if(saving.value||!selectionReady.value)return false;const id=selected.value,version=selectionGeneration;saving.value=true;try{const result=await api(`sessions/${id}/edit`,{...edit.value,filterLottery:true});if(selected.value===id&&version===selectionGeneration){edit.value=result;return true;}return false;}catch(e){tell(e.message);if(selected.value===id&&version===selectionGeneration){const result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration)edit.value=result.edit;}return false;}finally{saving.value=false;}}
 async function addRoom(){if(!roomUrl.value.trim())return;addingRoom.value=true;try{await api('rooms',{url:roomUrl.value});roomUrl.value='';tell('直播间已添加，开播后自动录制。','success');await refresh();}catch(e){tell(e.message);}finally{addingRoom.value=false;}}
 async function roomAction(room,action,data={}){if(roomBusyIds.value.includes(room.roomId))return;roomBusyIds.value.push(room.roomId);try{await api(`rooms/${room.roomId}/${action}`,data);await refresh();}catch(e){tell(e.message);}finally{roomBusyIds.value=roomBusyIds.value.filter(id=>id!==room.roomId);}}
 function containsTime(ranges,time){for(let i=0;i<ranges.length;i++)if(time>=ranges.start(i)&&time<ranges.end(i)-.05)return true;return false;}
@@ -341,7 +349,7 @@ function seekFromSlider(event){scrubbing.value=false;void playFrom(Number(event.
 function step(direction){pausePreview();void playFrom(position.value+direction/fps.value,false);}
 function playNext(){const available=detail.value?.sources||[];const same=available.find(s=>s.start<=position.value&&s.start+s.duration>position.value+.15);if(same){void playFrom(position.value+1/fps.value,true);return;}const next=available.find(s=>s.start>previewBase.value+.1&&s.start>=position.value-.3&&s.duration>0);if(next)void playFrom(next.start,true);}
 function ended(){previewEnded.value=true;loading.value=false;if(isPlaying.value)playNext();}
-async function addRange(){try{const start=readMark('start'),end=readMark('end');if(start<0||end<=start||end>duration.value+.05)throw new Error('请选择已录制范围内的起点和终点。');edit.value.ranges.push({start,end:Math.min(end,duration.value),selected:true});await save();}catch(e){tell(e.message);}}
+async function addRange(){if(saving.value||!selectionReady.value)return;const id=selected.value,version=selectionGeneration;try{const start=readMark('start'),end=readMark('end');if(start<0||end<=start||end>duration.value+.05)throw new Error('请选择已录制范围内的起点和终点。');edit.value.ranges.push({start,end:Math.min(end,duration.value),selected:true});if(await save()&&selected.value===id&&version===selectionGeneration)clearDraftMarks();}catch(e){tell(e.message);}}
 async function selectRange(index,value){edit.value.ranges[index].selected=value;await save();}
 async function selectAllRanges(value){for(const range of edit.value.ranges)range.selected=value;await save();}
 async function removeRange(index){edit.value.ranges.splice(index,1);await save();}
@@ -427,8 +435,8 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <div id="timeline-tracks" class="timeline-tracks"><div class="timeline"><div class="timeline-track"/>
             <TimelineSignals kind="audio" :audio="signals?.audio" :from="viewport.from" :to="viewport.to" :data-from="signals?.from??viewport.from" :data-to="signals?.to??viewport.to" :selected="selectionReady" :loading="signalsLoading" :error="signalsError"/>
             <div v-if="draftView" class="draft-range" :style="rangeStyle(draftView)"/>
-            <div v-if="inViewport(draftStart)" class="timeline-marker marker-start" :class="{nearend:timelinePercent(draftStart)>80}" :style="{left:timelinePercent(draftStart)+'%'}" :aria-label="'起点标记 '+format(draftStart,true)"><span :style="markerLabelStyle(draftStart)">I 起点</span></div>
-            <div v-if="inViewport(draftEnd)" class="timeline-marker marker-end" :class="{nearend:timelinePercent(draftEnd)>80}" :style="{left:timelinePercent(draftEnd)+'%'}" :aria-label="'终点标记 '+format(draftEnd,true)"><span :style="markerLabelStyle(draftEnd)">O 终点</span></div>
+            <TimelineMarker v-if="inViewport(draftStart)" kind="start" :time="draftStart" :from="viewport.from" :to="viewport.to" :min="0" :max="draftEnd!==null&&draftEnd>0?draftEnd-.001:duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('start',$event)" @commit="previewMark" @start="timelineDragging=true" @end="endTimelineDrag"/>
+            <TimelineMarker v-if="inViewport(draftEnd)" kind="end" :time="draftEnd" :from="viewport.from" :to="viewport.to" :min="draftStart!==null&&draftStart<duration?draftStart+.001:0" :max="duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('end',$event)" @commit="previewMark" @start="timelineDragging=true" @end="endTimelineDrag"/>
             <div v-for="{range,index,view} in visibleRanges" :key="index" class="range-highlight" :class="{unselected:range.selected===false}" :title="'选段 '+(index+1)+'：'+format(range.start,true)+' → '+format(range.end,true)" :style="rangeStyle(view)"/>
             <div v-if="inViewport(position)" class="playhead" :style="{left:timelinePercent(position)+'%'}"/>
             <input type="range" aria-label="播放位置" :min="viewport.from" :max="viewport.to||1" step="0.001" :value="sliderPosition" :disabled="!canPreview" @pointerdown="scrubbing=true" @input="position=Number($event.target.value)" @change="seekFromSlider"/>
@@ -436,7 +444,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <TimelineSignals kind="density" :density="signals?.density" :from="viewport.from" :to="viewport.to" :data-from="signals?.from??viewport.from" :data-to="signals?.to??viewport.to" :position="position" :selected="selectionReady" :loading="signalsLoading" :error="signalsError" :disabled="!canPreview" @seek="playFrom($event,isPlaying)"/>
           </div>
           <TimelineNavigator :key="selected||'empty'" :duration="duration" :from="viewport.from" :to="viewport.to" :disabled="!canPreview" @pan="panTimeline" @start="timelineDragging=true" @end="endTimelineDrag"/>
-          <div v-if="startMarked||endMarked" class="marker-summary" aria-live="polite"><span class="start-color">{{ draftStart===null?'起点未标记或超出范围':'I 起点 · '+format(draftStart,true) }}</span><span class="end-color">{{ draftEnd===null?'终点未标记或超出范围':'O 终点 · '+format(draftEnd,true) }}</span><span v-if="draftStart!==null&&draftEnd!==null&&draftEnd<=draftStart" class="invalid-range">终点需要晚于起点</span></div>
+          <div v-if="startMarked||endMarked" class="marker-summary" aria-live="polite"><span class="start-color">{{ draftStart===null?'起点未标记或超出范围':'I 起点 · '+format(draftStart,true) }}</span><span class="end-color">{{ draftEnd===null?'终点未标记或超出范围':'O 终点 · '+format(draftEnd,true) }}</span><span v-if="draftDuration!==null" class="selection-duration">片段时长 · {{ format(draftDuration,true) }}</span><span v-if="draftStart!==null&&draftEnd!==null&&draftEnd<=draftStart" class="invalid-range">终点需要晚于起点</span></div>
           <div class="selection-controls" :class="{'recording-time-controls':positionMode==='recording'}">
             <div class="selection-start">
               <div class="position-mode" role="group" aria-label="定位方式" @keydown.stop><button type="button" :aria-pressed="positionMode==='video'" :disabled="!selected" @click="setPositionMode('video')">视频时间</button><button type="button" :aria-pressed="positionMode==='recording'" :disabled="!canUseRecordingTime" :title="canUseRecordingTime?'按录制日期和时刻定位':'这份素材没有可靠的开录时间'" @click="setPositionMode('recording')">录制时间</button></div>
@@ -499,7 +507,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
       </template>
       <template v-else-if="modal==='import'"><h2><Upload :size="23"/>导入本地录像</h2><p>填写 FLV 文件的完整路径，同名 XML 弹幕会自动关联。原文件保留在原处。</p><form @submit.prevent="submitImport"><label class="field-label">录像文件<input v-model="importPath" placeholder="E:\录像\直播.flv" aria-label="录像文件路径" required autofocus/></label><label class="checkbox"><input v-model="importFollow" type="checkbox"/>该文件正在录制，持续读取新增内容</label><button class="button primary wide" :disabled="modalBusy"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>导入录像</button></form></template>
       <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2>
-        <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，播放、剪辑和导出优先。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>
+        <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>
         <div class="directory-settings"><label class="field-label">默认导出根目录<div class="path-picker"><input v-model="exportDirectory" aria-label="默认导出文件夹" placeholder="填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>选择</button></div></label><p class="muted">按北京时间分类：完整视频保存为「完整素材 / 日期 / 起止时间.mp4」；选段保存为「导出片段 / 日期 / 起止时间 / 视频.mp4」。修改路径或重新选择后自动保存。</p><div class="export-destinations"><span>完整素材</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>导出片段</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>打开文件目录</button></div></div>
         <div class="setting-info"><span>完整原始录像与弹幕</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">打开原始素材文件夹</button></div>
         <section v-if="pendingCleanup.length" class="cleanup-settings" aria-label="清理未完成"><strong>清理未完成（{{ pendingCleanup.length }}）</strong><p class="muted">部分文件暂时无法删除，空闲时会自动重试，重启后继续。</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p v-if="item.purge_error" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy" @click="requestDelete(item)">重试清理</button></div></section>

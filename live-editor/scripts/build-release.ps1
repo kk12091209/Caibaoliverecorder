@@ -7,7 +7,7 @@ param(
     [string]$DesktopRoot = '',
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
-    [string]$Version = '0.1.0',
+    [string]$Version = '0.1.1',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
     [long]$MaxDownloadBytes = 100000000
@@ -66,7 +66,7 @@ $componentDirectory = '程序组件'
 $componentRoot = Join-Path $stage $componentDirectory
 $emptyDirectories = @('导出视频默认路径/完整素材', '导出视频默认路径/导出片段')
 # A new destination is required: never recursively delete or reuse user data.
-foreach ($target in @($stage, "$stage.7z", "$stage.zip", "$stage.exe")) {
+foreach ($target in @($stage, "$stage.7z", "$stage.zip", "$stage-setup.exe")) {
     if (Test-Path -LiteralPath $target) { throw "Release target already exists: $target" }
 }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -212,26 +212,13 @@ try {
     & $sevenZip t "$name.zip" -bsp0
     if ($LASTEXITCODE -ne 0) { throw 'ZIP integrity test failed.' }
 } finally { Pop-Location }
-# Update only a fresh PE template, before appending the unchanged 7z payload.
-# The normal extraction dialog still performs no elevation, installation or auto-run.
-$iconTemplate = Join-Path $OutputRoot ($name + '-icon-' + [Guid]::NewGuid().ToString('N') + '.sfx')
-try {
-    & (Join-Path $PSScriptRoot 'set-executable-icon.ps1') -Source (Join-Path $ToolsRoot '7zip\7z.sfx') -Destination $iconTemplate -Icon (Join-Path $AppRoot 'desktop\app.ico') | Out-Null
-    $sfx = [IO.File]::Create("$stage.exe")
-    try {
-        foreach ($source in @($iconTemplate, "$stage.7z")) {
-            $stream = [IO.File]::OpenRead($source)
-            try { $stream.CopyTo($sfx) } finally { $stream.Dispose() }
-        }
-    } finally { $sfx.Dispose() }
-} finally {
-    if (Test-Path -LiteralPath $iconTemplate -PathType Leaf) { Remove-Item -LiteralPath $iconTemplate -Force }
-}
-$size = (Get-Item -LiteralPath "$stage.exe").Length
+# Build a standard installer independently from the portable archives.
+$installer = & (Join-Path $PSScriptRoot 'build-installer.ps1') -Stage $stage -Version $Version -ToolsRoot $ToolsRoot -OutputRoot $OutputRoot
+$size = (Get-Item -LiteralPath $installer).Length
 $installedBytes = [long]0
 foreach ($file in $manifest.files) { $installedBytes += $file.bytes }
 $installedBytes += (Get-Item -LiteralPath (Join-Path $componentRoot 'release-manifest.json')).Length
-$report = [ordered]@{ version=$Version; archive="$name.7z"; selfExtracting="$name.exe"; bytes=$size; decimalMB=[Math]::Round($size/1000000,2); installedBytes=$installedBytes; under100MB=($size -lt $MaxDownloadBytes); sha256=(Get-FileHash -LiteralPath "$stage.exe" -Algorithm SHA256).Hash.ToLowerInvariant(); fileCount=($manifest.files.Count+1) }
+$report = [ordered]@{ version=$Version; archive="$name.7z"; installer="$name-setup.exe"; bytes=$size; decimalMB=[Math]::Round($size/1000000,2); installedBytes=$installedBytes; under100MB=($size -lt $MaxDownloadBytes); sha256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant(); fileCount=($manifest.files.Count+1) }
 $report.zip = "$name.zip"
 $report.zipBytes = (Get-Item -LiteralPath "$stage.zip").Length
 $report.zipSha256 = (Get-FileHash -LiteralPath "$stage.zip" -Algorithm SHA256).Hash.ToLowerInvariant()

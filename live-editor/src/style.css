@@ -928,7 +928,10 @@ svg { flex-shrink: 0; }
 .timeline-track,.range-highlight { top: 20px; }
 .playhead { top: 16px; }
 .draft-range { position: absolute; top: 20px; height: 36px; border: 1px dashed #8ebcf0; background: #8ebcf01c; pointer-events: none; }
-.timeline-marker { position: absolute; top: 16px; height: 44px; width: 2px; z-index: 4; pointer-events: none; color: #80e8bf; background: currentColor; box-shadow: 0 0 0 1px #0005; }
+.timeline-marker { position: absolute; top: 16px; height: 44px; width: 2px; z-index: 4; cursor: ew-resize; touch-action: none; user-select: none; color: #80e8bf; background: currentColor; box-shadow: 0 0 0 1px #0005; }
+.timeline-marker::after { content: ''; position: absolute; inset: 0 -8px; }
+.timeline-marker:focus-visible { outline: 2px solid currentColor; outline-offset: 5px; }
+.timeline-marker.dragging { filter: brightness(1.2); }
 .timeline-marker span { position: absolute; white-space: nowrap; font-size: 10px; line-height: 17px; padding: 0 5px; border-radius: 3px; color: #09271b; background: #80e8bf; transform: translateX(var(--label-shift, 0px)); }
 .timeline-marker span::before { content: ''; position: absolute; right: 100%; bottom: 0; width: var(--label-shift, 0px); height: 1px; background: #80e8bf; }
 .marker-end span::before { top: 0; bottom: auto; background: #f1c884; }
@@ -936,6 +939,7 @@ svg { flex-shrink: 0; }
 .marker-end { color: #f1c884; }.marker-end span { top: calc(100% - 1px); left: 0; background: #f1c884; color: #39280c; }
 .timeline-marker.nearend span { left: auto; right: 0; }
 .marker-summary { display: flex; gap: 8px 18px; flex-wrap: wrap; font-size: 11px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.selection-duration { color: var(--text); }
 .start-color { color: #80e8bf; }.end-color { color: #f1c884; }.invalid-range { color: #f5b4a9; }
 
 .clip-selection-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin-top: 12px; font-size: 11px; color: var(--faint); }

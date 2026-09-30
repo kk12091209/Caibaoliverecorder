@@ -13,14 +13,25 @@ namespace LiveRecorderDesktop;
 
 internal static class Program
 {
-    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr handle);
-    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr handle, int command);
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
-        var root = RuntimeDependencies.ProjectRoot(Environment.GetEnvironmentVariable("RECORDER_PROJECT_ROOT") ?? AppContext.BaseDirectory);
+        var maintenance = args.Length >= 1 && args[0] == "--prepare-maintenance";
+        var root = RuntimeDependencies.ProjectRoot(maintenance ? (args.Length == 2 ? args[1] : AppContext.BaseDirectory) : Environment.GetEnvironmentVariable("RECORDER_PROJECT_ROOT") ?? AppContext.BaseDirectory);
         InitializeRuntime(root);
+        if (maintenance) return PrepareMaintenance(root);
         RunApplication(root);
+        return 0;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int PrepareMaintenance(string root) { try { using var backend = new BackendService(root); return backend.PrepareMaintenanceAsync().GetAwaiter().GetResult(); } catch { return 3; } }
+
+    internal static string InstanceKey(string root)
+    {
+        using var sha = SHA256.Create();
+        var data = Path.GetFullPath(Path.Combine(RuntimeDependencies.ApplicationDirectory(root), "data")).TrimEnd('\\', '/');
+        return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(data.ToUpperInvariant()))).Replace("-", "").Substring(0, 32);
     }
 
     internal static void InitializeRuntime(string root)
@@ -42,41 +53,55 @@ internal static class Program
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        using var sha = SHA256.Create();
-        var key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(root.ToUpperInvariant()))).Replace("-", "").Substring(0, 16);
-        using var instance = new Mutex(true, "Local\\BiliLiveEditor-" + key, out var first);
+        var key = InstanceKey(root);
+        using var activation = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\CaiboActivate-" + key);
+        using var shutdown = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\CaiboShutdown-" + key);
+        using var instance = new Mutex(true, "Local\\CaiboDesktop-" + key, out var first);
         if (!first)
         {
-            foreach (var other in Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName))
-            {
-                if (other.Id == Process.GetCurrentProcess().Id || other.MainWindowHandle == IntPtr.Zero) continue;
-                ShowWindow(other.MainWindowHandle, 9); SetForegroundWindow(other.MainWindowHandle); break;
-            }
+            activation.Set();
             return;
         }
-        Application.Run(new MainWindow(root));
+        Application.Run(new MainWindow(root, activation, shutdown));
     }
 }
 
 internal sealed class MainWindow : Form
 {
-    private const string Origin = "http://127.0.0.1:17860";
     private readonly string root;
+    private readonly BackendService backend;
+    private readonly EventWaitHandle activation;
+    private readonly EventWaitHandle shutdownSignal;
+    private readonly System.Windows.Forms.Timer health = new() { Interval = 2000 };
+    private readonly NotifyIcon tray = new() { Text = "菜播·录包机" };
+    private bool checking, closing, exitWhenReady, ready;
     private readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(16, 20, 24) };
     private readonly Label splash = new() { Dock = DockStyle.Fill, Text = "正在打开菜播·录包机…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, Font = new Font("Microsoft YaHei UI", 14) };
     private bool choosingFolder;
     private static readonly JavaScriptSerializer Json = new() { MaxJsonLength = 16 * 1024 * 1024 };
 
-    public MainWindow(string projectRoot)
+    public MainWindow(string projectRoot, EventWaitHandle activationSignal, EventWaitHandle shutdown)
     {
         root = projectRoot; Text = "菜播·录包机";
+        activation = activationSignal; backend = new BackendService(root);
+        shutdownSignal = shutdown;
         BackColor = Color.FromArgb(16, 20, 24); StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1460, 960); MinimumSize = new Size(1100, 720);
         using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("LiveRecorderDesktop.app.ico")
             ?? throw new InvalidOperationException("未找到应用图标资源。"))
         using (var applicationIcon = new Icon(stream))
             Icon = (Icon)applicationIcon.Clone();
+        tray.Icon = Icon;
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("打开菜播·录包机", null, (_, _) => RestoreWindow());
+        menu.Items.Add("退出软件", null, async (_, _) => await RequestCloseAsync(true));
+        tray.ContextMenuStrip = menu;
+        tray.DoubleClick += (_, _) => RestoreWindow();
+        health.Tick += async (_, _) => await CheckBackendAsync();
+        FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; await RequestCloseAsync(false); };
+        FormClosed += (_, _) => { health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
         Controls.Add(web); Controls.Add(splash);
+        health.Start();
         Shown += async (_, _) => await InitializeAsync();
     }
 
@@ -86,31 +111,7 @@ internal sealed class MainWindow : Form
         try
         {
             var app = RuntimeDependencies.ApplicationDirectory(root);
-            if (!await IsServerReadyAsync(app))
-            {
-                var node = RuntimeDependencies.Resolve(root, "node", "node.exe", "NODE_EXE", "Node.js 24 或更新版本");
-                var recorder = RuntimeDependencies.Resolve(root, "recorder", "BililiveRecorder.Cli.exe", "RECORDER_PATH", "录制核心");
-                var ffmpeg = RuntimeDependencies.Resolve(root, "ffmpeg", "ffmpeg.exe", "FFMPEG_PATH", "FFmpeg");
-                var ffprobe = RuntimeDependencies.Resolve(root, "ffmpeg", "ffprobe.exe", "FFPROBE_PATH", "FFprobe");
-                RuntimeDependencies.CheckNodeVersion(node);
-                var start = new ProcessStartInfo(node) { WorkingDirectory = app, UseShellExecute = false, CreateNoWindow = true };
-                start.Arguments = "\"" + Path.Combine(app, "server", "index.js") + "\"";
-                start.EnvironmentVariables["EDITOR_DATA"] = Path.Combine(app, "data");
-                start.EnvironmentVariables["EDITOR_PROJECT_ROOT"] = root;
-                start.EnvironmentVariables["EDITOR_PORT"] = "17860";
-                start.EnvironmentVariables["RECORDER_PORT"] = "17861";
-                start.EnvironmentVariables["RECORDER_PATH"] = recorder;
-                start.EnvironmentVariables["FFMPEG_PATH"] = ffmpeg;
-                start.EnvironmentVariables["FFPROBE_PATH"] = ffprobe;
-                Process.Start(start)?.Dispose();
-                var ready = false;
-                for (var n = 0; n < 60 && !IsDisposed; n++)
-                {
-                    await Task.Delay(250);
-                    if (await IsServerReadyAsync(app)) { ready = true; break; }
-                }
-                if (!ready) throw new IOException("后台服务未能启动，请检查项目的运行组件与端口 17860。");
-            }
+            await backend.EnsureAsync();
             // Windows supplies .NET Framework; ship only the small WebView2 interop files.
             var loader = RuntimeDependencies.DesktopFile(root, "WebView2Loader.dll") ?? throw new IOException("缺少 WebView2Loader.dll，请恢复程序组件/runtime/desktop 文件夹。");
             CoreWebView2Environment.SetLoaderDllFolderPath(Path.GetDirectoryName(loader)!);
@@ -133,28 +134,73 @@ internal sealed class MainWindow : Form
                 if (e.IsSuccess) { splash.Hide(); web.Focus(); }
                 else splash.Text = "界面加载失败，请关闭窗口后重新打开。\n后台录制不会因关闭窗口而停止。";
             };
-            web.CoreWebView2.Navigate(Origin);
+            web.CoreWebView2.Navigate(backend.Origin);
+            ready = true;
         }
         catch (Exception error)
         {
+            if (IsDisposed || closing) return;
             splash.Text = "菜播·录包机暂时无法打开\n" + error.Message;
-            try { File.AppendAllText(Path.Combine(RuntimeDependencies.ApplicationDirectory(root), "desktop-error.log"), $"{DateTimeOffset.Now:O} {error}\n"); } catch { }
+            try { File.AppendAllText(Path.Combine(RuntimeDependencies.ApplicationDirectory(root), "data", "desktop-error.log"), $"{DateTimeOffset.Now:O} {error}\n"); } catch { }
             MessageBox.Show(this, error.Message, "菜播·录包机", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
-    private static bool IsLocal(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.GetLeftPart(UriPartial.Authority) == Origin;
-    private static async Task<bool> IsServerReadyAsync(string app)
+    private bool IsLocal(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.GetLeftPart(UriPartial.Authority) == backend.Origin;
+    private void RestoreWindow()
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-        string json;
-        try { json = await client.GetStringAsync(Origin + "/api/state"); }
-        catch (HttpRequestException) { return false; }
-        catch (TaskCanceledException) { return false; }
-        var state = Json.Deserialize<Dictionary<string, object>>(json);
-        if (!state.TryGetValue("dataPath", out var data) || data is not string path || !string.Equals(Path.GetFullPath(path), Path.GetFullPath(Path.Combine(app, "data")), StringComparison.OrdinalIgnoreCase))
-            throw new IOException("端口 17860 正由另一份项目使用。请先关闭另一份编辑服务，再打开此项目。");
-        return true;
+        if (closing) return;
+        Show(); WindowState = FormWindowState.Normal; Activate(); tray.Visible = false;
+    }
+    private void KeepInTray(string message)
+    {
+        tray.Visible = true; Hide();
+        tray.ShowBalloonTip(4000, "菜播·录包机", message, ToolTipIcon.Info);
+    }
+    private async Task RequestCloseAsync(bool fullExit)
+    {
+        if (checking || closing || exitWhenReady) return;
+        checking = true;
+        try
+        {
+            var status = await backend.HeartbeatAsync();
+            if (!fullExit && status?.Background == true)
+            {
+                KeepInTray("窗口已收起，录制和处理任务继续运行。双击托盘图标可返回。"); return;
+            }
+            exitWhenReady = true;
+            status = await backend.RequestExitAsync();
+            if (status?.Busy == true) KeepInTray("正在等待录制和处理任务完成，完成后将自动退出。");
+            else if (status is null) { closing = true; Close(); }
+            else splash.Text = "正在安全退出…";
+        }
+        finally { checking = false; }
+    }
+    private async Task CheckBackendAsync()
+    {
+        if (activation.WaitOne(0)) { RestoreWindow(); backend.RefreshBuild(); }
+        if (checking || closing) return;
+        if (shutdownSignal.WaitOne(0)) { await RequestCloseAsync(true); return; }
+        checking = true;
+        try
+        {
+            var status = await backend.HeartbeatAsync();
+            if (exitWhenReady)
+            {
+                if (status is null && !backend.IsProcessAlive()) { closing = true; Close(); }
+                return;
+            }
+            if (status is not null && backend.MatchesBuild(status)) return;
+            if (!ready) return;
+            var previous = backend.Origin;
+            await backend.EnsureAsync();
+            if (!IsDisposed && backend.Origin != previous) web.CoreWebView2.Navigate(backend.Origin);
+        }
+        catch (Exception error)
+        {
+            if (!IsDisposed && Visible) { splash.Text = "正在恢复后台连接…\n" + error.Message; splash.Show(); }
+        }
+        finally { checking = false; }
     }
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)

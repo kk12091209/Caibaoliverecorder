@@ -166,23 +166,72 @@ test('录制或前台导出忙时后台等待，空闲后才准备素材', async
   assert.ok(app.calls.includes('target'));
 });
 
-test('前台播放等待后台编码取消完成后才读取视频，避免两路同时占用处理资源', async t => {
+test('预览播放与后台预处理并行，不取消或等待正在编码的块', async t => {
   await seedDatabase('foreground', store => seedSource(store, 'previewed'));
   const held = heldProducer();
   t.after(() => held.release.resolve());
   const app = await appFor(t, 'foreground', held.prepare);
   let foregroundStarted = false;
-  t.mock.method(app.media, 'process', async (_args, options) => { foregroundStarted = true; options.output.end(minimalMp4); });
+  const previewEntered=deferred(),previewRelease=deferred();
+  t.after(()=>previewRelease.resolve());
+  t.mock.method(app.media, 'process', async (_args, options) => {
+    assert.equal(options.interactive,true);
+    foregroundStarted = true;previewEntered.resolve();
+    await previewRelease.promise;options.output.end(minimalMp4);
+  });
   await action(app, 'previewed', 'start'); await waitFor(held.entered.promise, 'background did not start');
   const response = fetch(`http://127.0.0.1:${app.port}/api/sessions/previewed/preview?start=0`, { signal: AbortSignal.timeout(5000) });
   try {
-    await waitFor(held.aborted.promise, 'foreground did not cancel background');
-    assert.equal(foregroundStarted, false);
-    await delay(25); assert.equal(foregroundStarted, false);
-  } finally { held.release.resolve(); }
+    await waitFor(previewEntered.promise, 'preview waited for background');
+    await delay(50);
+    assert.equal(foregroundStarted,true);assert.equal(held.wasAborted,false);
+    assert.equal(app.media.previews.size,1);
+    assert.equal(preparation(app,'previewed').status,'preparing');
+  } finally { previewRelease.resolve();held.release.resolve(); }
   const rendered = await response;
   assert.equal(rendered.status, 200); assert.deepEqual(Buffer.from(await rendered.arrayBuffer()), minimalMp4);
   assert.equal(foregroundStarted, true); assert.equal(app.media.children.size, 0);
+  await ready(app,'previewed');
+});
+
+test('选择素材并生成未缓存波形不打断预处理，预览已运行时也可以开始预处理',async t=>{
+  await seedDatabase('interactive-analysis',store=>seedSource(store,'analysed'));
+  const held=heldProducer(),analysisEntered=deferred(),analysisRelease=deferred();
+  t.after(()=>{held.release.resolve();analysisRelease.resolve();});
+  const app=await appFor(t,'interactive-analysis',held.prepare);
+  app.waveform.decoder=async()=>{analysisEntered.resolve();await analysisRelease.promise;return {noAudio:true};};
+  const child={},preview={sessionId:'analysed'};
+  app.media.previews.set('test-preview',preview);app.media.children.add(child);app.media.interactiveChildren.add(child);
+  try {
+    assert.equal((await app.request('sessions/analysed')).status,200);
+    assert.equal((await app.request('sessions/analysed/signals?from=0&to=30&bins=30')).status,200);
+    await waitFor(analysisEntered.promise,'waveform did not start');
+    assert.ok(app.waveform.active);
+    await action(app,'analysed','start');await waitFor(held.entered.promise,'preview/analysis prevented preparation');
+    await delay(50);assert.equal(held.wasAborted,false);assert.equal(preparation(app,'analysed').status,'preparing');
+    assert.equal(app.media.hasForegroundWork(),true,'cleanup still protects interactive readers');
+    assert.equal(app.media.hasForegroundWork({includeInteractive:false}),false);
+  } finally {
+    app.media.previews.delete('test-preview');app.media.children.delete(child);app.media.interactiveChildren.delete(child);
+    held.release.resolve();analysisRelease.resolve();
+  }
+  await ready(app,'analysed');await app.waveform.task;
+});
+
+test('实际入队导出仍会先取消并等待预处理，再进入正式导出队列',async t=>{
+  await seedDatabase('export-priority',store=>seedSource(store,'exporting'));
+  const held=heldProducer();t.after(()=>held.release.resolve());
+  const app=await appFor(t,'export-priority',held.prepare);
+  t.mock.method(app.media,'work',async()=>{});
+  await action(app,'exporting','start');await waitFor(held.entered.promise,'preparation did not start');
+  let queued=false;
+  const enqueue=app.media.enqueue('exporting',{scope:'full',mode:'clean'}).then(job=>{queued=true;return job;});
+  try {
+    await waitFor(held.aborted.promise,'export did not yield background');
+    await delay(30);assert.equal(queued,false);assert.equal(app.store.all('SELECT * FROM jobs').length,0);
+  } finally {held.release.resolve();}
+  const job=await enqueue;assert.equal(job.mode,'clean');
+  assert.equal(app.store.get('SELECT status FROM jobs WHERE id=?',job.id).status,'queued');
 });
 
 test('删除素材先取消并等待后台处理退出，等待期间原片仍存在', async t => {

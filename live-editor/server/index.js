@@ -16,11 +16,17 @@ import { Recorder, resolveRoom } from './recorder.js';
 import { directories, writableDirectory, openDirectory } from './directories.js';
 import { exportedJobFile } from './output-names.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
+import { ServiceRuntime } from './service-runtime.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
-  const port=Number(options.port??process.env.EDITOR_PORT??17860);
   const root=path.resolve(options.data??process.env.EDITOR_DATA??path.join(appRoot,'data'));
+  const runtime=await ServiceRuntime.acquire(root,appRoot,{managed:options.desktopManaged??process.env.EDITOR_DESKTOP_MANAGED==='1',...options.runtimeOptions});
+  try{return await createManagedApp(options,runtime);}catch(error){await runtime.release();throw error;}
+}
+async function createManagedApp(options,runtime) {
+  let port=Number(options.port??process.env.EDITOR_PORT??0);
+  const root=runtime.root;
   const projectRoot=resolveProjectRoot(appRoot,options.projectRoot??process.env.EDITOR_PROJECT_ROOT);
   const ffmpeg=resolveRuntimeTool(projectRoot,'ffmpeg',{override:options.ffmpeg});
   const ffprobe=resolveRuntimeTool(projectRoot,'ffprobe',{override:options.ffprobe});
@@ -30,18 +36,16 @@ export async function createApp(options={}) {
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
   const waveform=new WaveformService(store,media),density=new DensityService(store);
   store.density=density;
-  const recorder=new Recorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??17861),editorPort:port});
+  const recorder=new Recorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port});
   await media.recoverPendingSaves();
-  const clients=new Set(),deletingSessions=new Set(); let closing=false;
+  const clients=new Set(),deletingSessions=new Set(); let closing=false,app,closePromise;
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     busyReason:()=>{
       if(closing)return 'foreground';
       if(!options.noRecorder&&!recorder.online)return 'connection';
       if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
-      if(media.previews.size)return 'preview';
-      if(media.hasForegroundWork?.())return 'export';
-      if(waveform.active)return 'indexing';
+      if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
       if(storage.busy)return 'compaction';
       if(store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1"))return 'indexing';
       return '';
@@ -49,6 +53,15 @@ export async function createApp(options={}) {
   });
   media.preparation=preparation;store.preparation=preparation;store.renderCache=media.renderCache;
   store.temporaryWorkspaces=media.temporaryWorkspaces;
+  function activity(){
+    const recording=recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
+    const processing=media.hasForegroundWork({includeInteractive:false})||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
+    const preparing=!!preparation.active||!!store.get("SELECT session FROM preparation_jobs WHERE paused=0 AND status IN ('queued','preparing') LIMIT 1");
+    const organising=ingestor.busy||storage.busy||deletingSessions.size>0||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1");
+    const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
+    const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy;
+    return {busy,background:busy||monitoring,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
+  }
   async function deleteMaterial(id) {
     if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
     deletingSessions.add(id);storage.blockSession(id);
@@ -79,6 +92,18 @@ export async function createApp(options={}) {
       if(!new Set([`127.0.0.1:${port}`,`localhost:${port}`]).has(host)){json(res,{error:'无效的本机访问地址。'},403);return;}
       const url=new URL(req.url,`http://${host}`),p=url.pathname;
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
+      if(p==='/internal/desktop'){
+        if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);
+        if(req.method==='POST'){
+          const input=await body(req);
+          if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
+          else if(input.action==='detach')runtime.clients.delete(input.client);
+          else if(['exit','restart'].includes(input.action))runtime.request(input.action);
+          else throw new Error('无效的桌面操作。');
+        }else if(req.method!=='GET')return json(res,{error:'请求方式无效。'},405);
+        return json(res,runtime.status(activity()));
+      }
+      if(runtime.stopping&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
       if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
       if(p==='/api/events'&&req.method==='GET'){
         res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write(`data: ${JSON.stringify(snapshot())}\n\n`);clients.add(res);res.on('close',()=>clients.delete(res));return;
@@ -187,7 +212,10 @@ export async function createApp(options={}) {
       return await sendFile(req,res,target);
     }catch(e){if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
   });
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
+  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
+  catch(error){media.close();recorder.close();store.close();throw error;}
+  port=server.address().port;recorder.editorPort=port;
+  try{await runtime.publish(port);}catch(error){await new Promise(resolve=>server.close(resolve));media.close();recorder.close();store.close();throw error;}
   ingestor.start();if(options.preparation!==false)preparation.start();
   let nextTemporarySweep=0;
   const maintain=()=>{
@@ -197,6 +225,14 @@ export async function createApp(options={}) {
     if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;});}
   };
   const maintenanceTimer=setInterval(maintain,5000);
+  const runtimeTimer=setInterval(()=>{
+    if(closing||!runtime.shouldStop(activity()))return;
+    runtime.stopping=true;
+    void(async()=>{
+      if(runtime.pending!=='restart'&&!options.noRecorder&&!await recorder.stopIdle()){runtime.stopping=false;return;}
+      await app.close();
+    })().catch(error=>{runtime.stopping=false;runtime.lastError=error.message;});
+  },options.runtimePollMs??1000);
   maintain();
   const timer=setInterval(async()=>{
     if(closing)return;
@@ -206,8 +242,8 @@ export async function createApp(options={}) {
     for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
   },1000);
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  return {store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,server,port,root,snapshot,async close(){
-    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);ingestor.stop();media.close();recorder.close();
+  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,runtime,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();recorder.close();
     const deletionsClosed=deletionMaintenance.close();
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
@@ -222,7 +258,9 @@ export async function createApp(options={}) {
     await httpClosed;
     while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
     store.close();
-  }};
+    await runtime.release();
+  })();}};
+  return app;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const app=await createApp({noRecorder:process.env.NO_RECORDER==='1'});

@@ -23,13 +23,18 @@ if (Test-Path -LiteralPath $desktopExe) {
     Start-Process -FilePath $desktopExe
     exit
 }
-$url = 'http://127.0.0.1:17860'
+$url = $null
 function Test-EditorReady {
-    try { $state = Invoke-RestMethod -Uri "$url/api/state" -TimeoutSec 2 } catch { return $false }
-    if (-not $state.dataPath -or [IO.Path]::GetFullPath($state.dataPath) -ne [IO.Path]::GetFullPath((Join-Path $appRoot 'data'))) {
-        throw '端口 17860 正由另一份项目使用。请先关闭另一份编辑服务，再打开此项目。'
-    }
-    return $null -ne $state.recorder
+    try {
+        $endpoint = Get-Content -LiteralPath (Join-Path $appRoot 'data\desktop-service.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+        if ($endpoint.protocol -ne 1 -or $endpoint.token -notmatch '^[a-f0-9]{64}$' -or $endpoint.instance -notmatch '^[a-f0-9]{32}$') { return $false }
+        $address = [Uri]$endpoint.origin
+        if ($address.Scheme -ne 'http' -or $address.Host -ne '127.0.0.1' -or $address.AbsolutePath -ne '/' -or $address.UserInfo -or $address.Query -or $address.Fragment) { return $false }
+        $state = Invoke-RestMethod -Uri ($endpoint.origin + '/internal/desktop') -Headers @{'X-Caibo-Instance'=$endpoint.token} -TimeoutSec 2
+        if ($state.instance -ne $endpoint.instance -or -not $state.dataPath -or [IO.Path]::GetFullPath($state.dataPath) -ne [IO.Path]::GetFullPath((Join-Path $appRoot 'data'))) { return $false }
+        $script:url = $endpoint.origin
+        return $true
+    } catch { return $false }
 }
 function Resolve-RuntimeTool([string]$Component, [string]$Name, [string]$Variable) {
     foreach ($bundled in @((Join-Path $projectRoot "程序组件\runtime\$Component\$Name"), (Join-Path $projectRoot "runtime\$Component\$Name"))) {
@@ -61,14 +66,21 @@ if (-not $ready) {
     $env:EDITOR_DATA = Join-Path $appRoot 'data'
     $env:EDITOR_PROJECT_ROOT = $projectRoot
     $env:RECORDER_PATH = Resolve-RuntimeTool 'recorder' 'BililiveRecorder.Cli.exe' 'RECORDER_PATH'
-    $env:EDITOR_PORT = '17860'
-    $env:RECORDER_PORT = '17861'
+    $env:EDITOR_PORT = '0'
+    $env:RECORDER_PORT = '0'
+    # Browser-only developer fallback. Portable releases always use the desktop
+    # launcher, which supplies the tray and managed process lifecycle.
+    $env:EDITOR_DESKTOP_MANAGED = '0'
+    $temporary = Join-Path $appRoot 'data\temp'
+    New-Item -ItemType Directory -Force -Path $temporary | Out-Null
+    $env:TEMP = $temporary
+    $env:TMP = $temporary
     $entry = '"' + (Join-Path $appRoot 'server\index.js') + '"'
-    Start-Process -FilePath $nodeExe -ArgumentList $entry -WorkingDirectory $appRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $appRoot 'server-out.log') -RedirectStandardError (Join-Path $appRoot 'server-error.log') | Out-Null
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+    Start-Process -FilePath $nodeExe -ArgumentList $entry -WorkingDirectory $appRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $appRoot 'data\server-out.log') -RedirectStandardError (Join-Path $appRoot 'data\server-error.log') | Out-Null
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
         Start-Sleep -Milliseconds 250
         if (Test-EditorReady) { $ready = $true; break }
     }
 }
-if (-not $ready) { throw '编辑服务未能启动，请查看 live-editor\server-error.log。' }
+if (-not $ready) { throw '编辑服务未能启动，请查看 程序组件\live-editor\data\server-error.log。' }
 Start-Process $url

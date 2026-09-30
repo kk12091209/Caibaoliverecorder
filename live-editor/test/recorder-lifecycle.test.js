@@ -12,7 +12,7 @@ async function until(condition,message){
   const deadline=Date.now()+2000;
   while(!condition()){if(Date.now()>deadline)assert.fail(message);await new Promise(resolve=>setTimeout(resolve,5));}
 }
-async function fixture(t,{available=false,healthMs=10,retryMs=15,maxRetryMs=60,startupMs=80}={}){
+async function fixture(t,{available=false,healthMs=10,retryMs=15,maxRetryMs=60,startupMs=80,port=17861}={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'recorder-lifecycle-'));
   const executable=path.join(root,'fake-recorder.exe');await fs.writeFile(executable,'never executed; injected spawn only');
   const settings=new Map(),calls=[],children=[];
@@ -40,14 +40,14 @@ async function fixture(t,{available=false,healthMs=10,retryMs=15,maxRetryMs=60,s
       return child;
     }
   };
-  const recorder=new Recorder(store,{executable,lifecycle});
+  const recorder=new Recorder(store,{executable,port,lifecycle});
   t.after(async()=>{
     recorder.close();await recorder.starting;await until(()=>!recorder.pollBusy,'monitor did not finish after close');
     const resolved=path.resolve(root),temp=path.resolve(os.tmpdir())+path.sep;
     assert.ok(resolved.startsWith(temp)&&path.basename(resolved).startsWith('recorder-lifecycle-'));
     await fs.rm(resolved,{recursive:true,force:true});
   });
-  return {recorder,state,calls,children,root};
+  return {recorder,state,calls,children,root,settings,store,executable};
 }
 
 test('核心退出后自动恢复，保留房间并重新应用采集配置，清除旧错误',async t=>{
@@ -139,4 +139,47 @@ test('素材扫描失败不将仍可连接的录制核心标为离线',async t=>
   recorder.reconcile=async()=>{throw new Error('simulated missing file');};await recorder.poll();
   assert.equal(recorder.online,true);assert.match(recorder.error,/素材同步失败/);
   recorder.reconcile=async()=>{};await recorder.poll();assert.equal(recorder.online,true);assert.equal(recorder.error,'');
+});
+
+test('自动分配核心地址并持久化，编辑服务重新打开时复用仍在运行的核心',async t=>{
+  const {recorder,state,settings,store,executable}=await fixture(t,{port:0,healthMs:10000});
+  let allocations=0;
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>{allocations++;return 41001;},isAlive:()=>true});
+  await recorder.start();assert.equal(recorder.port,41001);assert.equal(allocations,1);assert.equal(state.spawnCount,1);
+  assert.equal(settings.get('recorder-endpoint').port,41001);recorder.close();
+  const next=new Recorder(store,{executable,port:0,editorPort:41002,lifecycle:recorder.lifecycle});t.after(()=>next.close());
+  assert.equal(await next.start(),true);assert.equal(next.port,41001);assert.equal(state.spawnCount,1);
+});
+
+test('已有本份数据的独立核心自动发现，另一份安装和它的端口不受影响',async t=>{
+  const {recorder,state,executable}=await fixture(t,{port:0,available:true});
+  const owned={pid:1000,port:42001,executable,directory:recorder.directory};
+  Object.assign(recorder.lifecycle,{findOwned:async()=>owned,isAlive:()=>true,availablePort:()=>assert.fail('must reuse existing core')});
+  assert.equal(await recorder.start(),true);assert.equal(recorder.port,owned.port);assert.equal(state.spawnCount,0);
+});
+
+test('自动端口发生竞态冲突时不并行启动写入核心，旧子进程退出后才重选',async t=>{
+  const {recorder,state,children}=await fixture(t,{port:0,startupMs:20});state.keepPortClosed=true;
+  let allocations=0;
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>43000+(++allocations),isAlive:()=>recorder.childRunning});
+  await recorder.start();await new Promise(resolve=>setTimeout(resolve,70));assert.equal(state.spawnCount,1);
+  children[0].exit();state.keepPortClosed=false;
+  await until(()=>recorder.online,'automatic core did not recover');assert.equal(state.spawnCount,2);assert.equal(recorder.port,43002);
+});
+
+test('完整退出先停空闲监控，保留监控设置供下次打开恢复，不杀正在录制的核心',async t=>{
+  const {recorder,state,settings}=await fixture(t,{port:0,healthMs:10000});
+  let stopped=0;
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44001,isAlive:()=>true,stopProcess:async endpoint=>{assert.equal(endpoint.directory,recorder.directory);stopped++;return true;}});
+  state.rooms=[{roomId:42,recording:true,autoRecord:true,recordingEnabled:true}];await recorder.start();
+  assert.equal(await recorder.stopIdle(),false);assert.equal(stopped,0);
+  state.rooms[0].recording=false;
+  assert.equal(await recorder.stopIdle(),true);assert.equal(stopped,1);assert.deepEqual(settings.get('recorder-resume-rooms'),[42]);
+  assert.equal(settings.get('recorder-endpoint'),null);assert.equal(recorder.quitting,true);
+});
+
+test('启动时自动恢复完整退出前启用的监控房间',async t=>{
+  const {recorder,settings,calls}=await fixture(t,{available:true});settings.set('recorder-resume-rooms',[42]);
+  await recorder.start();assert.ok(calls.some(call=>new URL(call.url).pathname==='/api/room/42/start'));
+  assert.equal(settings.get('recorder-resume-rooms'),null);
 });

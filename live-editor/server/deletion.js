@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { archiveFile, exportedJobFile } from './output-names.js';
+import { deletionWork } from './deletion-work.js';
 
 const key = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 function inside(root, file) {
@@ -123,7 +124,8 @@ export async function prepareDeletion(store, id) {
     const folderStat = await checked(roots.chunks, folder, true);
     if (folderStat) {
       directories.set(key(folder), { file: folder, root: roots.chunks, dev: folderStat.dev, ino: folderStat.ino });
-      for (const name of await fs.readdir(folder)) if (/^\d{8,}\.flvpart(?:\.tmp)?$/.test(name)) await add(path.join(folder, name), folder);
+      const names=(await fs.readdir(folder)).filter(name=>/^\d{8,}\.flvpart(?:\.tmp)?$/.test(name));
+      await deletionWork(names,name=>add(path.join(folder,name),folder));
     }
     for (const chunk of chunks.filter(chunk => chunk.source === source.id)) await add(chunk.path, folder);
   }
@@ -148,16 +150,26 @@ export async function prepareDeletion(store, id) {
 
 export async function removeDeletionFiles(store, id, plan) {
   let deletedFiles = 0, freedBytes = 0, pending = false;
-  for (const entry of plan.files) {
+  // Keep originals/companions ordered: a locked original must fail before its
+  // XML or any transient chunks are removed. Only the large chunk set runs in
+  // parallel, after these critical files have succeeded.
+  const chunkRoot=path.join(store.root,'chunks');
+  const groups=new Map();
+  for(const entry of plan.files){
+    if(!inside(chunkRoot,entry.file)){await remove(entry);continue;}
+    const inode=String(entry.dev)+':'+String(entry.ino);if(!groups.has(inode))groups.set(inode,[]);groups.get(inode).push(entry);
+  }
+  await deletionWork([...groups.values()],async entries=>{for(const entry of entries)await remove(entry);});
+  async function remove(entry){
     // Recheck sharing after async preflight and whenever this connection has
     // changed. A new import/export reference must never be silently deleted.
     const stat=await checked(entry.root,entry.file);
     const protectedPaths=await protections(store,id,plan.protectionCache);
-    if (protectedPaths.has(key(entry.file))) { plan.preserved.set(key(entry.file), { path: entry.file, reason: protectedPaths.get(key(entry.file)) }); continue; }
-    if (!stat) continue;
+    if (protectedPaths.has(key(entry.file))) { plan.preserved.set(key(entry.file), { path: entry.file, reason: protectedPaths.get(key(entry.file)) }); return; }
+    if (!stat) return;
     if (stat.dev !== entry.dev || stat.ino !== entry.ino || stat.size !== entry.size || stat.mtimeNs !== entry.mtimeNs) throw new Error('素材文件在删除前发生变化，已停止清理，请检查后重试。');
     try { await fs.unlink(entry.file); }
-    catch (error) { if (error.code === 'ENOENT') continue; throw new Error(`未能删除素材文件，可稍后重试：${entry.file}（${error.code || error.message}）`, { cause: error }); }
+    catch (error) { if (error.code === 'ENOENT') return; throw new Error(`未能删除素材文件，可稍后重试：${entry.file}（${error.code || error.message}）`, { cause: error }); }
     deletedFiles++;
     // Count the last hard link only; old archives can share original FLV data.
     if (stat.nlink <= 1n) freedBytes += Number(stat.size);

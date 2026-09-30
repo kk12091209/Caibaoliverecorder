@@ -72,7 +72,7 @@ export class BackgroundPreparation {
     if (this.foregroundHolds) return 'foreground';
     const reason = this.busyReason();
     if (reason) return typeof reason === 'string' ? reason : 'foreground';
-    if (this.media.hasForegroundWork?.()) return 'foreground';
+    if (this.media.hasForegroundWork?.({includeInteractive:false})) return 'foreground';
     return '';
   }
   row(id) { return this.store.get('SELECT * FROM preparation_jobs WHERE session=?', id); }

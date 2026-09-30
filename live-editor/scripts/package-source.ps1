@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][string]$OutputFile,
     [string]$AppRoot = '',
-    [string]$RepositoryUrl = 'https://github.com/kk12091209/-.git'
+    [string]$RepositoryUrl = 'https://github.com/BililiveRecorder/BililiveRecorder.git'
 )
 $ErrorActionPreference = 'Stop'
 if (!$AppRoot) { $AppRoot = Split-Path $PSScriptRoot -Parent }
@@ -29,13 +29,16 @@ $editorAssetPaths = @(
     'live-editor/desktop/assets/app-original.png',
     'live-editor/src/assets/app-icon.png'
 )
-$textExtensions = @('.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat')
+$textExtensions = @('.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
 $textNames = @('LICENSE','NOTICE','COPYING','AUTHORS','Dockerfile','.editorconfig','.gitattributes','.gitignore','.gitmodules','.nojekyll','.dockerignore','.npmrc','.prettierrc','.browserslistrc')
 function Git-Read([string]$root, [string[]]$arguments) {
     $previousEncoding = [Console]::OutputEncoding
     try {
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-        $output = & git -c ('safe.directory=' + $root.Replace('\','/')) -c core.excludesFile=NUL -c core.quotepath=false -C $root @arguments
+        $emptyExcludes = Join-Path $ProjectRoot '.tools\source-empty-excludes'
+        if (!(Test-Path -LiteralPath $emptyExcludes)) { [IO.File]::WriteAllText($emptyExcludes, '') }
+        if ((Get-Item -LiteralPath $emptyExcludes).Length -ne 0) { throw 'Expected an empty source-packaging Git excludes file.' }
+        $output = & git -c ('safe.directory=' + $root.Replace('\','/')) -c ('core.excludesFile=' + $emptyExcludes.Replace('\','/')) -c core.quotepath=false -C $root @arguments
         if ($LASTEXITCODE -ne 0) { throw "Git read failed in $root" }
         return ($output -join "`n")
     } finally { [Console]::OutputEncoding = $previousEncoding }
@@ -103,7 +106,7 @@ foreach ($relative in $recorderSourceAdditions) {
 # Replace any previously tracked editor files with this selected current source
 # tree, and include current untracked modules without admitting user data.
 foreach ($key in @($files.Keys)) { if ($key.StartsWith('live-editor/')) { $files.Remove($key) | Out-Null } }
-foreach ($folder in @('src','server','test','scripts','docs')) {
+foreach ($folder in @('src','server','test','scripts','docs','installer')) {
     $directory = Join-Path $AppRoot $folder
     if (!(Test-Path -LiteralPath $directory -PathType Container)) { continue }
     foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse -Force) {
@@ -128,7 +131,7 @@ foreach ($relative in @('docs/live-editor/源码基线.txt')) {
     $source = Join-Path $ProjectRoot $relative
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $relative 'project-documentation' }
 }
-foreach ($name in @('README.md','THIRD_PARTY_NOTICES.md','启动录播机.cmd','项目说明.md')) {
+foreach ($name in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','启动录播机.cmd','项目说明.md')) {
     $source = Join-Path $ProjectRoot $name
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $name 'project-entrypoint' }
 }

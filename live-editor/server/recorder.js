@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import { openSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { availableLocalPort, findOwnedCore, stopOwnedCore } from './local-endpoint.js';
+import { alive } from './service-runtime.js';
 
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
@@ -19,7 +21,9 @@ export class Recorder {
     this.webhookSecret=store.setting('webhook-secret')||randomBytes(24).toString('hex');store.setting('webhook-secret',this.webhookSecret);
     this.pollBusy=false;this.process=null;this.childRunning=false;this.closed=false;this.monitoring=false;this.starting=null;
     this.failures=0;this.retryAt=0;this.shutdown=new AbortController();
-    this.lifecycle={fetch,spawn,now:Date.now,healthMs:2000,retryMs:1000,maxRetryMs:30000,startupMs:30000,startupPollMs:250,requestMs:10000,...lifecycle};
+    this.lifecycle={fetch,spawn,now:Date.now,isAlive:alive,availablePort:availableLocalPort,findOwned:findOwnedCore,stopProcess:stopOwnedCore,healthMs:2000,retryMs:1000,maxRetryMs:30000,startupMs:30000,startupPollMs:250,requestMs:10000,...lifecycle};
+    this.automaticPort=port===0;this.ownedEndpoint=null;this.quitting=false;
+    if(this.automaticPort){const saved=store.setting('recorder-endpoint');if(saved?.directory===this.directory&&saved.executable===executable&&Number.isInteger(saved.pid)&&saved.pid>0&&saved.port>0&&saved.port<65536){this.ownedEndpoint=saved;this.port=saved.port;}}
     this.storageEligibilitySince=Date.now();
   }
   assertOpen(){if(this.closed){const error=new Error('录制监控已关闭。');error.code='RECORDER_CLOSED';throw error;}}
@@ -31,15 +35,15 @@ export class Recorder {
       error.connectionRefused=cause.code==='ECONNREFUSED'||cause.cause?.code==='ECONNREFUSED';throw error;
     }
     this.assertOpen();
-    if(!response.ok){const error=new Error(response.status===401||response.status===403?'录制核心鉴权失败，请确认没有另一份程序占用录制端口。':`录制核心请求失败：${response.status}`);error.coreStatus=response.status;throw error;}
+    if(!response.ok){const error=new Error(response.status===401||response.status===403?'录制核心鉴权失败，正在自动重连。':`录制核心请求失败：${response.status}`);error.coreStatus=response.status;throw error;}
     const text=await response.text();this.assertOpen();return text?JSON.parse(text):null;
   }
   start() {
-    if(this.closed)return Promise.resolve(false);
+    if(this.closed||this.quitting)return Promise.resolve(false);
     this.monitoring=true;this.schedule();return this.ensureReady();
   }
   schedule(){
-    if(this.closed||!this.monitoring||this.timer)return;
+    if(this.closed||this.quitting||!this.monitoring||this.timer)return;
     this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}finally{this.schedule();}},this.lifecycle.healthMs);
   }
   failed(error){
@@ -48,7 +52,7 @@ export class Recorder {
     this.retryAt=this.lifecycle.now()+Math.min(this.lifecycle.maxRetryMs,this.lifecycle.retryMs*2**(this.failures-1));
   }
   ensureReady(){
-    if(this.closed)return Promise.resolve(false);
+    if(this.closed||this.quitting)return Promise.resolve(false);
     if(this.starting)return this.starting;
     if(this.lifecycle.now()<this.retryAt)return Promise.resolve(false);
     this.starting=this.connect().then(()=>{
@@ -74,11 +78,19 @@ export class Recorder {
       await fs.writeFile(config,JSON.stringify({version:3,global:{RecordDanmaku:{HasValue:true,Value:true},CuttingMode:{HasValue:true,Value:0},RecordDanmakuFlushInterval:{HasValue:true,Value:0}},rooms:[]},null,2));
     }
     this.assertOpen();
+    if(this.automaticPort){
+      if(this.ownedEndpoint&&!this.lifecycle.isAlive(this.ownedEndpoint.pid)){this.ownedEndpoint=null;this.port=0;this.store.setting('recorder-endpoint',null);}
+      if(!this.ownedEndpoint&&!this.childRunning){
+        const found=await this.lifecycle.findOwned({executable:this.executable,directory:this.directory});this.assertOpen();
+        if(found){this.ownedEndpoint=found;this.port=found.port;this.store.setting('recorder-endpoint',found);}
+      }
+      if(!this.port)await this.launchCore();
+    }
     try{await this.api('room');}catch(error){
       this.assertOpen();
       // A listening but unauthorized/unresponsive core must never cause a second writer.
       if(!error.connectionRefused)throw error;
-      if(!this.childRunning)await this.launchCore();
+      if(!this.childRunning&&!(this.automaticPort&&this.ownedEndpoint&&this.lifecycle.isAlive(this.ownedEndpoint.pid)))await this.launchCore();
       const deadline=this.lifecycle.now()+this.lifecycle.startupMs;
       while(true){
         this.assertOpen();
@@ -97,19 +109,26 @@ export class Recorder {
       optionalRecordingQuality:{hasValue:true,value:'avc10000,avc400,avc250,avc150,avc80'}
     });
     this.assertOpen();const rooms=await this.api('room');this.assertOpen();
+    const resume=this.store.setting('recorder-resume-rooms');
+    if(Array.isArray(resume)){
+      for(const id of resume)if(rooms.some(room=>room.roomId===id)){this.assertOpen();await this.api(`room/${id}/start`,{});}
+      this.store.setting('recorder-resume-rooms',null);
+    }
     // Reapply room overrides after each reconnection; the core may have restarted separately.
     for(const room of rooms){this.assertOpen();await this.api(`room/${room.roomId}/config`,CHAT_ONLY_CONFIG);}
-    this.assertOpen();this.rooms=rooms;
+    this.assertOpen();this.rooms=await this.api('room');
   }
   async launchCore(){
       try{await fs.access(this.executable);}catch{
         throw new Error('找不到录制核心。请完整解压发布包并保留 runtime/recorder，或通过 RECORDER_PATH 指定录制核心。仍可导入本地 FLV 录像。');
       }
       this.assertOpen();this.childFailure=null;
+      if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
       const logFd=openSync(path.join(this.store.root,'recorder.log'),'a');
       let child;
       try{child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore',logFd,logFd],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1'}});}finally{closeSync(logFd);}
       this.process=child;this.childRunning=!!child.pid;
+      if(this.automaticPort&&child.pid){this.ownedEndpoint={pid:child.pid,port:this.port,executable:this.executable,directory:this.directory};this.store.setting('recorder-endpoint',this.ownedEndpoint);}
       child.on('error',e=>{
         if(this.closed||this.process!==child)return;
         if(!child.pid)this.childRunning=false;
@@ -124,7 +143,7 @@ export class Recorder {
       child.unref();
   }
   async poll(){
-    if(this.closed||this.pollBusy)return;this.pollBusy=true;
+    if(this.closed||this.quitting||this.pollBusy)return;this.pollBusy=true;
     try{
       if(!this.online){await this.ensureReady();return;}
       const rooms=await this.api('room');this.assertOpen();this.rooms=rooms;this.error='';
@@ -216,6 +235,23 @@ export class Recorder {
     this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",room);
     this.store.run('UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room=?)',room);
     await this.poll();
+  }
+  async stopIdle(){
+    if(!this.executable)return true;
+    if(!this.online)return !this.starting&&!this.childRunning&&(!this.ownedEndpoint||!this.lifecycle.isAlive(this.ownedEndpoint.pid));
+    const rooms=await this.api('room');
+    if(rooms.some(room=>room.recording))return false;
+    // Temporarily stop idle monitors, preserving the user's enabled rooms for
+    // the next launch. API stop gracefully handles a stream starting in a race.
+    const resume=rooms.filter(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
+    if(resume.length){this.store.setting('recorder-resume-rooms',resume);for(const id of resume)await this.api(`room/${id}/stop`,{});}
+    if((await this.api('room')).some(room=>room.recording))return false;
+    const endpoint=this.ownedEndpoint;
+    if(!endpoint)return false;
+    this.quitting=true;clearTimeout(this.timer);this.timer=null;
+    const stopped=await this.lifecycle.stopProcess(endpoint);
+    if(stopped){this.store.setting('recorder-endpoint',null);return true;}
+    this.quitting=false;this.schedule();return false;
   }
   close(){
     this.closed=true;this.monitoring=false;clearTimeout(this.timer);this.timer=null;this.shutdown.abort();

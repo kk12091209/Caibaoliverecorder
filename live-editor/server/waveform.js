@@ -139,8 +139,6 @@ export class WaveformService {
     };
     try {
       if (signal.aborted || !this.allowed(source.session)) return;
-      await this.media.preparation?.yieldForForeground();
-      if (signal.aborted || !this.allowed(source.session)) return;
       const result = this.decoder ? await this.decoder(source, from, to, signal, onFrame) : await this.decode(source, from, to, signal, onFrame);
       if (result?.noAudio) state = 'no_audio';
     } catch (failure) {
@@ -161,10 +159,10 @@ export class WaveformService {
     const filter = `atrim=start=${Math.max(0, from - base)}:end=${Math.max(0, to - base)},aresample=8000,asetnsamples=n=800:p=0,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+RMS_level+Number_of_samples,ametadata=mode=print:file=-:direct=1`;
     const args = ['-hide_banner', '-loglevel', 'warning', '-nostdin', '-copyts', '-threads', '1', '-filter_threads', '1', '-probesize', '1000000', '-analyzeduration', '1000000', '-f', 'flv', '-i', 'pipe:0', '-map', '0:a:0', '-vn', '-sn', '-dn', '-af', filter, '-f', 'null', '-'];
     const child = this.media.spawnTracked(this.media.ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    this.media.children.add(child); try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
+    this.media.children.add(child); this.media.interactiveChildren.add(child); try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     let log = '', spawnError, timedOut = false;
     child.stderr.on('data', b => { log = (log + b).slice(-4000); }); child.once('error', e => { spawnError = e; });
-    const done = new Promise(resolve => child.once('close', code => { this.media.children.delete(child); resolve(code); }));
+    const done = new Promise(resolve => child.once('close', code => { this.media.children.delete(child); this.media.interactiveChildren.delete(child); resolve(code); }));
     const input = Readable.from(sourceStream(this.store, source.id, from, to, { signal }));
     const output = new WaveformMetadata(frame => onFrame({ ...frame, time: base + frame.time }));
     const abort = () => { input.destroy(); child.kill(); };

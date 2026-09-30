@@ -33,6 +33,7 @@ function fakeProcess() {
     ffmpeg: 'unused-fake-ffmpeg',
     children: new Set(),
     backgroundChildren: new Set(),
+    interactiveChildren: new Set(),
     spawnTracked: () => child,
   };
   return { child, media, closed };
@@ -54,7 +55,19 @@ function assertChildSettled(result) {
   assert.equal(result.childClosed, true, 'process must remain pending until the child emits close');
   assert.equal(result.children, 0, 'foreground process tracking must be cleared before settlement');
   assert.equal(result.backgroundChildren, 0, 'background process tracking must be cleared before settlement');
+  assert.equal(result.interactiveChildren??0,0,'interactive process tracking must be cleared before settlement');
 }
+
+test('实际预览进程登记为并行任务，仍受清理保护且退出后释放登记',async()=>{
+  const {media,child}=fakeProcess();
+  Object.assign(media,{processing:false,enqueues:new Set(),previews:new Map(),probes:new Set(),saves:new Map(),savePreparations:new Set()});
+  const operation=Media.prototype.process.call(media,[],{interactive:true});
+  assert.equal(media.interactiveChildren.has(child),true);
+  assert.equal(Media.prototype.hasForegroundWork.call(media),true);
+  assert.equal(Media.prototype.hasForegroundWork.call(media,{includeInteractive:false}),false);
+  child.kill();await assert.rejects(operation,/视频处理失败/);
+  assert.equal(media.interactiveChildren.size,0);assert.equal(media.children.size,0);
+});
 
 test('输入读盘异常必须等待被终止的子进程 close 后才 reject 并释放进程集合', { timeout: 3000 }, async () => {
   const fixture = fakeProcess();
