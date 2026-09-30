@@ -266,3 +266,21 @@ BililiveRecorder.Cli/Properties/launchSettings.json
 
 **/*.received.*
 BililiveRecorder.Web/embeded/ui/
+
+# Local live editor runtime and recordings
+.tools/
+runtime/
+/录播机.exe
+
+# Private settings and portable releases
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/录播机.exe.config
+/release/
+/releases/
+
+/录播机.previous.exe

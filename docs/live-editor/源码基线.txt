@@ -1,0 +1,7 @@
+Repository: https://github.com/BililiveRecorder/BililiveRecorder.git
+Tag: v2.20.0
+Commit:
+a27640a33bcc35e09c76111c14e1d3627805e483
+Submodules:
+ 28aa6c68ae6abf3242e42db703ef1676ecbb22fd test/data (heads/main)
+ 08fd0be31c7d4a496f9202199ff3b4a9e05e8d56 webui/source (v2.0.0-212-g08fd0be)

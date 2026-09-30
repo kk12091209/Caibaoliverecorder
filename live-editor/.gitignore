@@ -1,0 +1,21 @@
+node_modules/
+dist/
+data/
+.qa/
+*.log
+desktop/bin/
+desktop/obj/
+desktop/publish/
+
+desktop/build-slim/
+desktop/package/
+
+# Local credentials, indexes and release outputs
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+release/
+releases/

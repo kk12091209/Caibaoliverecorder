@@ -1,0 +1,231 @@
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Store } from './store.js';
+import { Ingestor } from './ingest.js';
+import { CompactStorage } from './compact-storage.js';
+import { Media } from './media.js';
+import { BackgroundPreparation } from './background-preparation.js';
+import { JobDeletion } from './job-deletion.js';
+import { DeletionMaintenance } from './deletion-maintenance.js';
+import { WaveformService } from './waveform.js';
+import { DensityService } from './density.js';
+import { Recorder, resolveRoom } from './recorder.js';
+import { directories, writableDirectory, openDirectory } from './directories.js';
+import { exportedJobFile } from './output-names.js';
+import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
+
+const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+export async function createApp(options={}) {
+  const port=Number(options.port??process.env.EDITOR_PORT??17860);
+  const root=path.resolve(options.data??process.env.EDITOR_DATA??path.join(appRoot,'data'));
+  const projectRoot=resolveProjectRoot(appRoot,options.projectRoot??process.env.EDITOR_PROJECT_ROOT);
+  const ffmpeg=resolveRuntimeTool(projectRoot,'ffmpeg',{override:options.ffmpeg});
+  const ffprobe=resolveRuntimeTool(projectRoot,'ffprobe',{override:options.ffprobe});
+  const executable=options.noRecorder?'':resolveRuntimeTool(projectRoot,'recorder',{override:options.recorder,required:false});
+  const store=new Store(root);
+  store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
+  const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
+  const waveform=new WaveformService(store,media),density=new DensityService(store);
+  store.density=density;
+  const recorder=new Recorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??17861),editorPort:port});
+  await media.recoverPendingSaves();
+  const clients=new Set(),deletingSessions=new Set(); let closing=false;
+  const preparation=new BackgroundPreparation(store,media,{
+    ...options.preparationOptions,
+    busyReason:()=>{
+      if(closing)return 'foreground';
+      if(!options.noRecorder&&!recorder.online)return 'connection';
+      if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
+      if(media.previews.size)return 'preview';
+      if(media.hasForegroundWork?.())return 'export';
+      if(waveform.active)return 'indexing';
+      if(storage.busy)return 'compaction';
+      if(store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1"))return 'indexing';
+      return '';
+    }
+  });
+  media.preparation=preparation;store.preparation=preparation;store.renderCache=media.renderCache;
+  store.temporaryWorkspaces=media.temporaryWorkspaces;
+  async function deleteMaterial(id) {
+    if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
+    deletingSessions.add(id);storage.blockSession(id);
+    try {await waveform.cancelSession(id);await media.cancelPreviews(id);await storage.waitForSession(id);return await store.deleteSession(id,true);}
+    finally {density.drop(id);waveform.allowSession(id);storage.allowSession(id);media.allowSession(id);deletingSessions.delete(id);}
+  }
+  const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
+  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.online,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store)};}
+  function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
+  async function body(req){
+    if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
+    const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>8*1024*1024)throw new Error('请求数据过大。');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');
+  }
+  async function sendFile(req,res,file){
+    const stat=await fs.stat(file);let start=0,end=stat.size-1,status=200;
+    const range=req.headers.range;
+    if(range){const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}start=Number(match[1]);end=match[2]?Math.min(end,Number(match[2])):end;status=206;}
+    if(start>end||start>=stat.size){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}
+    const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.mkv':'video/x-matroska','.flv':'video/x-flv','.xml':'application/xml; charset=utf-8','.json':'application/json','.ass':'text/plain; charset=utf-8'};
+    const headers={'Content-Type':mime[path.extname(file)]||'application/octet-stream','Content-Length':end-start+1,'Accept-Ranges':'bytes','X-Content-Type-Options':'nosniff'};
+    if(status===206)headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`;
+    res.writeHead(status,headers);if(req.method==='HEAD')return res.end();
+    const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
+  }
+  const server=http.createServer(async(req,res)=>{
+    try {
+      const host=req.headers.host||'';
+      if(!new Set([`127.0.0.1:${port}`,`localhost:${port}`]).has(host)){json(res,{error:'无效的本机访问地址。'},403);return;}
+      const url=new URL(req.url,`http://${host}`),p=url.pathname;
+      if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
+      if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
+      if(p==='/api/events'&&req.method==='GET'){
+        res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write(`data: ${JSON.stringify(snapshot())}\n\n`);clients.add(res);res.on('close',()=>clients.delete(res));return;
+      }
+      if(p==='/internal/recorder-event'&&req.method==='POST'){
+        if(url.searchParams.get('token')!==recorder.webhookSecret)return json(res,{error:'无效事件来源。'},403);
+        await recorder.event(await body(req));return json(res,{ok:true});
+      }
+      if(p==='/api/rooms'&&req.method==='POST'){
+        const input=await body(req);const result=await recorder.api('room',{roomId:await resolveRoom(input.url),autoRecord:input.autoRecord!==false});await recorder.poll();return json(res,result);
+      }
+      let match;
+      if(p==='/api/preparation/settings'&&req.method==='POST'){
+        const input=await body(req);if(typeof input.enabled!=='boolean')throw new Error('请选择是否开启录制完成后的自动预处理。');
+        await preparation.setEnabled(input.enabled);return json(res,preparation.snapshot());
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/preparation$/.exec(p))&&req.method==='POST'){
+        const input=await body(req),id=match[1];if(!store.session(id))throw new Error('素材不存在或已删除。');
+        if(deletingSessions.has(id)||store.deletions?.has(id))throw new Error('素材正在删除，请稍后再试。');
+        if(!['start','pause','resume'].includes(input.action))throw new Error('请选择有效的预处理操作。');
+        if(input.action==='pause')await preparation.pause(id);
+        else {
+          const session=store.session(id),sources=store.sources(id);
+          if(session.status!=='finished'||!sources.length||sources.some(source=>source.closed!==2))throw new Error('请等待录制结束和素材整理完成后再开始预处理。');
+          if(input.action==='start')await preparation.enqueue(id);else await preparation.resume(id);
+        }
+        return json(res,preparation.snapshot());
+      }
+      if((match=/^\/api\/rooms\/(\d+)\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
+        const input=await body(req);if(match[2]==='stop')await recorder.stopRoom(Number(match[1]));
+        else if(match[2]==='remove')await recorder.removeRoom(Number(match[1]),input.confirmed);
+        else if(match[2]==='auto')await recorder.api(`room/${match[1]}/config`,{autoRecord:!!input.enabled});
+        else await recorder.api(`room/${match[1]}/start`,{});await recorder.poll();return json(res,{ok:true});
+      }
+      if(p==='/api/settings'&&req.method==='POST'){
+        const input=await body(req);
+        if(Object.keys(input).some(key=>key!=='exportDirectory'))throw new Error('不支持的设置项。');
+        if('exportDirectory' in input)store.setting('export-directory',await writableDirectory(input.exportDirectory));
+        return json(res,{ok:true,paths:directories(store)});
+      }
+      if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
+      if(p==='/api/sessions/import'&&req.method==='POST'){
+        const input=await body(req),file=path.resolve(String(input.path||''));if(!/\.flv$/i.test(file))throw new Error('请导入原始 FLV 文件。');
+        const stat=await fs.stat(file);if(!stat.isFile())throw new Error('所选路径不是文件。');
+        if(store.wasSourceDeleted(file))throw new Error('这份原始素材已经删除。');
+        const existing=store.get('SELECT session FROM sources WHERE path=?',file);if(existing){const session=store.session(existing.session);if(!session)throw new Error('这份素材已删除。');return json(res,session);}
+        const session=store.createSession({title:input.title||path.basename(file,'.flv'),status:input.follow?'recording':'importing',room:0});
+        store.addSource(session.id,file,0,new Date().toISOString(),!input.follow);void ingestor.tick();return json(res,session);
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){
+        const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
+        const sources=store.sources(session.id).map(s=>({id:s.id,start:s.start,wall:s.wall,duration:s.duration,closed:s.closed,error:s.error,path:s.path,metadata:store.setting('metadata:'+s.id)}));
+        for(const source of sources)if(!source.metadata&&source.duration>0){void media.probeSource(store.get('SELECT * FROM sources WHERE id=?',source.id)).catch(()=>{});}
+        return json(res,{...session,sources,edit:store.edit(session.id),chunks:store.get('SELECT COUNT(*) AS count FROM chunks WHERE source IN (SELECT id FROM sources WHERE session=?)',session.id).count});
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
+        const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
+        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort()]);
+        if(visibility(previous)!==visibility(saved))await preparation.invalidate(id);
+        return json(res,saved);
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST'){
+        const input=await body(req),id=match[1];
+        if(input.confirmed!==true)throw new Error('请先确认是否永久删除这份素材。');
+        if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
+        const session=store.get('SELECT * FROM sessions WHERE id=?',id);
+        if(!session||session.purged_at)throw new Error('素材不存在或已经彻底删除。');
+        if(session.status!=='finished'||store.get('SELECT id FROM sources WHERE session=? AND closed<2',id))throw new Error('这份素材仍在录制或整理中，请结束后再删除。');
+        if(session.archive_status==='running'||store.get("SELECT id FROM jobs WHERE session=? AND status IN ('queued','running','finalizing','saving','cancelling')",id))throw new Error('这份素材正在导出或保存，请完成后再删除。');
+        if(store.get("SELECT id FROM jobs WHERE session=? AND status='save_failed'",id))throw new Error('这份素材还有编码完成但尚未保存的导出，请先重试保存。');
+        return json(res,await deleteMaterial(id));
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/messages$/.exec(p))&&req.method==='GET'){
+        if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
+        const from=Math.max(0,Number(url.searchParams.get('from')||0)),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),search=(url.searchParams.get('q')||'').slice(0,200);
+        if(!Number.isFinite(from)||!Number.isFinite(to))throw new Error('时间范围无效。');
+        return json(res,store.messages(match[1],from,to,search,url.searchParams.get('overlay')==='1'?3000:500));
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/signals$/.exec(p))&&req.method==='GET'){
+        const id=match[1],session=store.session(id);
+        if(!session)return json(res,{error:'素材不存在或已删除。'},404);
+        if(deletingSessions.has(id))throw new Error('素材正在删除，请稍后再试。');
+        const from=Number(url.searchParams.get('from')??0),to=Number(url.searchParams.get('to')??session.duration),bins=Number(url.searchParams.get('bins')??600);
+        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from||to>session.duration+.05||!Number.isInteger(bins)||bins<1||bins>1000)throw new Error('波形时间范围无效。');
+        const window={from,to:Math.min(to,session.duration),bins};
+        return json(res,{from:window.from,to:window.to,audio:waveform.request(id,window),density:density.request(id,window)});
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/preview$/.exec(p))&&req.method==='GET'){
+        const start=Number(url.searchParams.get('start')||0);if(!Number.isFinite(start)||start<0)throw new Error('播放位置无效。');
+        const abort=new AbortController();res.on('close',()=>abort.abort());await media.preview(match[1],start,res,abort.signal);return;
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/export$/.exec(p))&&req.method==='POST')return json(res,await media.enqueue(match[1],await body(req)));
+      if((match=/^\/api\/sessions\/([\w-]+)\/finish$/.exec(p))&&req.method==='POST'){
+        await body(req);const session=store.session(match[1]);if(!session||session.room!==0)throw new Error('只有本地跟踪素材可使用此操作。');
+        store.run("UPDATE sessions SET status='finishing' WHERE id=?",session.id);store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);return json(res,{ok:true});
+      }
+      if((match=/^\/api\/jobs\/([\w-]+)\/retry-save$/.exec(p))&&req.method==='POST')return json(res,await media.retrySave(match[1],await body(req)));
+      if((match=/^\/api\/jobs\/([\w-]+)\/cancel$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.cancelExport(match[1]));}
+      if((match=/^\/api\/jobs\/([\w-]+)\/delete-preview$/.exec(p))&&req.method==='GET')return json(res,await jobDeletion.preview(match[1]));
+      if((match=/^\/api\/jobs\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST')return json(res,await jobDeletion.delete(match[1],await body(req)));
+      if(p.startsWith('/api/')||p.startsWith('/internal/'))return json(res,{error:'接口不存在。'},404);
+      if(!['GET','HEAD'].includes(req.method))return json(res,{error:'请求方式无效。'},405);
+      const dist=path.join(appRoot,'dist');let target=path.resolve(dist,'.'+decodeURIComponent(p));
+      if(!target.startsWith(dist+path.sep)&&target!==dist)return json(res,{error:'无效路径。'},403);
+      if(p==='/'||!path.extname(target))target=path.join(dist,'index.html');
+      return await sendFile(req,res,target);
+    }catch(e){if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
+  });
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
+  ingestor.start();if(options.preparation!==false)preparation.start();
+  let nextTemporarySweep=0;
+  const maintain=()=>{
+    if(closing)return;
+    void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;});
+    if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;});
+    if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;});}
+  };
+  const maintenanceTimer=setInterval(maintain,5000);
+  maintain();
+  const timer=setInterval(async()=>{
+    if(closing)return;
+    for(const s of store.all("SELECT * FROM sessions WHERE status IN ('importing','finishing')")){
+      const sources=store.sources(s.id);if(sources.length&&sources.every(x=>x.closed===2))store.run("UPDATE sessions SET status='finished' WHERE id=?",s.id);
+    }
+    for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
+  },1000);
+  if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
+  return {store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,server,port,root,snapshot,async close(){
+    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);ingestor.stop();media.close();recorder.close();
+    const deletionsClosed=deletionMaintenance.close();
+    const preparationClosed=preparation.close();
+    const waveformClosed=waveform.close();density.close();
+    for(const client of clients)client.end();
+    const httpClosed=new Promise(resolve=>server.close(resolve));
+    await storage.close();
+    await waveformClosed;
+    await preparationClosed;
+    await deletionsClosed;
+    await media.waitForSaves();
+    await Promise.allSettled([...media.probes,...media.enqueues,...media.previews.values()].map(operation=>operation.done));
+    await httpClosed;
+    while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
+    store.close();
+  }};
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  const app=await createApp({noRecorder:process.env.NO_RECORDER==='1'});
+  console.log(`录播机已启动：http://127.0.0.1:${app.port}\n素材目录：${app.root}`);
+  for(const event of ['SIGINT','SIGTERM'])process.once(event,async()=>{await app.close();process.exit(0);});
+}

@@ -1,0 +1,35 @@
+name: Editor checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - name: Test editor and build frontend
+        shell: pwsh
+        working-directory: live-editor
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/dev-env.ps1
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency restore failed.' }
+          ./scripts/prepare-release-tools.ps1
+          $ffmpegRoot = Join-Path (Split-Path $PWD -Parent) '.tools/release-tools/ffmpeg-essentials/ffmpeg-8.1.2-essentials_build/bin'
+          $env:FFMPEG_PATH = Join-Path $ffmpegRoot 'ffmpeg.exe'
+          $env:FFPROBE_PATH = Join-Path $ffmpegRoot 'ffprobe.exe'
+          node --test test/*.test.js scripts/dev.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }

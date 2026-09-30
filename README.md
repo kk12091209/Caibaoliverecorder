@@ -1,107 +1,120 @@
-<div style="text-align:center">
-<img width="20%" src=".github/assets/logo.svg">
-
-# mikufans录播姬
-
-[![Build and Test](https://github.com/BililiveRecorder/BililiveRecorder/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/BililiveRecorder/BililiveRecorder/actions/workflows/build.yml)
-[![Version](https://img.shields.io/github/tag/Bililive/BililiveRecorder.svg?label=Version)](#)
-[![License](https://img.shields.io/github/license/Bililive/BililiveRecorder.svg)](#)
-[![Crowdin](https://badges.crowdin.net/bililiverecorder/localized.svg)](https://crowdin.com/project/bililiverecorder)
-
+<div align="center">
+  <img src="live-editor/src/assets/app-icon.png" width="88" alt="菜播·录包机图标" />
+  <h1>菜播·录包机</h1>
+  <p>B 站直播录制、回看与弹幕剪辑，在一个本地工作台完成。</p>
+  <p><a href="https://github.com/kk12091209/-/releases/latest">下载 Windows 版</a> · <a href="#快速开始">使用说明</a> · <a href="live-editor/README.md">开发文档</a> · <a href="https://github.com/kk12091209/-/issues">反馈问题</a></p>
 </div>
 
-[简体中文 README | Simplified Chinese](README_CN.md)
+菜播·录包机面向希望保留直播、挑选片段并制作弹幕视频的用户。基于 [BililiveRecorder](https://github.com/BililiveRecorder/BililiveRecorder) 的录制核心，增加连续时间轴、边录边剪、音频波形、弹幕密度和导出工作台。视频和编辑数据保存在本机。
 
-GitHub is a global platform, and theoretically, everyone should use English. But since this project is mostly meant for Chinese user and rely on a Chinese website [BiliBili](https://live.bilibili.com) ([_wikipedia_](https://en.wikipedia.org/wiki/Bilibili)), most things related to this project like code comments, documentations and other related repositories are written in Chinese. This README file will always use English so people like _you_ can understand what is this, and perhaps make some use out of it.
+## 下载
 
-Software UI is available in
+前往 **[Releases 下载页面](https://github.com/kk12091209/-/releases/latest)**，下载 Windows x64 运行包：
 
-- 简体中文 (Source and default)
-- 繁体中文
-- 日本語
-- English
+| 文件 | 适合谁 |
+| --- | --- |
+| `BiliLiveEditor-版本-win-x64.zip` | 推荐：Windows 自带解压即可使用 |
+| `BiliLiveEditor-版本-win-x64.7z` | 希望减少下载体积，电脑已有 7-Zip 等解压软件 |
+| `BiliLiveEditor-版本-win-x64.exe` | 与 7z 内容相同的自解压包；解压后再启动文件夹里的程序 |
+| `Source code (zip / tar.gz)` 或单独的源码包 | 开发者使用，不是可直接运行的软件 |
 
-## Installation
+运行包已包含 Node.js、FFmpeg 和录制核心，无需另外安装开发环境。ZIP、7z 和自解压包任选一个，具体体积及 SHA-256 见对应 Release。ZIP 优先兼容 Windows 解压；7z 和自解压包的压缩率更高。下载体积不等于解压后的占用，也不包含以后录制的视频。
 
-See [rec.danmuji.org](https://rec.danmuji.org) (in Chinese) for Windows installer with auto update.
+**系统要求：** Windows 10 / 11 x64，.NET Framework 4.7.2 或以上，以及 [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。后两项是系统组件，未安装时需另行安装。建议将软件放在有足够空间的可写目录，长时间录制和预处理期间避免休眠。
 
-Alernatively, you can download from [releases](https://github.com/BililiveRecorder/BililiveRecorder/releases) page.  
-The zip file available at the releases page does not have auto update enabled. You are welcome to watch this repository for new releases. (Click the "Watch" dropdown menu, then "Custom", and check the "Releases" checkbox).
+## 可以做什么
 
-Binary files of the command line version are available for Linux, macOS, and Windows at [releases](https://github.com/BililiveRecorder/BililiveRecorder/releases).
+- **监控直播间并自动录制**：添加 B 站房间，等待开播；支持停止监控和移除房间。
+- **边录边回看、选段**：内部按小段写入，界面呈现连续时间轴，不需要手动管理分片。
+- **两种时间定位**：按视频时间点定位，或按北京时间选择录制日期与时刻，支持跨午夜。
+- **波形与弹幕密度**：进度条内显示音频波形，下方显示有效弹幕密度；可缩放和横向浏览长录像。
+- **弹幕编辑**：搜索、跟随播放位置、手动排除消息；内置过滤礼物、整条表情占位消息，以及有明确活动标记的抽奖口令。普通重复弹幕保留。
+- **三种导出模式**：纯净版、弹幕版、纯净 + 弹幕双文件。选中的多个片段按列表顺序合成，也能导出完整素材。
+- **录完自动预处理**：素材正常结束并整理完成后，加入弹幕预处理队列。需要成片时手动导出；兼容的完整纯净版直接复制音视频码流，不重新编码。
+- **复用弹幕缓存**：空闲时预处理，播放、录制和正式导出优先；导出复用已完成且仍有效的块，缺口再处理。
+- **任务管理**：右键取消进行中的导出，或二次确认后删除某个导出任务及其成片；编码完成但保存失败可重试保存。
+- **适配较小窗口**：侧栏可收起，时间轴和编辑控件会随可用空间调整。
 
-Docker images can be pulled from [Docker Hub `bililive/recorder`](https://hub.docker.com/r/bililive/recorder) or [`ghcr.io/bililiverecorder/bililiverecorder`](https://github.com/bililiverecorder/BililiveRecorder/pkgs/container/bililiverecorder).
+## 快速开始
 
-See [rec.danmuji.org/install/versions](https://rec.danmuji.org/install/versions/) for step by step installation guides (in Chinese).
+1. 下载运行包并**完整解压**，不要在压缩包里直接运行。
+2. 双击顶层的 `录播机.exe`。窗口内名称为“菜播·录包机”。
+3. 添加 B 站直播间。启用自动录制后，未开播时保持监控；“停止”会停止该房间的监控或录制，“开始”重新启用。
+4. 在左侧选择录像素材，播放回看，通过波形和弹幕密度寻找片段。设置起终点后点击“添加选段”。
+5. 勾选需要的片段，点击“导出选段”，选择纯净版、弹幕版或双文件；多个片段会合成一个连续视频，每种所选版本各生成一份。
+6. 录制结束并整理完成后，右键已完成的素材 →“导出完整素材”，选择纯净版、弹幕版或双文件。
+7. 在导出任务中点击“打开文件夹”查看成片。
 
-## Feature
+只有手动导出才会生成成片；重复导出使用新的文件名，不覆盖已有视频。预处理默认开启，可在设置中关闭；失败会显示原因，不会因此删除原片。首版不额外建立纯净视频缓存，以控制空间占用。
 
-- Easy to use
-- Start recording automatically when stream starts
-- Record multiple stream at same time
-- Fix broken recording caused by broken bilibili stream server
-- Toolbox mode to fix broken bilibili stream recording recorded by other software<sup>1</sup>
-- Pure C#, no native dependency like ffmpeg<sup>2</sup>
-- Open source!
+**关闭窗口后后台仍可继续监控和录制。** 停止某个房间请使用它的“停止”按钮。首次使用建议先录制并导出一小段，确认声音、画面和路径符合预期。
 
-<sup>1</sup>: Only unprocessed flv file downloaded directly from stream servers can be fixed. If the file is downloaded or processed by FFmpeg it no longer can be fixed, FFmpeg will fvck up the already broken recording even further.  
-<sup>2</sup>: A minimal version of FFmpeg is bundled with the desktop edition of BililiveRecorder for the remux feature in toolbox.
+## 视频保存在哪里
 
-## Versioning
+默认位置就在解压目录旁，设置中可以更改导出根目录：
 
-This project is following Semantic Versioning since version 2.0.0.
-
-Please note this does not include the public .NET API of `BililiveRecorder.Flv`, or any project within this repository for that matter. They are considered as internal implementation thus could have breaking changes in any releases.
-
-## Building from source
-
-Note: full git history is required for version generation to work.
-
-WPF version:
-
-```powershell
-cd BililiveRecorder.WPF
-msbuild -t:restore
-msbuild
+```text
+菜播·录包机/
+├─ 录播机.exe
+├─ 使用说明.txt
+├─ 程序组件/                    运行依赖和内部数据
+└─ 导出视频默认路径/
+   ├─ 完整素材/
+   │  └─ 20260928/
+   │     ├─ 202609282130-2140.mp4
+   │     └─ 【弹幕版】202609282130-2140.mp4
+   └─ 导出片段/
+      └─ 20260928/
+         └─ 202609282133-2135/
+            └─ 【弹幕版】202609282133-2135.mp4
 ```
 
-Command line version:
+命名使用素材的**录制时间（Asia/Shanghai）**，而非点击导出的时间。整场跨天时按开始日期归档，例如 `202609282350-202609290010.mp4`。同名文件增加 `_2`、`_3` 等后缀。导出文件夹最终只保留所选版本的 MP4，弹幕已经烧录到弹幕版的画面中，普通播放器即可观看。
 
-```sh
-# Build WebUI, optional
-git submodule update --init --recursive
-./webui/build.sh
-# For building on Windows:
-# ./webui/build.ps1
+## 磁盘空间与删除
 
-dotnet build BililiveRecorder.Cli
-```
+内部数据位于 `程序组件/live-editor/data`。录制时会保存原始 FLV / XML 与临时分片；结束后，在核对通过且没有读取者占用时释放重复分片。核对不通过则保留必要数据，避免丢失素材。弹幕预处理还会使用额外缓存，预算为 20 GiB，并在处理前保留至少 2 GiB 可用空间；这不是整个项目的磁盘上限。
 
-## Project structure
+| 操作 | 清理什么 | 保留什么 |
+| --- | --- | --- |
+| 右键录像素材 → 删除素材 | 本程序管理的原片、弹幕、内部片段、该素材的预处理缓存和编辑记录 | 已导出的纯净版、弹幕版 / 双文件；外部导入的原文件 |
+| 右键导出任务 → 删除导出任务 | 该任务对应的成片和任务记录 | 原始录像与编辑记录、其他任务的成片 |
 
-Project | Target |
-:--- |:--- |
-BililiveRecorder.Flv | .NET Standard 2.0 |
-BililiveRecorder.Core | .NET 6<br>.NET Framework 4.7.2 |
-BililiveRecorder.Toolbox | .NET Standard 2.0 |
-BililiveRecorder.WPF | .NET Framework 4.7.2 |
-BililiveRecorder.Web | .NET 6 |
-BililiveRecorder.Cli | .NET 6 |
+两种删除都需要二次确认，确认后永久清理，没有回收站。录制、整理、导出或有待保存成片的素材不能删除。若文件占用等导致清理未完成，软件显示失败原因并可重试；后台空闲时也会继续清理。成片已被手动删除时仍可移除失效任务记录。
 
-```mermaid
-graph BT
-    toolbox(BililiveRecorder.Toolbox) --> flv(BililiveRecorder.Flv)
-    core(BililiveRecorder.Core) --> flv
-    wpf(BililiveRecorder.WPF) --> core
-    wpf --> toolbox
-    cli(BililiveRecorder.Cli) --> toolbox
-    cli ---> core
-    web(BililiveRecorder.Web) --> core
-    cli --> web
-```
+若希望释放一场录像的全部空间，需要分别删除录像素材和不再需要的导出任务。不要手动清空内部 `data`、`chunks` 或 `temp`：其中可能有正在使用的数据或编码完成但尚未保存的唯一成片。
 
-## Reference & Acknowledgements
+## 画质、帧率和导出速度
 
-- [Adobe Flash Video File Format Specification 10.1.2.01.pdf](https://www.adobe.com/content/dam/acom/en/devnet/flv/video_file_format_spec_v10_1.pdf)
-- [coreyauger/flv-streamer-2-file](https://github.com/coreyauger/flv-streamer-2-file) Used as a reference in the early stages of development
-- [zyzsdy/biliroku](https://github.com/zyzsdy/biliroku) - (probably) first BiliBili stream recording tool.
+- 录制保存平台提供的原始流，不是录屏。首版没有 B 站登录界面，也不承诺所有房间都能取得平台最高档画质。
+- 满足格式条件的**整场纯净版**使用码流复制，只更换封装，不改变画质；不兼容时使用现有编码回退。精确切片可能需要重新编码。
+- **弹幕版固定输出 60 帧**，使用原分辨率；软件编码 CRF 为 20，硬件编码使用对应的质量参数。30 帧源视频保留原有动作帧，重复帧用于承载更平滑移动的弹幕，不做运动插帧。
+- 自动探测 NVIDIA、AMD、Intel 硬件编码能力；不可用时回退软件编码。具体速度取决于显卡、CPU、源视频、弹幕密度、磁盘和缓存命中情况。
+- 预处理无需全部完成才可导出。已覆盖的整块直接复用，缺失、失效或需要精确边界处理的部分仍会编码，不保证任意设备都能在十分钟内导出两小时素材。
+
+## 更新与问题反馈
+
+首版**没有内置自动更新或更新提醒**。可以在本仓库的 Watch → Custom 中订阅 Releases，或到 [Releases](https://github.com/kk12091209/-/releases) 查看新版本。更新前停止任务并退出后台服务，保留旧目录和数据；按新版发布说明操作，不要在录制中覆盖程序组件。
+
+提交 [Issue](https://github.com/kk12091209/-/issues) 时，请附软件版本、Windows 版本、显卡、复现步骤和具体报错。分享日志或截图前移除个人路径、Cookie、账号信息和不希望公开的直播内容。
+
+## 开发与构建
+
+本仓库包含剪辑工作台与对应的录制核心改动。主要目录：
+
+| 路径 | 内容 |
+| --- | --- |
+| `live-editor/src` | Vue 界面、时间轴、Canvas 弹幕预览 |
+| `live-editor/server` | 本地服务、SQLite、索引、导出和后台预处理 |
+| `live-editor/desktop` | Windows / WebView2 桌面壳 |
+| `live-editor/test` | Node 测试与小型合成媒体夹具 |
+| `live-editor/scripts` | 隔离开发、发布打包与验证脚本 |
+| `BililiveRecorder.*` | 来自上游的录制核心及配套项目 |
+
+见 [开发指南](live-editor/README.md)、[发布构建说明](live-editor/docs/RELEASE.md) 和 [第三方来源](THIRD_PARTY_NOTICES.md)。源码仓库不包含运行时、开发依赖、真实录像、账号配置或数据库。GitHub 的“Download ZIP”下载的是源码，普通用户请选择 Release 运行包。
+
+## 开源许可与致谢
+
+本项目基于 [BililiveRecorder](https://github.com/BililiveRecorder/BililiveRecorder)，遵循 [GNU GPL v3](LICENSE)，保留上游版权和许可声明。它是独立的直播录制与剪辑工作台，不是 BililiveRecorder 的官方发行版。
+
+感谢 BililiveRecorder、FFmpeg、libass、Node.js、Vue、Lucide、Microsoft WebView2 和 7-Zip 等项目。运行包内的 `程序组件/licenses` 保留组件许可、来源及依赖版本。修改和再分发时请遵守相应许可；录制与分享直播内容也请尊重内容权利人和平台规则。

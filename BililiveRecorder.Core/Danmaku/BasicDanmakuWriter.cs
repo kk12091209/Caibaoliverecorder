@@ -31,6 +31,7 @@ namespace BililiveRecorder.Core.Danmaku
 
         private XmlWriter? xmlWriter = null;
         private readonly Stopwatch dmTime = new Stopwatch();
+        private readonly LotteryDanmakuTracker lotteryTracker = new LotteryDanmakuTracker();
         private uint writeCount = 0;
         private RoomConfig? config;
 
@@ -112,6 +113,19 @@ namespace BililiveRecorder.Core.Danmaku
             if (this.disposedValue)
                 return;
 
+            // Unknown lottery events still carry the server-confirmed phrase and validity window.
+            // Observe them before the comment-only filter; original comments are always retained.
+            string? lottery = null;
+            try
+            {
+                if (this.config != null) lottery = this.lotteryTracker.Process(danmakuModel.RawObject, this.config.RoomId);
+            }
+            catch (Exception ex)
+            {
+                // Optional classification must never interrupt or discard the original recording.
+                this.logger.Debug(ex, "Unable to classify lottery participation message");
+            }
+
             if (this.xmlWriter is null || this.config is null)
                 return;
 
@@ -143,6 +157,8 @@ namespace BililiveRecorder.Core.Danmaku
                             await this.xmlWriter.WriteStartElementAsync(null, "d", null).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "p", null, $"{ts:F3},{type},{size},{color},{st},0,{danmakuModel.UserID},0").ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(danmakuModel.UserName)).ConfigureAwait(false);
+                            if (lottery != null)
+                                await this.xmlWriter.WriteAttributeStringAsync(null, "lottery", null, lottery).ConfigureAwait(false);
                             if (recordDanmakuRaw)
                                 await this.xmlWriter.WriteAttributeStringAsync(null, "raw", null, RemoveInvalidXMLChars(danmakuModel.RawObject?["info"]?.ToString(Newtonsoft.Json.Formatting.None))).ConfigureAwait(false);
                             this.xmlWriter.WriteValue(RemoveInvalidXMLChars(danmakuModel.CommentText));
