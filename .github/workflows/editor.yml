@@ -25,8 +25,16 @@ jobs:
           . ./scripts/dev-env.ps1
           npm ci
           if ($LASTEXITCODE -ne 0) { throw 'Dependency restore failed.' }
-          ./scripts/prepare-release-tools.ps1
-          $ffmpegRoot = Join-Path (Split-Path $PWD -Parent) '.tools/release-tools/ffmpeg-essentials/ffmpeg-8.1.2-essentials_build/bin'
+          ./scripts/prepare-release-tools.ps1 -SkipMediaBuild
+          $toolRoot = Join-Path (Split-Path $PWD -Parent) '.tools/release-tools'
+          $mediaRoot = Join-Path (Split-Path $PWD -Parent) '.tools/ci-media'
+          New-Item -ItemType Directory -Force -Path $mediaRoot | Out-Null
+          $archive = Join-Path $mediaRoot 'ffmpeg-8.1.2-essentials_build.7z'
+          node ./scripts/fetch-tool.mjs 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.7z' $archive 'e25b682664025d49034c981afb4bae36238a40f29a3cc1c713ad9a8b5b3528f6'
+          if ($LASTEXITCODE -ne 0) { throw 'Test FFmpeg download failed.' }
+          & (Join-Path $toolRoot '7zip/7z.exe') x $archive ("-o$mediaRoot") -y -bsp0
+          if ($LASTEXITCODE -ne 0) { throw 'Test FFmpeg extraction failed.' }
+          $ffmpegRoot = Join-Path $mediaRoot 'ffmpeg-8.1.2-essentials_build/bin'
           $env:FFMPEG_PATH = Join-Path $ffmpegRoot 'ffmpeg.exe'
           $env:FFPROBE_PATH = Join-Path $ffmpegRoot 'ffprobe.exe'
           node --test test/*.test.js scripts/dev.test.js

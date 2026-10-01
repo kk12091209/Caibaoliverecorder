@@ -1,11 +1,11 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { layoutDanmaku, commentX, DanmakuTimeline } from '../danmaku-layout.js';
+import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
 
 const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean });
 const canvas = ref(null);
-const font = '500 22px "Microsoft YaHei", "Segoe UI", sans-serif';
+const font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
 const clock = new DanmakuClock(), timeline = new DanmakuTimeline();
 const measured = new DanmakuCache(2048), sprites = new DanmakuCache(20 * 1024 * 1024);
 const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') === '1';

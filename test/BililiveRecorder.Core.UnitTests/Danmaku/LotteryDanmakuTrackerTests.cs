@@ -154,7 +154,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
         }
 
         [Fact]
-        public async Task WriterKeepsAllOriginalTextAndAddsMarkerWithoutRawPayload()
+        public async Task WriterDropsConfirmedLotteryBeforeStorageAndKeepsNormalRepeatsAsync()
         {
             var global = new GlobalConfig();
             var config = new RoomConfig { RoomId = 42, RecordDanmakuRaw = false };
@@ -163,7 +163,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             using var writer = new BasicDanmakuWriter(logger, new UserScriptRunner(global));
             using var output = new StringWriter();
             var xml = XmlWriter.Create(output, new XmlWriterSettings { Async = true, CloseOutput = false });
-            xml.WriteStartElement("i");
+            await xml.WriteStartElementAsync(null, "i", null);
             typeof(BasicDanmakuWriter).GetField("xmlWriter", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(writer, xml);
             typeof(BasicDanmakuWriter).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(writer, config);
             static DanmakuModel Comment(string text)
@@ -183,13 +183,14 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             await writer.WriteAsync(Comment("测试抽奖口令"));
             writer.Disable();
             var comments = XDocument.Parse(output.ToString()).Root!.Elements("d").ToArray();
-            Assert.Equal(5, comments.Length);
+            Assert.Equal(4, comments.Length);
             Assert.Null(comments[0].Attribute("lottery"));
-            Assert.Equal("anchor:1", (string?)comments[1].Attribute("lottery"));
-            Assert.Equal("测试抽奖口令", comments[1].Value);
+            Assert.Equal("测试抽奖口令", comments[0].Value);
+            Assert.Equal("哈哈哈", comments[1].Value);
+            Assert.Equal("哈哈哈", comments[2].Value);
+            Assert.Equal("测试抽奖口令", comments[3].Value);
             Assert.Null(comments[2].Attribute("lottery"));
             Assert.Null(comments[3].Attribute("lottery"));
-            Assert.Null(comments[4].Attribute("lottery"));
             foreach (var comment in comments) Assert.Null(comment.Attribute("raw"));
         }
         [Fact]
@@ -199,6 +200,46 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             for (var i = 1; i <= 65; i++) tracker.Process(Anchor(i, "口令" + i), 42);
             Assert.Equal("anchor:64", tracker.Process(Chat("口令64"), 42));
             Assert.Null(tracker.Process(Chat("口令65"), 42));
+        }
+
+        [Fact]
+        public async Task WriterFloodFiltersBeforeQuotaAndRetainsReceiptTimeAsync()
+        {
+            var global = new GlobalConfig();
+            var config = new RoomConfig { RoomId = 42, RecordDanmakuRaw = false };
+            config.SetParent(global);
+            using var logger = new LoggerConfiguration().CreateLogger();
+            var clock = 0.125;
+            using var writer = new BasicDanmakuWriter(logger, new UserScriptRunner(global), () => clock);
+            using var output = new StringWriter();
+            var xml = XmlWriter.Create(output, new XmlWriterSettings { Async = true, CloseOutput = false });
+            await xml.WriteStartElementAsync(null, "i", null);
+            typeof(BasicDanmakuWriter).GetField("xmlWriter", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(writer, xml);
+            typeof(BasicDanmakuWriter).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(writer, config);
+            static DanmakuModel Comment(string text)
+            {
+                var raw = Chat(text); var info = (JArray)raw["info"]!;
+                info.Add(new JArray(123, "测试用户", 0, 0));
+                while (info.Count < 7) info.Add(new JArray());
+                info.Add(0);
+                // Large unrelated profile data is discarded before buffering.
+                raw["unrelated"] = new string('x', 20000);
+                return new DanmakuModel(raw.ToString());
+            }
+            await writer.WriteAsync(new DanmakuModel(Anchor().ToString()));
+            var lottery = Comment("测试抽奖口令");
+            for (var i = 0; i < 100000; i++) await writer.WriteAsync(lottery);
+            var ordinary = Comment("哈哈哈");
+            for (var i = 0; i < 10000; i++) await writer.WriteAsync(ordinary);
+            clock = 2;
+            writer.Disable();
+            var document = XDocument.Parse(output.ToString()).Root!;
+            var comments = document.Elements("d").ToArray();
+            Assert.Equal(50, comments.Length);
+            Assert.All(comments, item => { Assert.Equal("哈哈哈", item.Value); Assert.StartsWith("0.125,", (string?)item.Attribute("p")); Assert.Null(item.Attribute("raw")); });
+            var density = Assert.Single(document.Elements("density"));
+            Assert.Equal("10000", (string?)density.Attribute("count"));
+            Assert.Equal("50", (string?)density.Attribute("kept"));
         }
     }
 }

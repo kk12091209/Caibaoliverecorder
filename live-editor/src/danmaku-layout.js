@@ -1,5 +1,6 @@
 // All lanes use the same pixel velocity, so a later short comment cannot catch a longer one.
-export function layoutDanmaku(messages, { width, height, fontSize = 22, measure, previous = new Map() }) {
+export const DANMAKU_FONT_SIZE = 22 * 2 / 3;
+export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, measure, previous = new Map() }) {
   const speed = Math.max(100, width / 6), lineHeight = fontSize + 12;
   const laneCount = Math.max(1, Math.min(10, Math.floor((height - 28) / lineHeight)));
   const occupied = Array(laneCount).fill(-Infinity), result = new Map();

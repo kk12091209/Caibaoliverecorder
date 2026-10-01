@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { assertDeletable, prepareDeletion, removeDeletionFiles } from './deletion.js';
 import { sourceReaderCount } from './storage-files.js';
 import { isStickerPlaceholder } from './chat-filter.js';
+import { ChatRuleIndex } from './chat-rules.js';
 const sourcePathKey = file => process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
 
 export class Store {
@@ -33,6 +34,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS dm_time ON danmaku(session,time);
       CREATE INDEX IF NOT EXISTS dm_session ON danmaku(session);
       CREATE TABLE IF NOT EXISTS danmaku_filters(message TEXT PRIMARY KEY REFERENCES danmaku(id), reason TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS danmaku_density(session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,time REAL NOT NULL,extra INTEGER NOT NULL,
+        PRIMARY KEY(source,time));
+      CREATE INDEX IF NOT EXISTS density_session ON danmaku_density(session);
       CREATE TABLE IF NOT EXISTS edits(session TEXT PRIMARY KEY REFERENCES sessions(id), revision INTEGER,
         data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, session TEXT REFERENCES sessions(id), created TEXT,
@@ -48,6 +53,7 @@ export class Store {
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();
     this.db.prepare("UPDATE jobs SET status='cancelled',error='' WHERE status='cancelling'").run();
     this.db.prepare("UPDATE sessions SET archive_status='pending' WHERE archive_status='running'").run();
+    this.chatRules = new ChatRuleIndex(this);
   }
   run(sql, ...args) { return this.db.prepare(sql).run(...args); }
   get(sql, ...args) { return this.db.prepare(sql).get(...args); }
@@ -126,9 +132,12 @@ export class Store {
         this.run('UPDATE jobs SET session=NULL WHERE session=?',id);
         this.run('DELETE FROM sources WHERE session=?',id);
         this.run('DELETE FROM sessions WHERE id=?',id);
+        this.run('DELETE FROM settings WHERE key=?','douyin-session:'+id);
       });
       // cancelSession already stopped this producer before physical deletion.
       await this.preparation?.forgetSession(id,{alreadyStopped:true});
+      this.density?.drop(id);
+      this.chatRules.drop(id);
       return {ok:true,...result};
     } catch(error) {
       if(started||this.get('SELECT purge_started_at FROM sessions WHERE id=?',id)?.purge_started_at)this.run('UPDATE sessions SET purge_error=? WHERE id=?',error.message,id);
@@ -165,14 +174,15 @@ export class Store {
     return { revision: current.revision + 1, ...data };
   }
   messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false) {
+    this.chatRules.sync(id);
     const lottery = filterLottery ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason='lottery')" : '';
-    return this.all("SELECT * FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text)" + lottery + " ORDER BY time,id LIMIT ?", id, from, to, `%${search}%`, `%${search}%`, limit);
+    return this.all("SELECT * FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery + " ORDER BY time,id LIMIT ?", id, from, to, `%${search}%`, `%${search}%`, limit);
   }
   setting(key, value) {
     if (value !== undefined) this.run('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));
     const row = this.get('SELECT value FROM settings WHERE key=?', key); return row ? JSON.parse(row.value) : undefined;
   }
-  close() { this.db.close(); }
+  close() { this.chatRules.close(); this.db.close(); }
 }
 
 export function validateRanges(ranges, duration, allowEmpty = false) {

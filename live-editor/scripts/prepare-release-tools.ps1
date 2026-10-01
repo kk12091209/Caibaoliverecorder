@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Destination = '',
-    [string]$ProjectRoot = ''
+    [string]$ProjectRoot = '',
+    [string]$Node = 'node',
+    [switch]$SkipMediaBuild
 )
 $ErrorActionPreference = 'Stop'
 if (!$ProjectRoot) { $ProjectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
@@ -11,7 +13,6 @@ New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $assets = @(
     @{ name='7zr.exe'; url='https://www.7-zip.org/a/7zr.exe'; sha256='ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d' },
     @{ name='7z2603-x64.exe'; url='https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe'; sha256='0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd' },
-    @{ name='ffmpeg-8.1.2-essentials_build.7z'; url='https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.7z'; sha256='e25b682664025d49034c981afb4bae36238a40f29a3cc1c713ad9a8b5b3528f6' },
     @{ name='innosetup-6.7.3.exe'; url='https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'; sha256='9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732' },
     @{ name='NODE-LICENSE.txt'; url='https://raw.githubusercontent.com/nodejs/node/v24.12.0/LICENSE'; sha256='537308465103a306d0e3eecf42632b4ff1b48aaaec044e9fc10a78c81fd00b34' },
     @{ name='license-texts/Apache-2.0.txt'; url='https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt'; sha256='074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff' },
@@ -24,11 +25,14 @@ $assets = @(
 foreach ($asset in $assets) {
     $path = Join-Path $Destination $asset.name
     New-Item -ItemType Directory -Force -Path (Split-Path $path -Parent) | Out-Null
-    if (!(Test-Path -LiteralPath $path)) { Invoke-WebRequest -UseBasicParsing -Uri $asset.url -OutFile $path }
+    if (!(Test-Path -LiteralPath $path)) {
+        & $Node (Join-Path $PSScriptRoot 'fetch-tool.mjs') $asset.url $path $asset.sha256
+        if ($LASTEXITCODE -ne 0) { throw "Tool download failed: $($asset.name)" }
+    }
     if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256) { throw "Checksum mismatch: $($asset.name). Do not execute this file; review upstream version before updating the pinned hash." }
 }
 $extractor = Join-Path $Destination '7zr.exe'
-foreach ($item in @(@{file='7z2603-x64.exe';folder='7zip'}, @{file='ffmpeg-8.1.2-essentials_build.7z';folder='ffmpeg-essentials'})) {
+foreach ($item in @(@{file='7z2603-x64.exe';folder='7zip'})) {
     $folder = Join-Path $Destination $item.folder
     if (!(Test-Path -LiteralPath $folder)) {
         & $extractor x (Join-Path $Destination $item.file) ('-o' + $folder) -y
@@ -46,4 +50,7 @@ if (!(Test-Path -LiteralPath (Join-Path $compilerRoot 'ISCC.exe'))) {
     if ($process.ExitCode -ne 0) { throw 'Inno Setup compiler installation failed.' }
 }
 $assets | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Destination 'download-manifest.json') -Encoding UTF8
+if (!$SkipMediaBuild -and !(Test-Path -LiteralPath (Join-Path $Destination 'ffmpeg-slim\component.json'))) {
+    & (Join-Path $PSScriptRoot 'build-ffmpeg.ps1') -ProjectRoot $ProjectRoot -ToolsRoot $Destination -Node $Node
+}
 Write-Output "Verified release tools: $Destination"

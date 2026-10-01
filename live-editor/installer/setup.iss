@@ -21,7 +21,7 @@ AppName=菜播·录包机
 AppVersion={#AppVersion}
 AppPublisher=糊涂小菜包
 AppPublisherURL=https://github.com/kk12091209/Caibaoliverecorder
-AppSupportURL=https://space.bilibili.com/3546729402076115
+AppSupportURL=https://space.bilibili.com/5162836
 AppUpdatesURL=https://github.com/kk12091209/Caibaoliverecorder/releases
 DefaultDirName={localappdata}\Programs\菜播·录包机
 DefaultGroupName=菜播·录包机
@@ -40,10 +40,15 @@ UninstallDisplayName=菜播·录包机
 UninstallFilesDir={app}\程序组件\卸载
 OutputDir={#SetupOutputDir}
 OutputBaseFilename={#SetupBaseName}
+#ifdef QaFastCompile
+Compression=none
+SolidCompression=no
+#else
 Compression=lzma2/ultra64
 LZMAUseSeparateProcess=yes
 LZMADictionarySize=131072
 SolidCompression=yes
+#endif
 CloseApplications=no
 RestartApplications=no
 LicenseFile={#StageDir}\程序组件\LICENSE
@@ -56,11 +61,11 @@ Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Messages]
 WelcomeLabel1=欢迎使用菜播·录包机
-WelcomeLabel2=B 站直播录制、回看与弹幕剪辑，在一个本地工作台完成。%n%n安装向导将为您准备程序、快捷方式和卸载入口。无需另装 Node.js 或 FFmpeg。%n%n录像和导出视频保存在您选择的安装目录中。建议选择空间充足的磁盘。
+WelcomeLabel2=B 站与抖音直播录制、回看和弹幕剪辑。%n%n安装后即可使用，无需另装 Node.js 或 FFmpeg。%n%n建议安装到空间充足的磁盘。
 SelectDirLabel3=选择程序与默认录像数据的保存位置。长时间录制会占用较多空间，建议选择空间充足的磁盘。
 FinishedHeadingLabel=菜播·录包机已准备就绪
-FinishedLabel=添加直播间，即可开始监控与录制。录制结束后自动预处理，需要视频时再手动导出。%n%n以后可从开始菜单、程序目录或 Windows“已安装的应用”中卸载。卸载保留您的录像、编辑数据和已导出的视频。
-ConfirmUninstall=确定卸载 %1 吗？%n%n只移除程序和快捷方式，保留录像、编辑数据与导出视频。正在进行的录制和处理任务必须先完成或由您主动停止。
+FinishedLabel=添加直播间，即可开始监控与录制。录制结束后自动预处理，需要视频时再手动导出。%n%n卸载会删除安装目录内的全部文件，包括录像和导出视频；需要保留的文件请先移出安装目录。
+ConfirmUninstall=确定卸载 %1 吗？%n%n安装目录内的全部文件将永久删除，包括录像、导出视频、缓存和设置。需要保留的文件请先移出安装目录。
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked
@@ -84,7 +89,84 @@ Name: "{autodesktop}\菜播·录包机"; Filename: "{app}\录播机.exe"; Workin
 [Run]
 Filename: "{app}\录播机.exe"; Description: "打开菜播·录包机"; Flags: nowait postinstall skipifsilent
 
+[UninstallDelete]
+; InitializeUninstall validates the dedicated installation before any deletion.
+Type: filesandordirs; Name: "{app}"
+
 [Code]
+function NormalizedPath(const Value: String): String;
+begin
+  Result := RemoveBackslashUnlessRoot(ExpandFileName(Value));
+end;
+
+function SafeInstallationPath(const Value: String): Boolean;
+var
+  Folder, WindowsFolder: String;
+  ProtectedFolders: TArrayOfString;
+  I: Integer;
+begin
+  Folder := NormalizedPath(Value);
+  Result := False;
+  if Length(Folder) <= Length(ExtractFileDrive(Folder)) + 1 then Exit;
+  WindowsFolder := AddBackslash(NormalizedPath(ExpandConstant('{win}')));
+  if (CompareText(Folder, RemoveBackslashUnlessRoot(WindowsFolder)) = 0) or
+     (CompareText(Copy(AddBackslash(Folder), 1, Length(WindowsFolder)), WindowsFolder) = 0) then Exit;
+  if (GetEnv('USERPROFILE') <> '') and
+     (CompareText(Folder, NormalizedPath(GetEnv('USERPROFILE'))) = 0) then Exit;
+  ProtectedFolders := ['{userdesktop}', '{commondesktop}', '{userdocs}',
+    '{commondocs}', '{localappdata}', '{userappdata}', '{commonappdata}',
+    '{commonpf}', '{commonpf32}', '{commonpf64}'];
+  for I := 0 to GetArrayLength(ProtectedFolders) - 1 do
+    if CompareText(Folder, NormalizedPath(ExpandConstant(ProtectedFolders[I]))) = 0 then Exit;
+  Result := True;
+end;
+
+function InstallationMarker: String;
+begin
+  Result := ExpandConstant('{app}\程序组件\installation-owner.txt');
+end;
+
+function InstallationOwned: Boolean;
+var
+  Lines: TArrayOfString;
+begin
+  Result := False;
+  if not LoadStringsFromFile(InstallationMarker, Lines) then Exit;
+  if GetArrayLength(Lines) <> 2 then Exit;
+  Result := (Lines[0] = '{#SetupAppId}') and
+    (CompareText(Lines[1], NormalizedPath(ExpandConstant('{app}'))) = 0);
+end;
+
+function DirectoryHasContents(const Folder: String): Boolean;
+var
+  Entry: TFindRec;
+begin
+  Result := False;
+  if FindFirst(AddBackslash(Folder) + '*', Entry) then begin
+    try
+      repeat
+        if (Entry.Name <> '.') and (Entry.Name <> '..') then begin
+          Result := True;
+          Break;
+        end;
+      until not FindNext(Entry);
+    finally
+      FindClose(Entry);
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Lines: TArrayOfString;
+begin
+  if CurStep = ssPostInstall then begin
+    Lines := ['{#SetupAppId}', NormalizedPath(ExpandConstant('{app}'))];
+    if not SaveStringsToUTF8File(InstallationMarker, Lines, False) then
+      RaiseException('无法保存安装信息，请重新安装。');
+  end;
+end;
+
 procedure InitializeWizard;
 var
   Brand: TPanel;
@@ -140,6 +222,11 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  Result := '请选择专用的安装文件夹。';
+  if not SafeInstallationPath(ExpandConstant('{app}')) then Exit;
+  if DirectoryHasContents(ExpandConstant('{app}')) and not InstallationOwned and
+    not (FileExists(ExpandConstant('{app}\程序组件\release-manifest.json')) and
+         FileExists(ExpandConstant('{app}\录播机.exe'))) then Exit;
   Result := SafeMaintenance;
 end;
 
@@ -147,6 +234,11 @@ function InitializeUninstall: Boolean;
 var
   Error: String;
 begin
+  Result := False;
+  if not SafeInstallationPath(ExpandConstant('{app}')) or not InstallationOwned then begin
+    SuppressibleMsgBox('安装目录无法确认，请重新安装后再卸载。', mbError, MB_OK, IDOK);
+    Exit;
+  end;
   Error := SafeMaintenance;
   Result := Error = '';
   if not Result then SuppressibleMsgBox(Error, mbError, MB_OK, IDOK);

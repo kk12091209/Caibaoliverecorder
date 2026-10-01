@@ -7,9 +7,11 @@ param(
     [string]$DesktopRoot = '',
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
-    [string]$Version = '0.1.2',
+    [string]$FFmpegRoot = '',
+    [string]$Version = '0.1.3',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
+    [switch]$Include7z,
     [long]$MaxDownloadBytes = 100000000
 )
 $ErrorActionPreference = 'Stop'
@@ -96,6 +98,7 @@ Add-ComponentFile (Join-Path $DesktopRoot '程序组件\录播机.exe.config') '
 foreach ($relative in $emptyDirectories) { New-Item -ItemType Directory -Path (Join-Path $stage $relative) -Force | Out-Null }
 Add-ComponentFile (Join-Path $ProjectRoot 'LICENSE') 'LICENSE'
 Add-ComponentFile (Join-Path $ProjectRoot 'THIRD_PARTY_NOTICES.md') 'licenses/THIRD_PARTY_NOTICES.md'
+foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'docs\licenses') -File -Filter '*.txt') { Add-ComponentFile $file.FullName ('licenses/douyin/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'package.json') 'live-editor/package.json'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'server') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/server/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'dist\index.html') 'live-editor/dist/index.html'
@@ -128,9 +131,23 @@ foreach ($relative in @('node','recorder')) {
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $DesktopRoot '程序组件\runtime\desktop') -File) {
     if ($file.Name -match '(?i)(\.dll|(?:LICENSE|NOTICE)\.txt)$') { Add-ComponentFile $file.FullName ('runtime/desktop/' + $file.Name) }
 }
-$ffmpegRoot = Join-Path $ToolsRoot 'ffmpeg-essentials\ffmpeg-8.1.2-essentials_build'
-foreach ($file in @('ffmpeg.exe','ffprobe.exe')) { Add-ComponentFile (Join-Path $ffmpegRoot ('bin\' + $file)) ('runtime/ffmpeg/' + $file) }
-foreach ($file in @('LICENSE','README.txt')) { Add-ComponentFile (Join-Path $ffmpegRoot $file) ('licenses/ffmpeg/' + $file) }
+if (!$FFmpegRoot) { $FFmpegRoot = Join-Path $ToolsRoot 'ffmpeg-slim' }
+$FFmpegRoot = (Resolve-Path -LiteralPath $FFmpegRoot).Path
+$ffmpegComponent = Get-Content -LiteralPath (Join-Path $FFmpegRoot 'component.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($ffmpegComponent.version -ne '8.1.2' -or $ffmpegComponent.variant -ne 'caibo-shared') { throw 'Expected the verified Caibo FFmpeg 8.1.2 shared build.' }
+$ffmpegFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($file in $ffmpegComponent.files) {
+    $componentName = [string]$file.name
+    if ($componentName -notmatch '^[A-Za-z0-9_.+-]+\.(dll|exe)$' -or !$ffmpegFiles.Add($componentName)) { throw 'Unsafe or duplicate FFmpeg component file.' }
+    $source = Join-Path $FFmpegRoot ('bin\' + $componentName)
+    if ((Get-Item -LiteralPath $source).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.sha256) { throw "FFmpeg component mismatch: $componentName" }
+    Add-ComponentFile $source ('runtime/ffmpeg/' + $componentName)
+}
+foreach ($required in @('ffmpeg.exe','ffprobe.exe')) { if (!$ffmpegFiles.Contains($required)) { throw "Missing media program: $required" } }
+foreach ($file in Get-ChildItem -LiteralPath $FFmpegRoot -File -Recurse | Where-Object { !$_.FullName.StartsWith((Join-Path $FFmpegRoot 'bin') + '\', [StringComparison]::OrdinalIgnoreCase) }) {
+    $relative = $file.FullName.Substring($FFmpegRoot.Length + 1).Replace('\','/')
+    Add-ComponentFile $file.FullName ('licenses/ffmpeg/' + $relative)
+}
 Add-ComponentFile (Join-Path $ToolsRoot 'NODE-LICENSE.txt') 'licenses/node/LICENSE.txt'
 Add-ComponentFile (Join-Path $ToolsRoot '7zip\License.txt') 'licenses/7zip/LICENSE.txt'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $ToolsRoot 'license-texts') -File -Filter '*.txt') { Add-ComponentFile $file.FullName ('licenses/texts/' + $file.Name) }
@@ -183,7 +200,7 @@ $ffprobeOutput = @(& $ffprobe -version)
 if ($LASTEXITCODE -ne 0) { throw 'FFprobe verification failed.' }
 $ffprobeVersion = $ffprobeOutput[0]
 $encoders = (& $ffmpeg -hide_banner -encoders 2>&1) -join "`n"
-foreach ($encoder in @('libx264','h264_amf','h264_nvenc','h264_qsv')) { if ($encoders -notmatch "\b$encoder\b") { throw "Missing FFmpeg encoder: $encoder" } }
+foreach ($encoder in @('libx264','aac','h264_amf','h264_nvenc','h264_qsv')) { if ($encoders -notmatch "\b$encoder\b") { throw "Missing FFmpeg encoder: $encoder" } }
 $filters = (& $ffmpeg -hide_banner -filters 2>&1) -join "`n"
 if ($filters -notmatch '\bass\s') { throw 'Missing libass filter.' }
 $manifest = [ordered]@{ version=$Version; layoutVersion=2; componentDirectory=$componentDirectory; emptyDirectories=$emptyDirectories; architecture='win-x64'; publicRelease=[bool]$ForPublic; sourceUrl=$SourceUrl; node=$nodeVersion; ffmpeg=$ffmpegVersion; ffprobe=$ffprobeVersion; recorder=[Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $componentRoot 'runtime\recorder\BililiveRecorder.Cli.dll')).ProductVersion; frameworks=$runtimeConfig.runtimeOptions.includedFrameworks; prerequisites=@('Windows 10/11 x64','.NET Framework 4.7.2 or newer','Microsoft Edge WebView2 Evergreen Runtime'); files=@() }
@@ -205,10 +222,12 @@ Write-Text ($componentDirectory + '/release-manifest.json') ($manifest | Convert
 $sevenZip = Join-Path $ToolsRoot '7zip\7z.exe'
 Push-Location $OutputRoot
 try {
-    & $sevenZip a "$name.7z" "$name\*" -t7z -mx=9 -m0=LZMA2 -md=128m -ms=on -mmt=1 -mtc=off -mta=off -mtm=off -bsp0
-    if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed.' }
-    & $sevenZip t "$name.7z" -bsp0
-    if ($LASTEXITCODE -ne 0) { throw 'Archive integrity test failed.' }
+    if ($Include7z) {
+        & $sevenZip a "$name.7z" "$name\*" -t7z -mx=9 -m0=LZMA2 -md=128m -ms=on -mmt=1 -mtc=off -mta=off -mtm=off -bsp0
+        if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed.' }
+        & $sevenZip t "$name.7z" -bsp0
+        if ($LASTEXITCODE -ne 0) { throw 'Archive integrity test failed.' }
+    }
     & $sevenZip a "$name.zip" "$name\*" -tzip -mm=Deflate -mx=9 -mmt=1 -mcu=on -bsp0
     if ($LASTEXITCODE -ne 0) { throw 'ZIP creation failed.' }
     & $sevenZip t "$name.zip" -bsp0
@@ -220,7 +239,8 @@ $size = (Get-Item -LiteralPath $installer).Length
 $installedBytes = [long]0
 foreach ($file in $manifest.files) { $installedBytes += $file.bytes }
 $installedBytes += (Get-Item -LiteralPath (Join-Path $componentRoot 'release-manifest.json')).Length
-$report = [ordered]@{ version=$Version; archive="$name.7z"; installer="$name-setup.exe"; bytes=$size; decimalMB=[Math]::Round($size/1000000,2); installedBytes=$installedBytes; under100MB=($size -lt $MaxDownloadBytes); sha256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant(); fileCount=($manifest.files.Count+1) }
+$report = [ordered]@{ version=$Version; installer="$name-setup.exe"; bytes=$size; decimalMB=[Math]::Round($size/1000000,2); installedBytes=$installedBytes; under100MB=($size -lt $MaxDownloadBytes); sha256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant(); fileCount=($manifest.files.Count+1) }
+if ($Include7z) { $report.archive="$name.7z" }
 $report.zip = "$name.zip"
 $report.zipBytes = (Get-Item -LiteralPath "$stage.zip").Length
 $report.zipSha256 = (Get-FileHash -LiteralPath "$stage.zip" -Algorithm SHA256).Hash.ToLowerInvariant()

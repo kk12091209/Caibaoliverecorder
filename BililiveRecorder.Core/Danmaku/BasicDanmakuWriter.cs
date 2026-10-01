@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -31,20 +33,41 @@ namespace BililiveRecorder.Core.Danmaku
 
         private XmlWriter? xmlWriter = null;
         private readonly Stopwatch dmTime = new Stopwatch();
+        private readonly Func<double> recordingTime;
         private readonly LotteryDanmakuTracker lotteryTracker = new LotteryDanmakuTracker();
         private uint writeCount = 0;
         private RoomConfig? config;
+        private readonly BoundedDanmakuBuffer<PendingMessage> pending = new BoundedDanmakuBuffer<PendingMessage>();
+        private readonly CancellationTokenSource pumpCancellation = new CancellationTokenSource();
+        private readonly object pumpGate = new object();
+        private Task? pump;
+        private int generation;
+        private sealed class PendingMessage
+        {
+            internal DanmakuModel? Model;
+            internal double Time;
+            internal string Text = string.Empty, User = string.Empty;
+            internal string? Raw;
+            internal long UserId, Stamp;
+            internal int Type, Size, Color;
+        }
 
         private readonly SemaphoreSlim semaphoreSlim = new SemaphoreSlim(1, 1);
         private readonly ILogger logger;
         private readonly UserScriptRunner userScriptRunner;
 
         public BasicDanmakuWriter(ILogger logger, UserScriptRunner userScriptRunner)
+            : this(logger, userScriptRunner, null) { }
+
+        internal BasicDanmakuWriter(ILogger logger, UserScriptRunner userScriptRunner, Func<double>? recordingTime)
         {
             this.logger = logger?.ForContext<BasicDanmakuWriter>() ?? throw new ArgumentNullException(nameof(logger));
             this.userScriptRunner = userScriptRunner ?? throw new ArgumentNullException(nameof(userScriptRunner));
+            this.generation = this.pending.Begin();
+            this.recordingTime = recordingTime ?? (() => Math.Max(this.dmTime.Elapsed.TotalSeconds, 0d));
         }
 
+        [SuppressMessage("Usage", "VSTHRD002", Justification = "The writer lifecycle is synchronous; all drain awaits use ConfigureAwait(false) and hold the writer semaphore.")]
         public void EnableWithPath(string path, IRoom room)
         {
             if (this.disposedValue) return;
@@ -52,12 +75,9 @@ namespace BililiveRecorder.Core.Danmaku
             this.semaphoreSlim.Wait();
             try
             {
-                if (this.xmlWriter != null)
-                {
-                    this.xmlWriter.Close();
-                    this.xmlWriter.Dispose();
-                    this.xmlWriter = null;
-                }
+                this.pending.End();
+                this.DrainLockedAsync(true).GetAwaiter().GetResult();
+                this.DisableCore();
 
                 try { Directory.CreateDirectory(Path.GetDirectoryName(path)!); } catch (Exception) { }
                 var stream = File.Open(path, FileMode.Create, FileAccess.Write, FileShare.Read);
@@ -68,6 +88,7 @@ namespace BililiveRecorder.Core.Danmaku
                 WriteStartDocument(this.xmlWriter, room);
                 this.dmTime.Restart();
                 this.writeCount = 0;
+                this.generation = this.pending.Begin();
             }
             finally
             {
@@ -75,13 +96,16 @@ namespace BililiveRecorder.Core.Danmaku
             }
         }
 
+        [SuppressMessage("Usage", "VSTHRD002", Justification = "The synchronous lifecycle must flush the final bounded batch; drain awaits do not capture a synchronization context.")]
         public void Disable()
         {
             if (this.disposedValue) return;
 
+            this.pending.End();
             this.semaphoreSlim.Wait();
             try
             {
+                this.DrainLockedAsync(true).GetAwaiter().GetResult();
                 this.DisableCore();
             }
             finally
@@ -92,6 +116,7 @@ namespace BililiveRecorder.Core.Danmaku
 
         private void DisableCore()
         {
+            this.pending.Clear();
             try
             {
                 if (this.xmlWriter != null)
@@ -108,13 +133,15 @@ namespace BililiveRecorder.Core.Danmaku
             }
         }
 
-        public async Task WriteAsync(DanmakuModel danmakuModel)
+        public Task WriteAsync(DanmakuModel danmakuModel)
         {
             if (this.disposedValue)
-                return;
+                return Task.CompletedTask;
+            var receiptGeneration = this.generation;
+            var time = this.recordingTime();
 
             // Unknown lottery events still carry the server-confirmed phrase and validity window.
-            // Observe them before the comment-only filter; original comments are always retained.
+            // Observe them synchronously before quota accounting and without one Task.Run per event.
             string? lottery = null;
             try
             {
@@ -127,15 +154,119 @@ namespace BililiveRecorder.Core.Danmaku
             }
 
             if (this.xmlWriter is null || this.config is null)
-                return;
+                return Task.CompletedTask;
 
             if (danmakuModel.MsgType is not (DanmakuMsgType.Comment or DanmakuMsgType.SuperChat or DanmakuMsgType.GiftSend or DanmakuMsgType.GuardBuy))
-                return;
+                return Task.CompletedTask;
 
-            if (!this.userScriptRunner.CallOnDanmaku(this.logger, danmakuModel.RawString))
-                return;
+            if (danmakuModel.MsgType == DanmakuMsgType.Comment && (lottery != null || StickerPlaceholder.IsMatch(danmakuModel.CommentText)))
+                return Task.CompletedTask;
+            if ((danmakuModel.MsgType == DanmakuMsgType.SuperChat && !this.config.RecordDanmakuSuperChat) ||
+                (danmakuModel.MsgType == DanmakuMsgType.GiftSend && !this.config.RecordDanmakuGift) ||
+                (danmakuModel.MsgType == DanmakuMsgType.GuardBuy && !this.config.RecordDanmakuGuard)) return Task.CompletedTask;
 
-            await this.semaphoreSlim.WaitAsync();
+            var rawString = danmakuModel.RawString ?? string.Empty;
+            if (!this.userScriptRunner.CallOnDanmaku(this.logger, rawString))
+                return Task.CompletedTask;
+
+            PendingMessage message;
+            int retainedBytes;
+            try
+            {
+                if (danmakuModel.MsgType == DanmakuMsgType.Comment)
+                {
+                    // Drop profiles and unrelated protocol metadata before buffering.
+                    // A large incoming profile must not discard an otherwise short comment.
+                    message = new PendingMessage {
+                        Time = time, Text = danmakuModel.CommentText ?? string.Empty,
+                        User = danmakuModel.UserName ?? string.Empty, UserId = danmakuModel.UserID,
+                        Type = danmakuModel.RawObject?["info"]?[0]?[1]?.ToObject<int>() ?? 1,
+                        Size = danmakuModel.RawObject?["info"]?[0]?[2]?.ToObject<int>() ?? 25,
+                        Color = danmakuModel.RawObject?["info"]?[0]?[3]?.ToObject<int>() ?? 0XFFFFFF,
+                        Stamp = danmakuModel.RawObject?["info"]?[0]?[4]?.ToObject<long>() ?? 0L,
+                        Raw = this.config.RecordDanmakuRaw ? danmakuModel.RawObject?["info"]?.ToString(Newtonsoft.Json.Formatting.None) : null
+                    };
+                    // UTF-16 payload size plus an allowance for object/string headers.
+                    var characters = (long)message.Text.Length + message.User.Length + (message.Raw?.Length ?? 0);
+                    if (characters > (16 * 1024 - 512) / 2) return Task.CompletedTask;
+                    retainedBytes = (int)characters * 2 + 512;
+                }
+                else
+                {
+                    var payloadBytes = Encoding.UTF8.GetByteCount(rawString);
+                    if (payloadBytes > (16 * 1024 - 512) / 4) return Task.CompletedTask;
+                    message = new PendingMessage { Model = danmakuModel, Time = time };
+                    retainedBytes = payloadBytes * 4 + 512;
+                }
+            }
+            catch (Exception ex) { this.logger.Debug(ex, "忽略格式异常的弹幕"); return Task.CompletedTask; }
+            if (this.pending.Add(message, retainedBytes, (long)time, receiptGeneration, danmakuModel.MsgType == DanmakuMsgType.Comment))
+                lock (this.pumpGate) if (!this.disposedValue && (this.pump is null || this.pump.IsCompleted)) this.pump = this.PumpAsync();
+            return Task.CompletedTask;
+        }
+
+        private async Task PumpAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(100, this.pumpCancellation.Token).ConfigureAwait(false);
+                    await this.semaphoreSlim.WaitAsync(this.pumpCancellation.Token).ConfigureAwait(false);
+                    try { await this.DrainLockedAsync(false).ConfigureAwait(false); }
+                    finally { this.semaphoreSlim.Release(); }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { this.logger.Warning(ex, "弹幕写入循环异常，后续消息将重试"); }
+        }
+
+        private async Task DrainLockedAsync(bool force)
+        {
+            using var batch = this.pending.Take((long)this.recordingTime(), force);
+            if (this.xmlWriter is null || this.config is null) return;
+            try
+            {
+                foreach (var density in batch.Density)
+                {
+                    await this.xmlWriter.WriteStartElementAsync(null, "density", null).ConfigureAwait(false);
+                    await this.xmlWriter.WriteAttributeStringAsync(null, "ts", null, density.Second.ToString(System.Globalization.CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    await this.xmlWriter.WriteAttributeStringAsync(null, "count", null, density.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    await this.xmlWriter.WriteAttributeStringAsync(null, "kept", null, density.Kept.ToString(System.Globalization.CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    await this.xmlWriter.WriteEndElementAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) { this.logger.Warning(ex, "写入弹幕密度时发生错误"); this.DisableCore(); return; }
+            foreach (var message in batch.Items.OrderBy(item => item.Time))
+                if(message.Model is null) await this.WriteCommentLockedAsync(message).ConfigureAwait(false);
+                else await this.WriteLockedAsync(message.Model, message.Time).ConfigureAwait(false);
+            if (batch.Items.Count > 0 && this.xmlWriter != null)
+            {
+                try { await this.xmlWriter.FlushAsync().ConfigureAwait(false); }
+                catch (Exception ex) { this.logger.Warning(ex, "写入弹幕时发生错误"); this.DisableCore(); }
+            }
+        }
+
+        private async Task WriteCommentLockedAsync(PendingMessage message)
+        {
+            if (this.xmlWriter is null) return;
+            try
+            {
+                await this.xmlWriter.WriteStartElementAsync(null, "d", null).ConfigureAwait(false);
+                await this.xmlWriter.WriteAttributeStringAsync(null, "p", null,
+                    FormattableString.Invariant($"{message.Time:F3},{message.Type},{message.Size},{message.Color},{message.Stamp},0,{message.UserId},0")).ConfigureAwait(false);
+                await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(message.User)).ConfigureAwait(false);
+                if(message.Raw != null) await this.xmlWriter.WriteAttributeStringAsync(null, "raw", null, RemoveInvalidXMLChars(message.Raw)).ConfigureAwait(false);
+                this.xmlWriter.WriteValue(RemoveInvalidXMLChars(message.Text));
+                await this.xmlWriter.WriteEndElementAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) { this.logger.Warning(ex, "写入弹幕时发生错误"); this.DisableCore(); }
+        }
+
+        // Caller owns the writer semaphore. Receipt time was captured before buffering.
+        private async Task WriteLockedAsync(DanmakuModel danmakuModel, double recordedTime)
+        {
+            if (this.xmlWriter is null || this.config is null) return;
             try
             {
                 if (this.xmlWriter is null)
@@ -145,31 +276,11 @@ namespace BililiveRecorder.Core.Danmaku
                 var recordDanmakuRaw = this.config.RecordDanmakuRaw;
                 switch (danmakuModel.MsgType)
                 {
-                    case DanmakuMsgType.Comment:
-                        {
-                            var type = danmakuModel.RawObject?["info"]?[0]?[1]?.ToObject<int>() ?? 1;
-                            var size = danmakuModel.RawObject?["info"]?[0]?[2]?.ToObject<int>() ?? 25;
-                            var color = danmakuModel.RawObject?["info"]?[0]?[3]?.ToObject<int>() ?? 0XFFFFFF;
-                            var st = danmakuModel.RawObject?["info"]?[0]?[4]?.ToObject<long>() ?? 0L;
-
-                            var ts = Math.Max(this.dmTime.Elapsed.TotalSeconds, 0d);
-
-                            await this.xmlWriter.WriteStartElementAsync(null, "d", null).ConfigureAwait(false);
-                            await this.xmlWriter.WriteAttributeStringAsync(null, "p", null, $"{ts:F3},{type},{size},{color},{st},0,{danmakuModel.UserID},0").ConfigureAwait(false);
-                            await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(danmakuModel.UserName)).ConfigureAwait(false);
-                            if (lottery != null)
-                                await this.xmlWriter.WriteAttributeStringAsync(null, "lottery", null, lottery).ConfigureAwait(false);
-                            if (recordDanmakuRaw)
-                                await this.xmlWriter.WriteAttributeStringAsync(null, "raw", null, RemoveInvalidXMLChars(danmakuModel.RawObject?["info"]?.ToString(Newtonsoft.Json.Formatting.None))).ConfigureAwait(false);
-                            this.xmlWriter.WriteValue(RemoveInvalidXMLChars(danmakuModel.CommentText));
-                            await this.xmlWriter.WriteEndElementAsync().ConfigureAwait(false);
-                        }
-                        break;
                     case DanmakuMsgType.SuperChat:
                         if (this.config.RecordDanmakuSuperChat)
                         {
                             await this.xmlWriter.WriteStartElementAsync(null, "sc", null).ConfigureAwait(false);
-                            var ts = Math.Max(this.dmTime.Elapsed.TotalSeconds, 0d);
+                            var ts = recordedTime;
                             await this.xmlWriter.WriteAttributeStringAsync(null, "ts", null, ts.ToString("F3")).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(danmakuModel.UserName)).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "uid", null, danmakuModel.UserID.ToString()).ConfigureAwait(false);
@@ -184,7 +295,7 @@ namespace BililiveRecorder.Core.Danmaku
                     case DanmakuMsgType.GiftSend:
                         if (this.config.RecordDanmakuGift)
                         {
-                            var ts = Math.Max(this.dmTime.Elapsed.TotalSeconds, 0d);
+                            var ts = recordedTime;
                             var raw = recordDanmakuRaw ? RemoveInvalidXMLChars(danmakuModel.RawObject?["data"]?.ToString(Newtonsoft.Json.Formatting.None)) : null;
 
                             if (danmakuModel.GiftList is { } giftList)
@@ -203,7 +314,7 @@ namespace BililiveRecorder.Core.Danmaku
                         if (this.config.RecordDanmakuGuard)
                         {
                             await this.xmlWriter.WriteStartElementAsync(null, "guard", null).ConfigureAwait(false);
-                            var ts = Math.Max(this.dmTime.Elapsed.TotalSeconds, 0d);
+                            var ts = recordedTime;
                             await this.xmlWriter.WriteAttributeStringAsync(null, "ts", null, ts.ToString("F3")).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(danmakuModel.UserName)).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "uid", null, danmakuModel.UserID.ToString()).ConfigureAwait(false);
@@ -221,7 +332,7 @@ namespace BililiveRecorder.Core.Danmaku
 
                 if (write && this.writeCount++ >= this.config.RecordDanmakuFlushInterval)
                 {
-                    await this.xmlWriter.FlushAsync();
+                    await this.xmlWriter.FlushAsync().ConfigureAwait(false);
                     this.writeCount = 0;
                 }
             }
@@ -229,10 +340,6 @@ namespace BililiveRecorder.Core.Danmaku
             {
                 this.logger.Warning(ex, "写入弹幕时发生错误");
                 this.DisableCore();
-            }
-            finally
-            {
-                this.semaphoreSlim.Release();
             }
         }
 
@@ -286,15 +393,19 @@ namespace BililiveRecorder.Core.Danmaku
             writer.Flush();
         }
 
-        private bool disposedValue;
+        private volatile bool disposedValue;
 
+        [SuppressMessage("Usage", "VSTHRD002", Justification = "Cancel and join the single writer pump before disposing its semaphore; the pump never captures a synchronization context.")]
         protected virtual void Dispose(bool disposing)
         {
             if (!this.disposedValue)
             {
                 if (disposing)
                 {
-                    // dispose managed state (managed objects)
+                    this.Disable();
+                    lock (this.pumpGate) { this.disposedValue = true; this.pumpCancellation.Cancel(); }
+                    this.pump?.GetAwaiter().GetResult();
+                    this.pumpCancellation.Dispose();
                     this.semaphoreSlim.Dispose();
                     this.xmlWriter?.Close();
                     this.xmlWriter?.Dispose();

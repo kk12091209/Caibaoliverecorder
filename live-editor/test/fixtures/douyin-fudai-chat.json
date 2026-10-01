@@ -1,0 +1,12 @@
+{
+  "source": "https://live.douyin.com/974612852909",
+  "description": "Live ChatMessage with lottery chat_by=9. User profile and message identifiers removed; common room/timestamp and chat fields preserved.",
+  "roomId": "7691664236002429705",
+  "messages": [
+    {
+      "method": "WebcastChatMessage",
+      "id": "sanitized-0",
+      "payload": "CgoYiZaBtO37kd9qGgzov5nmmK/lk6rph4x4p6n51QagAQmoAR4SCBoG6KeC5LyX"
+    }
+  ]
+}

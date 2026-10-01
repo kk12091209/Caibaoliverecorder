@@ -1,0 +1,4509 @@
+{
+  "formatVersion": 1,
+  "repositoryUrl": "https://github.com/BililiveRecorder/BililiveRecorder.git",
+  "upstreamRevision": "a27640a33bcc35e09c76111c14e1d3627805e483",
+  "description": "Current source snapshot; editor and explicitly listed recorder additions include uncommitted files. Private data, upstream media fixtures and generated/runtime components are excluded; the verified 1.4 KB synthetic MP4 test fixture is included.",
+  "archiveTimestampUtc": "2000-01-01T00:00:00Z",
+  "submodules": [
+    {
+      "path": "test/data",
+      "revision": "28aa6c68ae6abf3242e42db703ef1676ecbb22fd",
+      "initialized": true,
+      "sourceUrl": "https://github.com/BililiveRecorder/test-data.git"
+    },
+    {
+      "path": "webui/source",
+      "revision": "08fd0be31c7d4a496f9202199ff3b4a9e05e8d56",
+      "initialized": true,
+      "sourceUrl": "https://github.com/BililiveRecorder/BililiveRecorder-WebUI.git"
+    }
+  ],
+  "files": [
+    {
+      "path": ".config/dotnet-tools.json",
+      "bytes": 177,
+      "sha256": "c4d03aeff6ecd8c572f6c444f777f6284ee26cd0f7b5625825848d52bb07ebf8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".editorconfig",
+      "bytes": 6981,
+      "sha256": "0139b270ee32ce4774945aa81ea3c3fedde7c14d70c709d3e93bb87d72640306",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".gitattributes",
+      "bytes": 2581,
+      "sha256": "462475ee5301e77d2a54a64757d95c3f21fc3a79e92e6ec94bdfcc8b36e48964",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug.yaml",
+      "bytes": 1019,
+      "sha256": "9428ed64c76ab61f306ee8380916007f9ffce06377148da9cb0e6dd6a5d65748",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/feature.yaml",
+      "bytes": 517,
+      "sha256": "ab91105a0d10f8a637b92f3648775eed873e24939e89c37ce555eb02a52659c9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".github/assets/logo.svg",
+      "bytes": 2329,
+      "sha256": "3f9b750563ba09d4cafc120baec571d82e5175c5ba470e9dfa7104db5c52bcb8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".github/workflows/editor.yml",
+      "bytes": 1866,
+      "sha256": "3681d588b86ccd0320d8b5de6000baa538ebe1635ae2f08da68c805f34a0417f",
+      "origin": "project-ci"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 4968,
+      "sha256": "d0b7d5c9ac896bbab5de47eb4a10f74b9f4aebbde5c2589107bc0ddc1b271739",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": ".gitmodules",
+      "bytes": 223,
+      "sha256": "76af932e39416a6afc9e8ffec49165384831915f7e595ae667b25bb29c1b5d05",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BannedSymbols.txt",
+      "bytes": 135,
+      "sha256": "e64228c5b90fce31432b31233bab28c6d74cda709bbebe46feb63d9665f1041c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/BililiveRecorder.Cli.csproj",
+      "bytes": 2832,
+      "sha256": "d77d9f49898b7074c7732bd65574ca12afdba82cfa93e7815dc33dd643c92f37",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Configure/ConfigInstruction.cs",
+      "bytes": 2404,
+      "sha256": "5d9d7cb174dd7d2421d6322d7414509e9e7fb1b5b0622aa5608dd3cc69de6b26",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Configure/ConfigInstructions.gen.cs",
+      "bytes": 16612,
+      "sha256": "3127be2cc59567e8a8325892a4f9953395936f0a2a524e9632f7df0f0770cc21",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Configure/ConfigureCommand.cs",
+      "bytes": 9792,
+      "sha256": "9c9c34b13b62538489ceb871a58794c4c240fdba98a3cca68fa7b73b2ad6bc53",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Configure/JsonSchemaSelection.cs",
+      "bytes": 319,
+      "sha256": "b289ee30af623045078d672cd413fdba4d95e29f87f449c6b2ad9515ef17b94d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Configure/RootMenuSelection.cs",
+      "bytes": 655,
+      "sha256": "2c767b33304a645b6f6afae5a2bb10d7dad1b020feca98f6936a247e78e05ea3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/Program.cs",
+      "bytes": 31349,
+      "sha256": "62fcf693861ce81b6b4225218a523f7ab53a50326e85fec13402f124c4bd434f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Cli/runtimeconfig.template.json",
+      "bytes": 86,
+      "sha256": "87777834401967e034139ae0691a1752895bb0ee66ec950a1481c3ec33491065",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/BilibiliApiResponse.cs",
+      "bytes": 286,
+      "sha256": "2ffdf9af5db6c6358417e078ef9806c2805378be439f9868269f6ff4e1ed7651",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/BilibiliApiResponseCodeNotZeroException.cs",
+      "bytes": 819,
+      "sha256": "8877f64045c2f508ea0c749be852aad5288c12e7c30af9c7b8397c9e4623b593",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuClient.cs",
+      "bytes": 16938,
+      "sha256": "36d0466edd74d61ab5c7be6a0aa345c95ea0b2b045ffea1fa604d843d911e016",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuModel.cs",
+      "bytes": 11749,
+      "sha256": "1c6679604f09a420325f35bba8e876a4857fae56ff677c5825eec116af2e1c14",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuReceivedEventArgs.cs",
+      "bytes": 362,
+      "sha256": "324a31c951bbbfefa479bb4fa91bfb754af4e676612310620ebf018708317d70",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuTransportSecureWebSocket.cs",
+      "bytes": 299,
+      "sha256": "2c0090aa932ec3dd71ad4a31864a7dd47822c3d58cd9e5590db2703c1fab71d4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuTransportTcp.cs",
+      "bytes": 4038,
+      "sha256": "0fdc113487359210d291b119f011adb2f96fb3581060ff23315475cde6882d3a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/DanmakuTransportWebSocket.cs",
+      "bytes": 4209,
+      "sha256": "29910b5399dc59ebaa4fd602d1eaed46a01dae76032be1c6ca6423ea14ee973d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/IDanmakuTransport.cs",
+      "bytes": 465,
+      "sha256": "691665d1f76ebb6bbaed087ec8b807426f61b82400b4ac90daf93045ca097856",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/ProtobufReader.cs",
+      "bytes": 4346,
+      "sha256": "cbf133a6ae86b0907adf0d85ea218a1156a06c5414885ee7a17b3bdb4c69294f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/SendGiftV2Broadcast.cs",
+      "bytes": 4017,
+      "sha256": "bf101a69cf42f2ab724a0ef8a724f0f5c8ce4563e797b5473da5a52619343260",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Danmaku/StatusChangedEventArgs.cs",
+      "bytes": 470,
+      "sha256": "5fff1996ac6e7bc3d3ec441c14d59fbf7f7310bf09c68156f27fb18ef1bb78fb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Http/Buvid.cs",
+      "bytes": 1112,
+      "sha256": "dcd2bc8612c193b15bdcda7926b7149cf9c2feb80be5c053098c6f7b9eb05eed",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Http/HttpApiClient.cs",
+      "bytes": 11965,
+      "sha256": "ae176436da9d7f5fed833d777c557286db4756300f8ed0cecef0d055bdde9fac",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Http/HttpClientWithBindAddress.cs",
+      "bytes": 4619,
+      "sha256": "e70cb46957b65d21a29eb5b43bfff30a36f28a3694a1522ccff8d1d2341ead0f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Http/Wbi.cs",
+      "bytes": 2453,
+      "sha256": "8d2acaaf141320f3df3f96ac8d85201e0224401474dbd33d32f0c44a25cd45e8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Http412Exception.cs",
+      "bytes": 379,
+      "sha256": "d0018fbed489efd54c8ff0c98c98734ec3cf905c779f5587cb59c902d774377d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/IApiClient.cs",
+      "bytes": 357,
+      "sha256": "d9ba1050e7cfd8a83202e1589dab0ae4cfdf824f3e2663ca91cfe6fe24a17608",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/IApiClientExtensions.cs",
+      "bytes": 1185,
+      "sha256": "48f19c4b6680b2950fde53a43b7cdb4d968f25f5cd0a9d3b2805beec8dc30523",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/IDanmakuClient.cs",
+      "bytes": 713,
+      "sha256": "6485c571cbcb6da1c65e9e8b765f8bfb4f8063aed0c60cacd30a2b5c20e14a19",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/IDanmakuServerApiClient.cs",
+      "bytes": 342,
+      "sha256": "aae4ffd4467bf59eed31d6f60b8f5f2c9c9a0846daa6626188fa8bde6a8191ab",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/IHttpClientAccessor.cs",
+      "bytes": 199,
+      "sha256": "b16332c8a8c4b92df2f1aae92f3b15233e90362099a527f47cc0cbdaf373aef9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Model/DanmuInfo.cs",
+      "bytes": 762,
+      "sha256": "afa7cbfbc90b72fab4bd8bf7e3168804cf5a66a132764c1841867174fa0dbfe5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Model/RoomInfo.cs",
+      "bytes": 1675,
+      "sha256": "98699b636be624982a7b747f662c9ad2db38df9544556ee9396945746f4e4c7c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Model/RoomPlayInfo.cs",
+      "bytes": 2199,
+      "sha256": "5294943acd38188aaaa1bee7189549d6bdc197e71df35c05d15ac61ed0d338aa",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/Model/UserInfo.cs",
+      "bytes": 351,
+      "sha256": "7169eef5f42a3a8904d45f239dac7581e278278bb174a16e1d62b0ea4bcbe6c7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/ModelExtensions.cs",
+      "bytes": 2516,
+      "sha256": "fb45433df302822be11c5aa09e23268642f59c874759f7c6a2f822a6dd52b120",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/PolicyWrappedApiClient.cs",
+      "bytes": 2012,
+      "sha256": "713a33edf5171e2d30212f7db267dac71567738baac27c2134d51da9bf23e50b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/StreamCodec.cs",
+      "bytes": 115,
+      "sha256": "004a6a09dbbca6273b7c657dcff83b328daa232e894cd56575a409dddfeebf43",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Api/StreamCodecQn.cs",
+      "bytes": 268,
+      "sha256": "185031af4a689c0c40d0551b2ef0e52ad69a0bde7094bfc715ebecf6336d36fe",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/AssemblyAttribute.cs",
+      "bytes": 109,
+      "sha256": "cd63beb3a07324fcad3655b191cf17e8c25fd77a9af3ed14cef65f63c4aadb36",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/BililiveRecorder.Core.csproj",
+      "bytes": 1873,
+      "sha256": "847d774cfa49b886b11554e22204b285faf6d05270125aa7bbe20eabb1b8542b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/AllowedAddressFamily.cs",
+      "bytes": 176,
+      "sha256": "43f0271199de99b1b19c0985a5c3302c5c575534328b762677fcbb3f2b9b7be0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/ConfigBase.cs",
+      "bytes": 753,
+      "sha256": "ef5c2a57a40ab05bfe77f44a1c27fa5a5aeb55dc730d0f7473c7ed21962cd210",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/ConfigMapper.cs",
+      "bytes": 7160,
+      "sha256": "526d8b1e105084a3ed8f254639a48131317c61746b53e21ce6b111612b0a31fb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/ConfigParser.cs",
+      "bytes": 6128,
+      "sha256": "85240bc8114954ab02aeb3f2c8ee3d855f5fdfde20a5ee7ef168e8f1e2149cd8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/CuttingMode.cs",
+      "bytes": 379,
+      "sha256": "c9b833e24aff15472f2f3728a203158f30e643362bf16be9bf10afc7af1f61c7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/DanmakuTransportMode.cs",
+      "bytes": 172,
+      "sha256": "70d6d64442a475276e2edc85d30f7a25476632a25a1f4ce38605f3d3cc754bb0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/RecordMode.cs",
+      "bytes": 139,
+      "sha256": "837a328b96f1e96864bc0bfe0cacfa4c73d4f70cbeb9121b66a4cdab0759bf09",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V1/ConfigV1.cs",
+      "bytes": 8295,
+      "sha256": "286bc2a4c1b15447ca0932a77ea8ba8ade01eb634475ba37ff024287e12c0c56",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V1/ConfigV1Wrapper.cs",
+      "bytes": 299,
+      "sha256": "b6882b857a9d99c41152f213f990e34596209ae6aa8659150be6e1a145ec2088",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V1/RoomV1.cs",
+      "bytes": 334,
+      "sha256": "e4b2e1dcedca0d8d754b80527a200f246df0c9360ae5edd1a697fde01188161d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V2/Config.gen.cs",
+      "bytes": 27543,
+      "sha256": "772e0a78199bdbfad43dafd09997535dfed172bc3ff88e5ca3647bea0174f6c2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V2/ConfigV2.cs",
+      "bytes": 1428,
+      "sha256": "c188d7ad454827f7c03fdcd35bccb0bd2168846af02e599cd768d114764894db",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V2/config.schema.json",
+      "bytes": 22260,
+      "sha256": "e26f90991f3d06b83d473d45aeec2b37832b31958e327371a98736bde5db5d32",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V3/Config.gen.cs",
+      "bytes": 44392,
+      "sha256": "080ade055135b4358dd95d8a66c2372623a2107e12f95cf35658df1a2000e59a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V3/ConfigV3.cs",
+      "bytes": 1461,
+      "sha256": "5261856c9350e308e617164b1db1ea475a1e47476e89ebdc0bf61f0742c495c4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Config/V3/IFileNameConfig.cs",
+      "bytes": 206,
+      "sha256": "36b947258d2cb1b9323331c9280a9957151551be21ea12b8b96d9e2e67a35ad8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Danmaku/BasicDanmakuWriter.cs",
+      "bytes": 27623,
+      "sha256": "dba28182599e9b5c1d97783e8c5af0c2e25c2cb86e8088dba245c670e55baf4d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Danmaku/IBasicDanmakuWriter.cs",
+      "bytes": 342,
+      "sha256": "28a35123ebccf307ef452a28d813bcab1a07a0c601b27a1f42e40767f0706835",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Danmaku/LotteryDanmakuTracker.cs",
+      "bytes": 7101,
+      "sha256": "d2be5727d57f8f0a5b01cec5cdcdb0eb9c835c003b2939498efa258f08a67ba1",
+      "origin": "current-recorder"
+    },
+    {
+      "path": "BililiveRecorder.Core/DependencyInjectionExtensions.cs",
+      "bytes": 2646,
+      "sha256": "d0128a536390294b75dec712b389c70e621ee9f7e854449ccabf0478a6069080",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/AggregatedRoomEventArgs.cs",
+      "bytes": 399,
+      "sha256": "b0f5d162bff0c4055c96fcfb30c8b05bc18610b651069291a166096fbe188916",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/IOStatsEventArgs.cs",
+      "bytes": 1453,
+      "sha256": "f083572847b8356a8825b5cefad19a9d78f97829163fa0e17ecf0570528ca4f1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/IRecordSessionEventArgs.cs",
+      "bytes": 155,
+      "sha256": "07136917cb41511a177f76d81002b9bfb1ff5eb58ccd65607781fe526ac1bcd9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordEventArgsBase.cs",
+      "bytes": 1208,
+      "sha256": "4ff34703df320a2fa55f737a943776288eaf6f360c5d4494e1d602ea2cb50ce2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordFileClosedEventArgs.cs",
+      "bytes": 814,
+      "sha256": "7b499cfa21a5fa5a466f4a744a58e1a7bf4fe00683708c9513113d5f514156ae",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordFileOpeningEventArgs.cs",
+      "bytes": 929,
+      "sha256": "af06f504f0994d4931d09bdad71bd552f0db24f87180e2dc4849b088b6c31ea0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordSessionEndedEventArgs.cs",
+      "bytes": 427,
+      "sha256": "be397d9ed06d80078118f0064084068494341e33590b1a6db3c49f00a7545581",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordSessionStartedEventArgs.cs",
+      "bytes": 700,
+      "sha256": "68a4f6808495b22ef36ed4d5132b7b22901db72a582f67114833abdb39a4a36b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/RecordingStatsEventArgs.cs",
+      "bytes": 3478,
+      "sha256": "db36ff961d0a4f8803843603d1f96ed9494156f95a5bee83024002b9462f4ade",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/StreamEndedEventArgs.cs",
+      "bytes": 343,
+      "sha256": "ac0847bfd2393c7e16ba91e33bf612786a7a3d5a2c9bf1c9c44e5bb74f73acde",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Event/StreamStartedEventArgs.cs",
+      "bytes": 349,
+      "sha256": "2afd62b00f8a9b56f736afbdfde60754c35aeaed5a5ebe319419ded0cae4d266",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/IRecorder.cs",
+      "bytes": 1173,
+      "sha256": "51a70f235afa36440bdaf3b67abb66095d47e2538578e2e7b493cffae6c4d44a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/IRoom.cs",
+      "bytes": 1430,
+      "sha256": "b8b38303d4189e37dc255a47b60fedb8d18817604f0659ce749ad0868b33a611",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/IRoomFactory.cs",
+      "bytes": 203,
+      "sha256": "90a4f624805cb99f81d64d3d7ceb390d220cc8c800e943b2e4376a6cd142f6b7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/LoggingContext.cs",
+      "bytes": 147,
+      "sha256": "bb36d521074a97471d87cc8420ba6e5a70bfc3048ca058eb0d8aa7cc9ed949ea",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/NoMatchingQnValueException.cs",
+      "bytes": 415,
+      "sha256": "877c1e71978169de6d0428ac7ba3f5a5a5a0216d763549732bd831ff77750e98",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/PolicyNames.cs",
+      "bytes": 692,
+      "sha256": "53d99433447a3c0ae803a84ba19d1847080ed35393fddc3432150257d6ddeed7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/PollyPolicy.cs",
+      "bytes": 3621,
+      "sha256": "dc7e786fc9afa3a06736fd9fea441d89503b125c4f0ec878145e2b7c5e7ed859",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/ProcessingRules/SplitRule.cs",
+      "bytes": 1553,
+      "sha256": "6a161ba147329aa628cc5029070a80d9742925ee6f27930c5fde6f5d5bee3051",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/ProcessingRules/StatsRule.cs",
+      "bytes": 6048,
+      "sha256": "8bdcc622ccb18d9f5675756c6f9fd1b62e5225ddc91dd23e2613118bf795790d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recorder.cs",
+      "bytes": 9973,
+      "sha256": "9af33e71b213484e069ea4ad317df0631f94c1b7ea5bd0c3630d1a5e609a89fe",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/FlvProcessingContextWriterWithFileWriterFactory.cs",
+      "bytes": 1330,
+      "sha256": "a756c338bdd6222e8d0afd68896e010618ea62b6820eb6c296e7ba61adb0fe35",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/FlvTagReaderFactory.cs",
+      "bytes": 742,
+      "sha256": "beab3f3b2a341862c6a1e83f6f5ea0f526966fa9e03436ba98b8cd996d7eb24c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/IFlvProcessingContextWriterFactory.cs",
+      "bytes": 245,
+      "sha256": "01352379c6d2aa37418901e9dbed54212a322f4017eb00b139ea7c6acce26a7f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/IFlvTagReaderFactory.cs",
+      "bytes": 233,
+      "sha256": "117fbad3b8853c8435758b5ea1c78fcd93ebe2aa62d5cc8ade7aba0b58937044",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/IRecordTask.cs",
+      "bytes": 658,
+      "sha256": "78e346c8855afda019ade7b4ac495b91f676636aa68d3a9b7def3243ac3e078a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/IRecordTaskFactory.cs",
+      "bytes": 235,
+      "sha256": "19643edbaf08239e3768a18ae58beedd33c58f87470f11855380d8a8090e2002",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/ITagGroupReaderFactory.cs",
+      "bytes": 216,
+      "sha256": "0ec45d7581363492535a44eb18e4c01d76aeab941e6c3a92cc8add3e05f76de8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/RawDataRecordTask.cs",
+      "bytes": 5724,
+      "sha256": "37278b0e62acff6372fa6dc82e74643c5a31f4403d3dfcde326f364a9e3dbcbf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/RecordTaskBase.cs",
+      "bytes": 21408,
+      "sha256": "9530500b20dc939e2083e6f5a164d4a9af00932f7507092b32ed4511e056c74f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/RecordTaskFactory.cs",
+      "bytes": 1799,
+      "sha256": "b5a282ba87bbe5b24ede06755e63ee94b76504b73215531ca0f111e864a6ed2a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/StandardRecordTask.cs",
+      "bytes": 14702,
+      "sha256": "1bbc5bce8ada5f8c4d9b1f46f3e55ad7d7ae332be1f695e6ac01d0f4d3e84bbb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Recording/TagGroupReaderFactory.cs",
+      "bytes": 330,
+      "sha256": "025c778e6eed942c2c348e836a93ac0f920356f68cd110823abb3034cfd12d79",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/RecyclableMemoryStreamProvider.cs",
+      "bytes": 1083,
+      "sha256": "14ef96c90f7ffd6e81818d87c8ecfcbbb96cf1ac3e9632945a8d1e0dd62c90be",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/RestartRecordingReason.cs",
+      "bytes": 303,
+      "sha256": "8a606cc0f3396610c631bd37b0995c580199448f4b3efdfcf1faeaf67fd67d90",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Room.cs",
+      "bytes": 34335,
+      "sha256": "331efebb3043ead47a71cbddb9afe38a515779f188551249a8eb1d1b7d05288f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/RoomFactory.cs",
+      "bytes": 715,
+      "sha256": "600dea56859009276dfeec242528759125c06ec87883fb9fc3ebbcc889f2acce",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/RoomIdFromUrl.cs",
+      "bytes": 354,
+      "sha256": "a61939daf214d53322a3a44fe9b97ed1162bc9786070d82b90edd03c57508215",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/RoomStats.cs",
+      "bytes": 11244,
+      "sha256": "3b4af491d813b91c8ec4a178d172d2fde0765d497e95b591a237ba3e13183818",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintConsole.cs",
+      "bytes": 7943,
+      "sha256": "6308cc63b0d36c5b0f14cdb91702a1ee04dca17ece236381ecc018373055b333",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintDns.cs",
+      "bytes": 1298,
+      "sha256": "0b2b37dd7cdf871634cd56dd6a14c7b37532b2ac09a2f22421d619cb937340a2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintDotnet.cs",
+      "bytes": 1422,
+      "sha256": "1fec30dc87117e423243372e01d620e49f2ba8e899def4d4ee7476f7c6184420",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintFetchSync.cs",
+      "bytes": 10315,
+      "sha256": "8426fcd2c8ef25bcf7fc81ed5ce1faf0cc13ab6d3502caa49816c5dbf93d101b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintRoomInfo.cs",
+      "bytes": 1481,
+      "sha256": "a957551ff319d0cef7a432cb3462c6da4611c04d8b03df22f56c47286f702cc6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintStorage.cs",
+      "bytes": 716,
+      "sha256": "bb5d59714e4301a84b9be689241b2441ffebd067a11a96e3c744bb4f05fe061d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintURL.cs",
+      "bytes": 2744,
+      "sha256": "f3975ddbf1c298b45fd338f2806621ee9025b8b295235a8a6874df002f8a4459",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/Runtime/JintURLSearchParams.cs",
+      "bytes": 2392,
+      "sha256": "05fc7b185707686d047ca76f3bdd3872ba5ca8021fe2ee0602a8b8c456484bd8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Scripting/UserScriptRunner.cs",
+      "bytes": 11716,
+      "sha256": "c84648225dfd4f35f0ddce06f682257bc2675c11b315a2619848e505c4a9ad89",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/SimpleWebhook/BasicWebhookV1.cs",
+      "bytes": 2671,
+      "sha256": "309ac06c1c6b76a792132c1a2dc434841f3cef8a00f332a3e389acaa457c09b0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/SimpleWebhook/BasicWebhookV2.cs",
+      "bytes": 5160,
+      "sha256": "ae05da8ecba364cafaeb3e085b736ba4f3570acf52f42452781e9e8380893a60",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/SimpleWebhook/EventType.cs",
+      "bytes": 1096,
+      "sha256": "291de48e2a9b247e738f814b27f0cfae62a5588caf1ace1b3252dd6954262979",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/SimpleWebhook/EventWrapper.cs",
+      "bytes": 562,
+      "sha256": "ab04ba2212c21a07283a3993074228dbc7b0bacbf8147f91e00ab623ccf4feb0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/SimpleWebhook/RecordEndData.cs",
+      "bytes": 1136,
+      "sha256": "802bfefab6e7f37e108ea799afddaacaa2483e4a2a381dc7a546b17ba04bde46",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/StreamExtensions.cs",
+      "bytes": 1606,
+      "sha256": "f8f1c767a41bdb8dcbf4366350bc2402d6d06397c155b258d6e340249f29bd5c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Templating/FileNameGenerator.cs",
+      "bytes": 10096,
+      "sha256": "87bb5593f5e79d8a73f07a5530e978968cdc9e0119b55c177782bde7076f5efb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Templating/FileNameTemplateContext.cs",
+      "bytes": 646,
+      "sha256": "9e8bd116230e25d1f8bc9b971a68aae267b815ea3171fb211e0c0334eb29347b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Templating/FileNameTemplateOutput.cs",
+      "bytes": 706,
+      "sha256": "5ef5fd8487aec03b5c01a8ec09990161ae49969ac894e0a10db32c0fff9b80f3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Templating/FileNameTemplateStatus.cs",
+      "bytes": 194,
+      "sha256": "28f723f07dd26a95ed8c76c388247f284480298b5d161a70c8501eac83c453be",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Core/Templating/StreamQualityNumber.cs",
+      "bytes": 620,
+      "sha256": "26f78fcd464d00f3eca5e539080b264d5177f306e76ebe54ca9b59ea7b30210f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/AmfCollectionDebugView.cs",
+      "bytes": 616,
+      "sha256": "2aa469d338c057c1a06611c5d9fc60e36f3bcd2277dcc845c94ce73133ab4641",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/AmfDictionaryDebugView.cs",
+      "bytes": 739,
+      "sha256": "7a7a1f7776bcf7ea44d95e6c090b908136db2d7960212e8d3277db84ce704bf1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/AmfException.cs",
+      "bytes": 576,
+      "sha256": "1816a3b1b847ab9bf8fa9b3d56aea198072d097f36566916c3ad4fa545f718a2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/IScriptDataValue.cs",
+      "bytes": 1316,
+      "sha256": "448cf4ac998ec94bb75bad045c81637d6786248b712387c014e5d07f83bc8e4c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/KeyValuePairDebugView.cs",
+      "bytes": 385,
+      "sha256": "8ce43ba07f801e4f3e302eb4a9d3dc9f75218120b8f30478478aac4ff2aa2177",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataBoolean.cs",
+      "bytes": 1256,
+      "sha256": "7b2c4e532f1b99e89c17b11b159833d92d7c4b53e0441a4f95558d330190bad1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataDate.cs",
+      "bytes": 2285,
+      "sha256": "84ea6a3ffed9e2633992cf6c870b273a75f978782dcefc86331e48695066d1de",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataEcmaArray.cs",
+      "bytes": 5116,
+      "sha256": "779d987e03285e65a254a1f290540b3d86ffba7c891b444d2ec194d9d1a4bd6e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataLongString.cs",
+      "bytes": 1740,
+      "sha256": "bf66416c86dec2b6835ed981d2c00e499d640c6d1bfb15e2a0ba0575b6053ebe",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataNull.cs",
+      "bytes": 747,
+      "sha256": "8872da6d57916fb782f594688a3b2ea7f5f0f6ef1f76b9a43f6a73b2b675d60c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataNumber.cs",
+      "bytes": 1611,
+      "sha256": "018062612515a62ad6b2a94d06c5beb3733f69a98da27a9522c48bdb21e6ca37",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataObject.cs",
+      "bytes": 4880,
+      "sha256": "823f24af3bef1c998bf9981539b3c974c935d5f0154c4e192e5f19d097311ed2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataReference.cs",
+      "bytes": 1424,
+      "sha256": "29fe2f51967220d383c71646353fc75805cbe3179925eae57198e757d5beabdb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataStrictArray.cs",
+      "bytes": 2792,
+      "sha256": "28e182384cb8aac8ef8292f585be1fdd4c36d496ccba573a466061b7cb39e588",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataString.cs",
+      "bytes": 1849,
+      "sha256": "33705e56ebf97b5e4c0544ee37938b3383a82f7d86caab7f35ceaa0e73fd5124",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataType.cs",
+      "bytes": 509,
+      "sha256": "cc6eb0c5ea54bcdf141a88700ff675aaed724faae42f2ce11e580c6317da8fa8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptDataUndefined.cs",
+      "bytes": 792,
+      "sha256": "b358d1723710c7cb5828b79f3f5e4c6196a3d3229e93fb3b3773ad730121871c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptTagBody.cs",
+      "bytes": 7351,
+      "sha256": "0514a46ec5462a14b11e418b749be30c4b7de0dae538c2be2b71c24e64305faf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Amf/ScriptTagBodyExtensions.cs",
+      "bytes": 539,
+      "sha256": "8751f5e2c81feb038045c0f91db3591e555af1f8a7e2fe17cbaad2f87dc93e2d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/BililiveRecorder.Flv.csproj",
+      "bytes": 1268,
+      "sha256": "c0f4cd9b66d67e1b9656d05f2964af0fe4d945365c4b8f07cd84aeee596a3314",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/DefaultMemoryStreamProvider.cs",
+      "bytes": 225,
+      "sha256": "58c162f5f21b6282a2ebabb4ebd68a7b1f3bb227692250141575ac125a825af8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/DependencyInjectionExtensions.cs",
+      "bytes": 406,
+      "sha256": "bd3f846cac86939f08caef22f5cfcc0f31da03900754f4d703cafb201d2b73eb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/FileClosedEventArgs.cs",
+      "bytes": 257,
+      "sha256": "2f3034d86991bc912f854f03a9e91165e24c1614e2446fd59b6835c89679d81c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Grouping/Rules/DataGroupingRule.cs",
+      "bytes": 1159,
+      "sha256": "9afa85d4548e42953716545b5836b3f6a1dd19f74d27b018b1a763be61028226",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Grouping/Rules/EndGroupingRule.cs",
+      "bytes": 436,
+      "sha256": "a833ba2b3f191197aaf8211b7c7336cdbfd1b574a833c42973c12f6ee015f48e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Grouping/Rules/HeaderGroupingRule.cs",
+      "bytes": 451,
+      "sha256": "02a24a9646a594e9e34c3f15f83dd1b4a1cdd17116f6edd1638f09c463232e03",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Grouping/Rules/ScriptGroupingRule.cs",
+      "bytes": 445,
+      "sha256": "dc51f91ef9388f525c91e525240d43b589814be56f56c7f1102e27824b7d5979",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Grouping/TagGroupReader.cs",
+      "bytes": 4942,
+      "sha256": "261577d7dbeaed1af9618552d365ea0b83d03095e0778a46ee4e98c50ce5251b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/H264Nalu.cs",
+      "bytes": 3768,
+      "sha256": "2e253ccbd4800d5373cda1afae16ba0915a7421073f155f53731e2bff207900a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IFlvProcessingContextWriter.cs",
+      "bytes": 497,
+      "sha256": "78439c18a59ec1d204dbc8d6175809733e835ecd13f4ee048b56bcac72a5d04c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IFlvTagReader.cs",
+      "bytes": 647,
+      "sha256": "7ea70454e94b2118b6c0558d1785d2882a23388e7e471000573b0443ef9e3dfb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IFlvTagWriter.cs",
+      "bytes": 486,
+      "sha256": "67eb3ef403905f4bc27613164e8c9a341a2bfb34db3b9d557b6e13c7b911e54d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IFlvWriterTargetProvider.cs",
+      "bytes": 234,
+      "sha256": "e23996e7aff2f856421dd4e1ed48b8fcf6c3f6b67ea45c7e7ca75fc36a50f7fc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IGroupingRule.cs",
+      "bytes": 691,
+      "sha256": "c91c121f138e1608e81073099dfd57083aa4619a6104a2a02d776bdcbc772455",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/IMemoryStreamProvider.cs",
+      "bytes": 170,
+      "sha256": "220225ba106d749897a04417707f4aa3bad9b589fcea64568772926d6bbb87a4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/ITagGroupReader.cs",
+      "bytes": 295,
+      "sha256": "96d78ac1eca243a7990923692443d8f44296500b85c6da014320ed831759b1f0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/LinqExtensions.cs",
+      "bytes": 1695,
+      "sha256": "ddf40badd80320987d65882d24ed03c35019ef1a2dce0f3425e9441a97c52f75",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/LinqFunctions.cs",
+      "bytes": 5427,
+      "sha256": "b213a20df1c97e86a327e835cb91352d73fe46d0ec13d5f959227ee989ffc253",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Parser/BigEndianBinaryReader.cs",
+      "bytes": 4509,
+      "sha256": "a45d700e018eb0a40c1360e41a0282490085ddd480eb673d2434f30975291322",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Parser/FlvException.cs",
+      "bytes": 1880,
+      "sha256": "24d6066388ad9a40968d555fbb63e9b24f398d562b5d3ab841e4bf9627f3b7ad",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Parser/FlvTagPipeReader.cs",
+      "bytes": 12833,
+      "sha256": "1a591e5fd5668fff18128f178a1da0f0cc6c4c382f54a818aa96b88647d90039",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineAction.cs",
+      "bytes": 303,
+      "sha256": "0432f493b9e622573f33534758adaf6c4f2ed4163a70c06dd89feeace20f6e61",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineDataAction.cs",
+      "bytes": 496,
+      "sha256": "b0459d6464b0f18599e13db93fa66be13e9b75078e4bbd202f6c1cdfe12f67c0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineDisconnectAction.cs",
+      "bytes": 408,
+      "sha256": "f6b467e6d80038e19ec04cfffaea9e988edddd5a45e68db777e9365015cd61b5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineEndAction.cs",
+      "bytes": 405,
+      "sha256": "a7bd42e17db011022c271024d8cd7e1d22a80ccfbaae9ae71c8c1ca3745e69b2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineHeaderAction.cs",
+      "bytes": 734,
+      "sha256": "79f314e66c851b685720d47af7562a3607116b56e0bff81f3fe38143d07f6ffa",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineLogMessageWithLocationAction.cs",
+      "bytes": 489,
+      "sha256": "a8bd8c3c0fac09685ec50ee38f439e2a6e0742745f830cb490675bda9312c060",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineNewFileAction.cs",
+      "bytes": 283,
+      "sha256": "a2839f3474cf4fbbe3c2c8f029877982ff75cd81616ff1d1e8cddf674cf4b3dd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Actions/PipelineScriptAction.cs",
+      "bytes": 416,
+      "sha256": "7725ef0d0bc43e317be9a752023d07cccc7aafa83c7c5a545072e7e8cdb90046",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/CommentType.cs",
+      "bytes": 271,
+      "sha256": "606c1232ff1b97d397bc5efc82ba0bfb566f20fd516341924f73c81a7b241e0c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/FlvProcessingContext.cs",
+      "bytes": 2737,
+      "sha256": "b2b0abd30e6deeefec60fd750c180bddfd625d6cef080aa5b53a6b4017d09b6d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/IFullProcessingRule.cs",
+      "bytes": 195,
+      "sha256": "c3759ec198e1490f34cf88e4c85b9b19d9213cf64c4922b6e704341276777b81",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/IProcessingPipelineBuilder.cs",
+      "bytes": 386,
+      "sha256": "b862c8f508c19a2de0c68a556c898df6d0692c778bf99099f343fe18c7efa9c4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/IProcessingPipelineBuilderExtensions.cs",
+      "bytes": 2349,
+      "sha256": "cac6961c9b0347fb5199231d9c57794ed180d897e0b4b6de9ab7ac9d839c6a52",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/IProcessingRule.cs",
+      "bytes": 109,
+      "sha256": "d0bfd2293d48478af3606559993893e78af5c6ce73846f8fa7becb5c264bc29d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/ISimpleProcessingRule.cs",
+      "bytes": 202,
+      "sha256": "c6e989af7badc0f5f032a7b0211e6b8418a09c6c79f3c83606d619e0224fa7e9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/ProcessingComment.cs",
+      "bytes": 856,
+      "sha256": "dd731d43b656c15a8631d0711673d9dab4a122634ace0568e075d5a818f7ebf7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/ProcessingDelegate.cs",
+      "bytes": 123,
+      "sha256": "3dd323d94253da83b39a09fcdae06735f957c1be2c900e0cc0de5d5d70c8e223",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/ProcessingPipelineBuilder.cs",
+      "bytes": 1307,
+      "sha256": "c90bda2bab2ecb31922f1a8efe15e7948090502e1aca629ec28d0842480f9955",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/ProcessingPipelineSettings.cs",
+      "bytes": 503,
+      "sha256": "5dc7b8ab08658d35ea03fbe100f83ec85a62f5259ad61051ab544cfcad9a44e7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/FfmpegDetectionRule.cs",
+      "bytes": 1158,
+      "sha256": "7da0d5801860e360ce4c45e958340de52cf0c3876167b6ac03aeb77d27fca527",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/HandleDelayedAudioHeaderRule.cs",
+      "bytes": 3339,
+      "sha256": "e7a913118178dacefb81b9c17bfceb5f1da41c82ba55006a17e261579d457561",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/HandleEndTagRule.cs",
+      "bytes": 987,
+      "sha256": "ea5524faf51ba41d5552ad3418fd1b2d310a5e19cebda1aaf423678fe2fa388e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/HandleNewHeaderRule.cs",
+      "bytes": 11738,
+      "sha256": "b76ba1fa9d1c52f50bb2f86dc08902485e7e3dd68d2caff3993dd3c5e2242085",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/HandleNewScriptRule.cs",
+      "bytes": 5212,
+      "sha256": "fe05bfa765db95b50deacf0b93c29fec9aed8de49ebfae8eb150cc029089627b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/RemoveDuplicatedChunkRule.cs",
+      "bytes": 4429,
+      "sha256": "4defa0a66042d858b5b64b6d887da69a7e18de22b285549e9d6cf800e6e990ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/RemoveFillerDataRule.cs",
+      "bytes": 1102,
+      "sha256": "055e7d5d8aadcf4747a1055e6aa22e6319fdb3bdd839d254ca167d4fb47e15db",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/UpdateTimestampJumpRule.cs",
+      "bytes": 7607,
+      "sha256": "5b69df5d719decc844341bd8945c5b2b1b8fd34b160f14902c7fec618a55ef84",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Pipeline/Rules/UpdateTimestampOffsetRule.cs",
+      "bytes": 7397,
+      "sha256": "40f705ad85ee046fd0b0517b728a76dfd290c1b56177434acf7a26f8ff3b53fd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/StreamExtensions.cs",
+      "bytes": 4567,
+      "sha256": "2f6f8f3e449ffff092db99801d750ce7e614f856ac8c7572cadd2626aa930a23",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Tag.cs",
+      "bytes": 9575,
+      "sha256": "c16ce348abf2ce8d251af7bc2879a8d5400907fe151d8d72a53791cb230a2b84",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/TagExtentions.cs",
+      "bytes": 4688,
+      "sha256": "26b3281e579d2c432f41322f714129a54e7e3d562920668471b2bf31a295e09d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/TagExtraData.cs",
+      "bytes": 602,
+      "sha256": "976cf0d49ebc1fd3b9f07f41e1c7fa4f63b99be460bf6fc27f50756341b83d82",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/TagFlag.cs",
+      "bytes": 209,
+      "sha256": "3743bcf65052329364fa70a38c32a7471b49023b24e5c14dcfa8f6f60b6adb50",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/TagType.cs",
+      "bytes": 167,
+      "sha256": "90235ea0acf1017ef6e36ef39e541ab989e69b503fef5019743ad9d9a2b0aa06",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Writer/FlvProcessingContextWriter.cs",
+      "bytes": 13233,
+      "sha256": "6531c092d108dae5d65b5d6feeb2d79472b7eeec72409b62b1a01178ec0e6370",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Writer/FlvTagFileWriter.cs",
+      "bytes": 9355,
+      "sha256": "07c99bf2272aeb0058a35ddcaec34e7ae77ccf35dbb2eb4bc87db50caf4d824e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Writer/FlvTagListWriter.cs",
+      "bytes": 1611,
+      "sha256": "323320a10dbb642ca289701c7114921cf8e91a357e2ff71da8145791c6698c08",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Writer/KeyframesScriptDataValue.cs",
+      "bytes": 6344,
+      "sha256": "ad7d7af7be3da64fcc1cedcb7bc65c80299cd024f3f422395d9b39ea459f811a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Xml/FlvTagListReader.cs",
+      "bytes": 992,
+      "sha256": "c348acd289788a5b962b8788d2771e20c162ee6f8129a10440e2d040c6790502",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Flv/Xml/XmlFlvFile.cs",
+      "bytes": 1671,
+      "sha256": "a76483fed142c1d18786fed8bf8c28354d61cb9998daae7c54ae38dd3bb5f092",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/BililiveRecorder.ToolBox.csproj",
+      "bytes": 742,
+      "sha256": "85421d039be50e4caae2881ab544b45a84ca473675c6e25e9ae7b922be3f3a4c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/CommandResponse.cs",
+      "bytes": 481,
+      "sha256": "045d9d686b124e6bcf19b1987ef395a282abbcbca70456b2332fbbc0f4e6c3a7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ICommandHandler.cs",
+      "bytes": 430,
+      "sha256": "c8581b23c59deb16fb70d0c96119a2fa81e7dbde3783a4b0cfbf76e092e1e0a5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ICommandRequest.cs",
+      "bytes": 141,
+      "sha256": "afa096e44501502a08a2f8756f1530ee0190dfb7e3d47cdb8bdeb53c6ea1708e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/IResponseData.cs",
+      "bytes": 124,
+      "sha256": "1d8f60195dff7ccd5ffd220f1621825ee7bcc1d548ad93878b95a3338606ada0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ProcessingRules/FlvStats.cs",
+      "bytes": 300,
+      "sha256": "edfef1a204a6dcec19a5967b46787cd0186833078e10c80473d65ceca26a1361",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ProcessingRules/StatsRule.cs",
+      "bytes": 2145,
+      "sha256": "7edd3ff0352442cf1ee5fa2a8aac674ddae0734875acda94c2c82c071e612f51",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ProgressCallback.cs",
+      "bytes": 136,
+      "sha256": "4628ad0e332d74c66bf49ab61c14a02710e1ac7a81f30c23e99eef16e7aa0345",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/RecyclableMemoryStreamProvider.cs",
+      "bytes": 1086,
+      "sha256": "5c97ae2b4934ed04128a18d311e07a98ffd9a94cc6b1d9207e14c29059bff1a0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ResponseStatus.cs",
+      "bytes": 237,
+      "sha256": "d5648b760e0ed15bb0546f250cc5e98eed7a263fd50da1a657616fff52285584",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Analyze/AnalyzeHandler.cs",
+      "bytes": 10844,
+      "sha256": "4de7c854f41bf2663ff08b507271ef09f482050348a6b8805c804c0a1e341b51",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Analyze/AnalyzeRequest.cs",
+      "bytes": 313,
+      "sha256": "bcfd6f1bf3bbd0c9347584231618d4f23de01cc49f35d04750fdb8e2956e61e8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Analyze/AnalyzeResponse.cs",
+      "bytes": 3293,
+      "sha256": "d1eae03a36b4ea1c8cf9b7dd4f625f56476eed3ea8a4136b1a27c5e03387bf6d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuMerger/DanmakuMergerHandler.cs",
+      "bytes": 18759,
+      "sha256": "78eef6a4356080f12b814b8ef83db8184b0a4f5edaf138641d01f74b93f1a15d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuMerger/DanmakuMergerRequest.cs",
+      "bytes": 360,
+      "sha256": "65d6fb5974cc297c3f835f6a1174daf26083bd3b81e8fee895daf73c6a4589da",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuMerger/DanmakuMergerResponse.cs",
+      "bytes": 173,
+      "sha256": "b8cf1019dddcd3cf06942e40697cd536a0138136f51ec1e7eab67870e0d30a71",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuStartTime/DanmakuStartTimeHandler.cs",
+      "bytes": 2885,
+      "sha256": "005f9444bd1269d839db41f4a50ec2c3585bb8a54bd2ae26701815d6cd9bf0e0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuStartTime/DanmakuStartTimeRequest.cs",
+      "bytes": 252,
+      "sha256": "8fe3f3c5767ce4f8848eb2bfdeabb46b69f8f52d82e71cc904adfdec6f7b14b9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/DanmakuStartTime/DanmakuStartTimeResponse.cs",
+      "bytes": 870,
+      "sha256": "230906f30a3c3527ed2ca75fd07334267add6d65d5c80e96383a058df72406f8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Export/ExportHandler.cs",
+      "bytes": 7029,
+      "sha256": "4bab64d93d0c40cf759c21bc0b259c3a83f285ae62c1d01701c1dd4c46da17ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Export/ExportRequest.cs",
+      "bytes": 258,
+      "sha256": "38207c43a68c4e2aab08d2d44f21ef3c3801f7694937ca01f87c2abace450e7e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Export/ExportResponse.cs",
+      "bytes": 159,
+      "sha256": "9b01735e4adde80220c6582f1dbad0645cb94f853bce7798570871d88ec63e32",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Fix/FixHandler.cs",
+      "bytes": 13584,
+      "sha256": "521f969b22febb6ac245eb9c4e80181c72826b14e2cb00b489bd096b08d775b7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Fix/FixRequest.cs",
+      "bytes": 367,
+      "sha256": "47943d6f1832ed9d58ff868ce367a8d3e5ecd99751056c91c05cbe1c78863d66",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/Tool/Fix/FixResponse.cs",
+      "bytes": 3474,
+      "sha256": "8b805a8e0e1269fb6b31943f7bee1b125508fced63cc4fffc1934f788554eab9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.ToolBox/ToolCommand.cs",
+      "bytes": 7193,
+      "sha256": "fd3321463fc0b5498189de8a363f8390a10dc4b8b97ea18989a0f2dea989760a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/App.config",
+      "bytes": 185,
+      "sha256": "8b86939deb1c73fdf3024e4b12e3aae27e3441d864803562ca42b548b3611b61",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/App.xaml",
+      "bytes": 7141,
+      "sha256": "8d6e9c9cd83eabbdab2eac98149ae3d06b343bc1980a86e4d2a6ef33ac65e1a3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/App.xaml.cs",
+      "bytes": 2140,
+      "sha256": "36d188af0eb4d6602863ae140791fb905bf14f2ae1231df46ba2445c7786948c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/BililiveRecorder.WPF.csproj",
+      "bytes": 17737,
+      "sha256": "23e2488871df11423d4cc77e630f3e2d1e50c95113bfd934d89bd8be7041bb00",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/BililiveRecorder.nuspec",
+      "bytes": 2415,
+      "sha256": "1c9e15f491f67317ed925562b75d428f88e92769639295beb25803aaa0ff596d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AddRoomCard.xaml",
+      "bytes": 2270,
+      "sha256": "1e2460d32fc35374538fb1cc3fefcad97e6f82467df390344f51425561c14703",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AddRoomCard.xaml.cs",
+      "bytes": 1013,
+      "sha256": "24dd54bdf815dd5b1d02b7180a9265886acfbfe41401f68fac9735a027af7ea9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AddRoomFailedDialog.xaml",
+      "bytes": 1297,
+      "sha256": "99727ff89c39b25b4ed322c27a63f4a9bd2d10a88790e8335c0988a9fcfd4044",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AddRoomFailedDialog.xaml.cs",
+      "bytes": 476,
+      "sha256": "f5c41122358f4d48c16a7420f55addae0f71a52771c90b6d19d2fd0de927b6d1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AutoFixProgressDialog.xaml",
+      "bytes": 1342,
+      "sha256": "32f074c917370029ab7448f7c6ed9dd4a9e85ac29a8303df791529df7d88de2d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/AutoFixProgressDialog.xaml.cs",
+      "bytes": 1426,
+      "sha256": "d1a687da4585c8f2075cb1efc278d99eb8b2440c9e729adc32d9766ca9908741",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/CloseWindowConfirmDialog.xaml",
+      "bytes": 1019,
+      "sha256": "3d931c5f70c2dff1a269e721a8ff68b4a7b729c9e59085f4936fe9da969fbd80",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/CloseWindowConfirmDialog.xaml.cs",
+      "bytes": 318,
+      "sha256": "5f89045962d2e736a1198c580c1f3ba9c65c75296faba7ce2415fe0528fa7c3c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/ContentDialogExtensions.cs",
+      "bytes": 737,
+      "sha256": "b3e2af7c30359c14fd3b9194dd79595bada030c3256e639ae1450046e5fbef7f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/DeleteRoomConfirmDialog.xaml",
+      "bytes": 1285,
+      "sha256": "8c70d888e714ebe3c3d7e5ac519e7e7370d58ae898f05e0b88e60f86c20b1059",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/DeleteRoomConfirmDialog.xaml.cs",
+      "bytes": 315,
+      "sha256": "2bb2aa249ab7fc6358af966abc85a537ae0836eac5f82539cd19fcdc37690f58",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/LogPanel.xaml",
+      "bytes": 2916,
+      "sha256": "c3446b08efc8876afd223f596f833529ec24f3f200dae48564d97a249e1388d8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/LogPanel.xaml.cs",
+      "bytes": 2094,
+      "sha256": "7af528da8272f3a057650c7321b7a06f1ffd2743cd3c1978f889ece3c1647a18",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/PerRoomSettingsDialog.xaml",
+      "bytes": 10423,
+      "sha256": "c94db47df8d3eef037aeada8d30220d5c280419edc8b60619b8020ead375a7aa",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/PerRoomSettingsDialog.xaml.cs",
+      "bytes": 707,
+      "sha256": "96cef4ffcc59401384e0211826be2b068844906d0dca83a55d1b7d601e5a9f12",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/RoomCard.xaml",
+      "bytes": 13295,
+      "sha256": "f44b2253300e93aa18a33ab24812f4fa39f8170fc32c4722d67e064144037335",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/RoomCard.xaml.cs",
+      "bytes": 2656,
+      "sha256": "8b19e419217e64cbf131a42fbbe9e91ffc9470c41a8a9789ee3170fe2de0068e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/SettingWithDefault.xaml",
+      "bytes": 1965,
+      "sha256": "2bff425fb01a1e0a5f7dc5da053aff3b7db85e27c24d2af88811b53fd09d408f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/SettingWithDefault.xaml.cs",
+      "bytes": 1734,
+      "sha256": "b12b9539239c325fec62dc9a88fc8278c02c407ae2bdd5a250ba57fb65ad745c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/TaskbarIconControl.xaml",
+      "bytes": 6470,
+      "sha256": "2c1318979fe977b484220c9e83e239857feead9665d79c54bcaf006cf2b49e5b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/TaskbarIconControl.xaml.cs",
+      "bytes": 1941,
+      "sha256": "cf28e7a6d0096d96491c59151b9d8e7341921b8085bdac5f4ef9e63e05d20cbd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/WorkDirectorySelectorDialog.xaml",
+      "bytes": 3891,
+      "sha256": "5992fbc29328e9038a4ff07faf808185727972592c7b279f5de0d78b02492b7e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Controls/WorkDirectorySelectorDialog.xaml.cs",
+      "bytes": 2911,
+      "sha256": "d934fe7cf10e865596637daa98b1ec5ecdff6b0f9b10492448e525fe2e0bbc6b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/BoolToValueConverter.cs",
+      "bytes": 1253,
+      "sha256": "f539b80cb16354002b13460c983bf7cc7e3be178460010a2f92f7e351c494ed3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/BooleanAndConverter.cs",
+      "bytes": 748,
+      "sha256": "f699e5e270c8c71e22a20a53fce890bad6c02bc0c554db30dc6c7b096ed2954a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/BooleanInverterConverter.cs",
+      "bytes": 522,
+      "sha256": "90ae960d5ef9a5478cd523468e29ce8e90e4a88eb644c399993c7ba2d875a6a5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/ByteUnitsConverter.cs",
+      "bytes": 1230,
+      "sha256": "cff4a21b4059082a9ff70f396de32eb6f135abbae7c1119ddb40a9c76788346b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/ClipEnabledToBooleanConverter.cs",
+      "bytes": 651,
+      "sha256": "eb6128ec4334f26218b2dbc2b0c6d0be4a275c04e51f6b2f4fedf0bbbd607813",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/EnumToBooleanConverter.cs",
+      "bytes": 567,
+      "sha256": "4d7aded4d03728334975a01c5b88031e5b3c43286f2c6d033203fa9ee4a54b17",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/IsNaNToValueConverter.cs",
+      "bytes": 1224,
+      "sha256": "36adafdc69adea77913c34a0ea48eaccbcf3c936855cbdffc21cd7db9c50ef20",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/IsNullToVisibilityConverter.cs",
+      "bytes": 607,
+      "sha256": "b71ff999dc03af19c33221ad8ab0ffd2fd9dba6d466c1c1737582f9ed5b08933",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/MultiBoolToValueConverter.cs",
+      "bytes": 890,
+      "sha256": "2f90fa18ee49470b660f62d0208e4190a4d7880595be49124b065881c93c3bfa",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/NullValueTemplateSelector.cs",
+      "bytes": 447,
+      "sha256": "a962b42e17ebe1f74a233ff53a964ba3df7d66b6f9b7654c63ecc0387bb2e47c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/RatioToArrowIconConverter.cs",
+      "bytes": 1248,
+      "sha256": "0049b7465d485424addeaee2688eb43c244962765707180180bcab4cea34e614",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/RatioToColorBrushConverter.cs",
+      "bytes": 1973,
+      "sha256": "6a932caf51b0784ae0e3d45b421ccf13029cc203ba4c3cd5bc324069fb58f29c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/ShortRoomIdToVisibilityConverter.cs",
+      "bytes": 645,
+      "sha256": "8f6156f5d40686d286cf5c280af5628cc9af87fa2ba74fe1470a51752290e93a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Converters/ValueConverterGroup.cs",
+      "bytes": 702,
+      "sha256": "357b927fc49dea9fc221cb7be9818df732d6deb862240fd9401b7357434a41dc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/DesignTimeResources.xaml",
+      "bytes": 424,
+      "sha256": "8e48e19045365ed041b64bf25371d1ae1d417f0317444ddc88bfb7b5b50f2ce6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/AboutModel.cs",
+      "bytes": 496,
+      "sha256": "f405d75d790690b0573a5a03b853878bed681cd1945c29b5b3345830ae565512",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/Commands.cs",
+      "bytes": 1784,
+      "sha256": "7c329d65d0b1aefe160e7b2e184da2024d8c08360789c66bb03989e206a961af",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/DanmakuFileWithOffset.cs",
+      "bytes": 1446,
+      "sha256": "7d5ba603f39cb2fc6c9857a0183bef7d0d878e1a286fb5b67618c4d49aba9b57",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/LogModel.cs",
+      "bytes": 264,
+      "sha256": "f25075531bcf2f3ff631c9f33e906d1ffad4c70c55248255f16eb29cf815c882",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/PollyPolicyModel.cs",
+      "bytes": 1644,
+      "sha256": "7590c0ce84aacefe94ea9fa2ae7cd9cd2d2237312f7a3d43f1033eb1536d7264",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Models/RootModel.cs",
+      "bytes": 2095,
+      "sha256": "dfef36ce238c9c3c31eadb05b62e392a11d0cd2a9dbaaec626dd0e78d603de76",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/NetworkChangeDetector.cs",
+      "bytes": 7764,
+      "sha256": "010c2c045cd4176923c0d73346dde01cefa5169986a9d1b23a9220dbcefdf32b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/NewMainWindow.xaml",
+      "bytes": 1797,
+      "sha256": "775073669d0384f7f43dfaa1cf9ddc102e8920bc2a41f9c23fdfbd2b36beb086",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/NewMainWindow.xaml.cs",
+      "bytes": 4831,
+      "sha256": "f25fe8f23496d910e5791c2cd858d4d0333d7df73f263071cca85c812a380b99",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AboutPage.xaml",
+      "bytes": 8578,
+      "sha256": "c94657ff785b1cc9112087407dcc455ecc25924c16894825ff7bd4f9626f79ad",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AboutPage.xaml.cs",
+      "bytes": 716,
+      "sha256": "7ed870b1c1d239faa885a50a2fbe6163a8b564bb918cc018972bdfc2a3f86ecf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AdvancedSettingsPage.xaml",
+      "bytes": 16433,
+      "sha256": "9423624f2283a6c92d4ad0f198907331ec643648a665cc6dc624df2a9aa9bef8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AdvancedSettingsPage.xaml.cs",
+      "bytes": 3386,
+      "sha256": "e6d0a5484724450f8f03aef3c89b2eb28599cb0d622c58022e86f57bb258685e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AnnouncementPage.xaml",
+      "bytes": 2099,
+      "sha256": "c420d79483a5a3d43ec4e1bfac87ecc4be131f4346710a06786b7d1fc9c77173",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/AnnouncementPage.xaml.cs",
+      "bytes": 5963,
+      "sha256": "df42402d79aed780ce99f323e1e31dfdbd13e7efb87b4f165c0e5a6e2d752220",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/LogPage.xaml",
+      "bytes": 3542,
+      "sha256": "da63813c6d896986020842dac101dcb51d03ba07bd102e2f6e2511250f000803",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/LogPage.xaml.cs",
+      "bytes": 435,
+      "sha256": "9703ad3a2fdfb62270ae3a81370d7ed32d0a95e0a73da65397fa9b8501000e19",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/RoomListPage.xaml",
+      "bytes": 8276,
+      "sha256": "e40f346b198d9e11b082277c27436c03259f2a105cfa9554be2384868f96f370",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/RoomListPage.xaml.cs",
+      "bytes": 15858,
+      "sha256": "6b993eb5a625e5825142ee924b08ad4d5d43c25bf6f685d76bc01cd6f54a02e2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/RootPage.xaml",
+      "bytes": 10770,
+      "sha256": "512a3a4dfbba69d9e21516c186a2032176d735a23d482de0407e8c41575e1d36",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/RootPage.xaml.cs",
+      "bytes": 15581,
+      "sha256": "2c34b93c32812f8e58cc1ed9e51f2769af75fa168410c49e0587d39f59ea5d77",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/SettingsPage.xaml",
+      "bytes": 12961,
+      "sha256": "b770c620119cf89bb672ed1807455a83171285d6e983503cd3c7dd1c223167d2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/SettingsPage.xaml.cs",
+      "bytes": 12413,
+      "sha256": "d95b33772978526e8205af6e6cd71ba08439cf8b888ef59e25cf8201a6da081f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxAutoFixPage.xaml",
+      "bytes": 17509,
+      "sha256": "c490fede349b6488b5943e59be6d684d5c4f5541cd91db6797045fa8044cd769",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxAutoFixPage.xaml.cs",
+      "bytes": 15264,
+      "sha256": "16018b7ebc947a00f71d5faee638fed5ea99098d6b3fee7935b5cccce33bf623",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxDanmakuMergerPage.xaml",
+      "bytes": 4072,
+      "sha256": "26a2ccc16497a7279da77c2383972afb150ae4d6457e66017efb94a175bd900e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxDanmakuMergerPage.xaml.cs",
+      "bytes": 9274,
+      "sha256": "79641add87d4de9424cac267bed168a4db3360c068efc13b83a3bdda875ba726",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxRemuxPage.xaml",
+      "bytes": 2293,
+      "sha256": "8eddd03cdf6d18fd8ca1fe69d08ef390efe34b6260a43b514c5c22e8c7fe7db4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Pages/ToolboxRemuxPage.xaml.cs",
+      "bytes": 3882,
+      "sha256": "3e240b8a1abc2f3d0d75af3fcea1a9cccd1eab6ea2b6d50b636dd144aa31a1fa",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Program.cs",
+      "bytes": 15003,
+      "sha256": "bbc59c13db16cd1202b7f8a74b8cb44f2d26cf9ad9d37133f4e9d8048a3ea0bc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/AssemblyInfo.cs",
+      "bytes": 1998,
+      "sha256": "8a41e1a061ea239916315c922625a13f9e2d31b42002967b41d6e6891f76f30b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Resources.Designer.cs",
+      "bytes": 2870,
+      "sha256": "deedfb7ac85951229e898d327a5afd1dabd15fc5872d9806ba56399d424d91dd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Resources.resx",
+      "bytes": 5612,
+      "sha256": "66b5ebd1b0fc73f041ba669ce2184f6f471d5e3524efa34ca31233e9f5395262",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.Designer.cs",
+      "bytes": 68778,
+      "sha256": "663b7e422be941282a0b67cb9297b43492e1d0c1cc18865c2467a014a86b7f3b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.en-PN.resx",
+      "bytes": 29961,
+      "sha256": "275abbc23552509f3dc3ce290a7634a8285d0ec14b65711fd75505dfc43a2c50",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.en.resx",
+      "bytes": 30371,
+      "sha256": "3e87f033193b0236a76929c5beb1257d75982946a621a7e0189d33aa9b26e6a4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.ja.resx",
+      "bytes": 32743,
+      "sha256": "a8ec03c16fe8ca93f5378bf531b8422974821a62b0988e23a9467e88ef8f843f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.resx",
+      "bytes": 30332,
+      "sha256": "b69b56b27da5211a63ff012a66a639194402324f90eeba88f9914218ac0c9ccc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/Strings.zh-Hant.resx",
+      "bytes": 27933,
+      "sha256": "59ec6c9146bacaa46e47d5c8ab891a5259d90fae3cbbf0b76e81ce11a40d7aae",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Properties/app.manifest",
+      "bytes": 1155,
+      "sha256": "c16ea73843784414d4942e33d003a94a46722f5260df18de993366042e9fadaf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Resources/ConverterResources.xaml",
+      "bytes": 4253,
+      "sha256": "0ea23a0b9128e1278645dc71ec2ec86d8f8d8480cb1c5b2afd165360a07d21e9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Resources/IconResources.xaml",
+      "bytes": 16019,
+      "sha256": "dc14ebdf585f2414eb1a458fff4dfa84ec4ce8ee4875fd3ac6edecffdd378f69",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/SingleInstance.cs",
+      "bytes": 2860,
+      "sha256": "90034bc47f3d32766a2419edeacd778b5b29a6957abd75896a889383cd6ca25b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/StreamStartedNotification.cs",
+      "bytes": 6593,
+      "sha256": "011be379fe822b476a3298e6f40ad5422b995e3ffd181d0dcaedd2c0d094cb3d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/Update.cs",
+      "bytes": 3151,
+      "sha256": "fb4eace547ce286032fbd85abb374cf1d9608bcc8fe9fc0b70ac5a4606799f10",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/WorkDirectoryLoader.cs",
+      "bytes": 2712,
+      "sha256": "8fdab940a9f75b7083923b8381bb57822b408168557e5324ac1f8d704e1c33ef",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/WpfLogEventSink.cs",
+      "bytes": 2268,
+      "sha256": "946ffae50a24ab7f71734a9555b5c7c89ed55661acf311b534dfdec2454ac3d9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/ico.ico",
+      "bytes": 16393,
+      "sha256": "54719271c8a5a8934aa764b83914999705087dc203738906e0130558bc231d24",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.WPF/installer.ico",
+      "bytes": 26977,
+      "sha256": "65db42da83c594106d58d9ec1b6d49f01547624375b0b98dddf0d4c9b5bbf020",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/ConfigController.cs",
+      "bytes": 1771,
+      "sha256": "e8a12b691375dadd3d9d9a885ea371cb9b6d0d3c76eaf00047313f6ae20f5dd0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/FileController.cs",
+      "bytes": 3496,
+      "sha256": "f719ff560f0d8b0b772176692c662e891237c4127e26d1edc50e2502dd40a96c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/LogController.cs",
+      "bytes": 2341,
+      "sha256": "453569c793fffd6d5905cb88735f36bcbfa9cc39b37a775bbda0c0b495735c55",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/MiscController.cs",
+      "bytes": 3096,
+      "sha256": "0d4a18a909d69871ae0b3502e599553ad9433fdaf69bc97e904b0fd37ed935db",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/RoomController.cs",
+      "bytes": 17659,
+      "sha256": "6322ba5c5620cc768d0ce48d5feae7037febd4d9dbd171f472e22b06c0be4c36",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Api/VersionController.cs",
+      "bytes": 478,
+      "sha256": "43f66b3227f52e59b67df52a9dded9ea0213ffd551094d6e281dab8d3b757758",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/BasicAuthCredential.cs",
+      "bytes": 641,
+      "sha256": "1212de556030cd2265c7d79505dceb08db141ed5cc63fcee1d55088293f6982d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/BasicAuthMiddleware.cs",
+      "bytes": 2894,
+      "sha256": "3487d360161822a0dbce2fff938b7243d88d31a49dc44ec2d03019bd84793f7a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/BililiveRecorder.Web.csproj",
+      "bytes": 3265,
+      "sha256": "d7b06fde4243c1f10f3d1203d2efda9c67e2c2add19b24c416026c4404fbb04d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/BililiveRecorderDirectoryFormatter.cs",
+      "bytes": 2038,
+      "sha256": "644e783e3ddb1341be85c677933b3be4c65ba898885fff166b25cd78fec6dcdd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/BililiveRecorderFileExplorerSettings.cs",
+      "bytes": 274,
+      "sha256": "c97267c6d2074d8f28e7af8833bbd3ff2b85923d67d5468888af3515a355dc4d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/DisableOpenAccessWarningConfig.cs",
+      "bytes": 155,
+      "sha256": "2e3ad725827dba08b08855ff93e6fc1ca7942d441802848788030a8a909944ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/DynamicHtmlController.cs",
+      "bytes": 3683,
+      "sha256": "42c1f69f0507ecd769f26dc00d6e239efbb15daab3337ca95a1014a838352448",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/FakeRecorderForWeb.cs",
+      "bytes": 2617,
+      "sha256": "23dc27946a9d1a26b60eb9c623e1119cdaad12256fe05ffa944a12ae4f8d0990",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Graphql/RecorderMutation.cs",
+      "bytes": 9849,
+      "sha256": "432ff6a9c5141a95f526b5081344ae5882b4099c78c5ed9a480d4f287e8351dd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Graphql/RecorderQuery.cs",
+      "bytes": 3092,
+      "sha256": "9e3945dca63f4e9385413f1d12a295a8c21fd9f76ec122ad017e294761349acb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Graphql/RecorderSchema.cs",
+      "bytes": 467,
+      "sha256": "70e2ff57c02d6adea0a51dc7427980e7d9941a0f7dbf0703b7e41baa0e1576a0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Graphql/RecorderSubscription.cs",
+      "bytes": 143,
+      "sha256": "c30ef3b6b4f228a57c0fda1e8f654ec4689aacd3a66b3045d70fcc4f16796219",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Config.gen.cs",
+      "bytes": 29855,
+      "sha256": "1e5354c8e65a54b4969cafaf1dfaa5172aff7987124d73c0850fee5c7dcc72a4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/CuttingModeEnum.cs",
+      "bytes": 198,
+      "sha256": "540ea4f100afee8ec14887089dd1f6a3bd7ea7e3a57656e30d4aaa3fa4113ff9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/HierarchicalOptionalInputType.cs",
+      "bytes": 742,
+      "sha256": "c926cacda22d782476bd0f3563ec2a7902212c94658c52209bf3caacd4abf153",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/HierarchicalOptionalType.cs",
+      "bytes": 722,
+      "sha256": "f73af231ba3a2a964e7de7135b77495532ab7257a21d932e9140a33c08c5ed6e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/IOStatsType.cs",
+      "bytes": 752,
+      "sha256": "f39f7d9d0e623a3b120784456f440b7d819776913f84ae5b46f8144dff82e6fb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/RecordModeEnum.cs",
+      "bytes": 196,
+      "sha256": "830e85bba0a6ecd94c2c4268129a0f04b5645042b68060ae7cc51b19751da266",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/RecorderVersionType.cs",
+      "bytes": 1837,
+      "sha256": "285611534641d2ce208b7f7da1769264096ac64029e3512e3e77d1873f1fdae8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/RecordingStatsType.cs",
+      "bytes": 1449,
+      "sha256": "f912689d560307bc4c36d5affa39686255eb4d00e0d6aa700a47e2be4e958059",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Graphql/RoomType.cs",
+      "bytes": 952,
+      "sha256": "1f5b4e708b7483d796d8a9548920736633888227ca2d4fdcffe198f397d9d454",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/RecorderVersion.cs",
+      "bytes": 3090,
+      "sha256": "7e711d709743bc466edc24bdb082b9a47761a2e2ee8492d67649affdff137eb4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/CreateRoomDto.cs",
+      "bytes": 183,
+      "sha256": "c38b661be09c9b6e3f391cb985636ff59523cd9a004369a72e639572eb8d692f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/DataMappingProfile.cs",
+      "bytes": 1855,
+      "sha256": "f01408ccd8a9b1e01db56dfaef4c9926b3d1a2dbf0880b7e17490015c653d80c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/FileNameTemplateContextDto.cs",
+      "bytes": 636,
+      "sha256": "f59d0daad1787cacdb44f91b58186d4b20b2040e8dd0df22b6a6e3e2c5779c8b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Files/FileApiResult.cs",
+      "bytes": 732,
+      "sha256": "89d1375cf1771fa3022dc9e66c8fe18fb08950091488139b2cac81bd37b02c9a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Files/FileDto.cs",
+      "bytes": 305,
+      "sha256": "edd3c2044179490f1eee4e0a8df086aeb4dfa3350113aa7b34c473ce1557d88b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Files/FileLikeDto.cs",
+      "bytes": 294,
+      "sha256": "58960a0afe77cb3ff07e5389bbd4cf881921f3a39b22929016d8b4b510f4b734",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Files/FolderDto.cs",
+      "bytes": 204,
+      "sha256": "6a4346e0390a1068785e06aa1e48d2da40d3e121abd26cea78d1b7d3b9993d17",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/GenerateFileNameInput.cs",
+      "bytes": 446,
+      "sha256": "1f54213b23f5d5b2171df65acdb40dda3a59066e67306f78fb5d437de8810f1b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Logs/JsonLog.cs",
+      "bytes": 400,
+      "sha256": "4ea6f96b79ffbe281ce3a6854a4d3a9f1a61f209014db6d95cb2f8c6345d5306",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Logs/JsonLogDto.cs",
+      "bytes": 422,
+      "sha256": "6cace2845170d712aa5e26580d73821ee7c23b78dfc78fceac2e29c8e246269f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Logs/RawJsonStringConverter.cs",
+      "bytes": 496,
+      "sha256": "0b897d327a43b8a9d3cb8aa59c5b39cde275687ab185265c9788a11f2721ac6b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/Logs/WebApiLogEventSink.cs",
+      "bytes": 2170,
+      "sha256": "36fc884aecb435ad23a92c7f8e4fc4f75eda998ab9f2cb411b9b62b558b85268",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/RestApiError.cs",
+      "bytes": 210,
+      "sha256": "35fb8daed62e7bcde5e89d782c81f8ef500fb2d4ce95624f0bc326329a39f19d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/RestApiErrorCode.cs",
+      "bytes": 525,
+      "sha256": "7b7a55f91890d4a2205ca21727b915016716e7d94c0374e0d8cafbf740e71b1e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/RoomDto.cs",
+      "bytes": 857,
+      "sha256": "210d99075c56e3b4b7e9f8b63b4f61b56ea598b4f64ab2f85c10a36d21b02d2a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/RoomIOStatsDto.cs",
+      "bytes": 1451,
+      "sha256": "f544aa66e9bda4e9af267362d763d243db208bd26ba5b8066d1d130bb314e397",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Models/Rest/RoomRecordingStatsDto.cs",
+      "bytes": 3445,
+      "sha256": "70c125961ec5bd389d834fe04cfb77426374a489cb18920789d53dda7a130cbb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/OpenAccessWarningMiddleware.cs",
+      "bytes": 8199,
+      "sha256": "10c276c7fb4cd676265cb046c4a39f23d5d0b6a4cfa01409bcce34001d225368",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Program.cs",
+      "bytes": 696,
+      "sha256": "25e101e69111e199f9f996dc8260d7565885eed067d5a267a8e5ed3714ceeb95",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Properties/launchSettings.json",
+      "bytes": 722,
+      "sha256": "d93290267c99fd6c802f2f93820b7e791e0fa42bd2c6a3aa31005e796bf56a6e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/Startup.cs",
+      "bytes": 12245,
+      "sha256": "1d130513f3f84cc4452cb1fe23cbf6d2174b54efc5ec9f6cf8d7c8c85e384ffc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/appsettings.Development.json",
+      "bytes": 168,
+      "sha256": "33f18f978d1a84d2812779ccd72050f63dcd0a6297364312ab117473b7e25c13",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/appsettings.json",
+      "bytes": 192,
+      "sha256": "1bcdb00fd1095d81ccfec9087e9e046152387b74a66cf3a4b622b38a6f297933",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/.file_template.html",
+      "bytes": 7177,
+      "sha256": "0e66a810e2975ca399cf21f8b4ab51ed57e0efbb33959a07ac9209ecedaded0b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/.webui_injection.js",
+      "bytes": 1117,
+      "sha256": "248944d2e44187dbb8f0b77eacec1853b351d17bc4be6b24b1db0b879475b57f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/401.html",
+      "bytes": 535,
+      "sha256": "5eb392a4a03ea836cafe8dfa018fb5f363489382e3d6455fa45d6937fbbd20bb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/404.html",
+      "bytes": 69,
+      "sha256": "bbad99d904db6ebc84340b1ffa97e46326997a491eb60f614887c9344a91cf80",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/favicon.ico",
+      "bytes": 16393,
+      "sha256": "54719271c8a5a8934aa764b83914999705087dc203738906e0130558bc231d24",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/favicon.svg",
+      "bytes": 2329,
+      "sha256": "3f9b750563ba09d4cafc120baec571d82e5175c5ba470e9dfa7104db5c52bcb8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/index.html",
+      "bytes": 4732,
+      "sha256": "06bdd916a0151e07d4ed61454d644a4d030e149b024ab072caafcc092a839e7b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/logs.html",
+      "bytes": 2366,
+      "sha256": "7eb85d1bb2047c12780c45161437c53d32d2e5c391754c4eeba9e51a0ab6e9e7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/player/artplayer-plugin-danmuku.js",
+      "bytes": 35758,
+      "sha256": "21bf8d0e66cd62d87b971d7305625d73e0e8de927def855413ca2eacb353c14b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/player/artplayer.js",
+      "bytes": 148954,
+      "sha256": "9694bfded2943e79a0324fad407e8ff11c8b85380be0979a7c5208c58e28015c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/player/index.html",
+      "bytes": 4453,
+      "sha256": "ce58b38d2753c1962de346f9a909d40a9f521acef8210f49a2d046bb7c9f4f87",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.Web/embeded/player/mpegts.js",
+      "bytes": 172717,
+      "sha256": "9955231e098402c6a0b45e82875139d79c677322ba4741d2c97532ed5e20a9be",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "BililiveRecorder.sln",
+      "bytes": 6989,
+      "sha256": "b173edc61d92471396ef08cc8a5cd46553b557b9a398888a095dd3f3b1ae2dbd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 2591,
+      "sha256": "00f9ef9b5b3589823f6d0bdd40cc4670e0ad5e969b49c471f7d0f54d78d139fd",
+      "origin": "project-entrypoint"
+    },
+    {
+      "path": "Directory.Build.props",
+      "bytes": 2162,
+      "sha256": "1e96b042f399b6e46e672c972b0306871fe3685660214099f500c62baec21119",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "Dockerfile",
+      "bytes": 421,
+      "sha256": "51816e59d7f4a10a1bb73558a774e4a801c7d07bb48597a65de478deee1ae62b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "Dockerfile.GitHubActions",
+      "bytes": 602,
+      "sha256": "0d8cce46fabd0939814f1ab55800368e1dd18e2fede4dd521245632aece1a67d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "GitVersion.yml",
+      "bytes": 440,
+      "sha256": "4971e8e4ae28c3887ef30a785e0a38433e335e08db2e93afc0827927ffefb281",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 35821,
+      "sha256": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "README.md",
+      "bytes": 13859,
+      "sha256": "cd841834019993f3ace76d470c2ceb9b4d18260e7d985a3e185606f5bd073f5e",
+      "origin": "project-entrypoint"
+    },
+    {
+      "path": "README_CN.md",
+      "bytes": 3858,
+      "sha256": "3735c4932be33c30b2730e58363203e96bfd46f69a9ab911cdf1d2612e4a0f01",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 4094,
+      "sha256": "bb8c9b160e9eb488accae884b18aafe98f98b688c7207c54c3cd653ec707d651",
+      "origin": "project-entrypoint"
+    },
+    {
+      "path": "configV2.schema.json",
+      "bytes": 23837,
+      "sha256": "f37d4841ae2253b7a824d861e35c929cf5d12fc7b1b15e8b9ec6054f7c0194ab",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "configV3.schema.json",
+      "bytes": 30914,
+      "sha256": "e105366e677a402052112325c573f667ec44c718898089852550d1f6e2c6edad",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/data.ts",
+      "bytes": 7663,
+      "sha256": "2ee94ecb0168af15c714d53fd275a773152dc3726c6c63ccea687de48a831c61",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/README.md",
+      "bytes": 146,
+      "sha256": "246cd559da4a3126fd6fbc33cb19a7849534ac2fb25e53ec68f113c34043523d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/code.ts",
+      "bytes": 2781,
+      "sha256": "99644265727a40daadd51692721415d83ab4971050389cec217172fb142c7ff0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/codeCli.ts",
+      "bytes": 1931,
+      "sha256": "bb678ca471a28e1d50a234b2534329719ff79baa5cee6305dda4eb551794e8ae",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/codeCore.ts",
+      "bytes": 2681,
+      "sha256": "e2df838b578e3eb32efb8ac921c38cf2ec348eeebc792c59f1e3d3595b43e233",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/codeSchema.ts",
+      "bytes": 4047,
+      "sha256": "e1ef9bbdf9e9bff699bdd3d2175a6d8272616958d9363ff2801d705a6ce01ccc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/codeWeb.ts",
+      "bytes": 5684,
+      "sha256": "b5bb6d0ff89c349b1a341402534df41128d8c064be244ad374e188462440a417",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/doc.ts",
+      "bytes": 756,
+      "sha256": "8c089640d23ddde0cd9c4a9a878db34895fec52ff65bca7388b2c07823ae5896",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/generators/index.ts",
+      "bytes": 82,
+      "sha256": "8a932227cba12d2882a31fdc79f558e2848847dadf917b82e3158f109cde4f86",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/index.ts",
+      "bytes": 1122,
+      "sha256": "95f8f1748d52c09aadd31c00f81926c2a3179ad724f1dbe57857dd7a1e2d56db",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/package-lock.json",
+      "bytes": 13868,
+      "sha256": "cb98f3eff23195495d0024fc8abedaa6119adc6d43fa30e6630e0c1f4d69ae49",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/package.json",
+      "bytes": 279,
+      "sha256": "22a3f382981b330d1031f452268a71c4460833686864b6e0caea3cccfd6ea229",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/tsconfig.json",
+      "bytes": 186,
+      "sha256": "3f23d5685b4b9a751988fd31c64aac6815e6ba150928f5e2425779519328ec5b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/types.ts",
+      "bytes": 916,
+      "sha256": "2301c8e5ff4b1a47c9800a96f6227aad7f86b5c06e481be917e91e7464c4f55c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/utils.ts",
+      "bytes": 451,
+      "sha256": "0d3eee92a4a0bbf487307e71a2856db1850b5aedd7ae77f027a40e8397907a01",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "config_gen/validate.ts",
+      "bytes": 3160,
+      "sha256": "466a421af28c63759691c3d52d974484fe7f97943d1b0138d0a62f45a82fe0a3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "crowdin.yml",
+      "bytes": 144,
+      "sha256": "081a407722b40e06e81df2b1849b7c6bda4532893614d31dd20ff1176e5ff7ca",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "docker-entrypoint.sh",
+      "bytes": 495,
+      "sha256": "89b1802c3542d70e0fe253cf4cc2f093382f77bc9b6b417c2eef72032472d48b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "docs/live-editor/源码基线.txt",
+      "bytes": 292,
+      "sha256": "826c513a8db0346e4a62f0256e32013f95424429e9523e23b832e2e337ef6516",
+      "origin": "project-documentation"
+    },
+    {
+      "path": "global.json",
+      "bytes": 84,
+      "sha256": "0c4056d1161fd65da16cd9b1c7e6c6052acaf3b7fc3c22a1f326cd459308321b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "lgtm.yml",
+      "bytes": 134,
+      "sha256": "1545fbff195d42e324d1ace55225ebca6b02f292f6b9737996d72e63c643943f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "live-editor/.gitignore",
+      "bytes": 248,
+      "sha256": "913ad75c11f406baef07daa75889ce846ebc4af4c9b8e8ebfe2337c4cee1ea8e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/README.md",
+      "bytes": 31185,
+      "sha256": "fe9185cfc6d4027002f17b50e2e1a5dff3a00aaf8b4b76e0a1dd5b65777900db",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/App.config",
+      "bytes": 382,
+      "sha256": "0a5d53f6c72e2c4fda1b2b1cf4628ba78beefd3ef94cd6f96148ea44604306b1",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/BackendService.cs",
+      "bytes": 12944,
+      "sha256": "2812d3790cb62232a62e08f9549c6714f6ec6b4698dfdd7957246db9d696ca3e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/CloseChoiceDialog.cs",
+      "bytes": 2095,
+      "sha256": "53bc88ceb8bdd1363c764a282000ec841314d3cb97692f0f66e40928eaf68c44",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/ExitConfirmationDialog.cs",
+      "bytes": 1510,
+      "sha256": "6d074a9acd0ceb93b93aad6932b76d558436f412cc7b037694b88001a3bdd2b6",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/Program.cs",
+      "bytes": 13867,
+      "sha256": "1cfc7019125b4a9d39240547b17a944a36a1a4e583c1d399ff127460946dff73",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/RecorderDesktop.csproj",
+      "bytes": 2602,
+      "sha256": "267322f9e70b8060c92516c9ca03d404f24f1c4f8e25e1810dc6f2d6a0973633",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/RuntimeDependencies.cs",
+      "bytes": 4502,
+      "sha256": "214a031e34d1acb03efe5def566b4b6688c551305bc42340332ccd7c2f17ab4f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/app.ico",
+      "bytes": 248170,
+      "sha256": "0f8484ad0733792996f11e98f386b5ac89efafa2aa37a48bb852af29c2550a9a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/app.manifest",
+      "bytes": 1003,
+      "sha256": "fac48f5756decd9fdc98583ccf58588f51e7d44b5f31ecce929d1afd92990e36",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/assets/app-original.png",
+      "bytes": 1890069,
+      "sha256": "4533c99b0c0c146816482f2f2ab8deacf82c4c90c340d6008c0db6198c10a25c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/build.ps1",
+      "bytes": 2880,
+      "sha256": "3f07fe7e03bb377bdc81f98bd1de5d838910ad4ff6a8ff2bdcd79c01040eedb4",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/test-close.ps1",
+      "bytes": 5328,
+      "sha256": "d0a8aac435ec63bddf1e4fa81e1ca325ba9d0ad64f7411e6e93fce137eae0768",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/test-runtime.ps1",
+      "bytes": 3615,
+      "sha256": "747ad6525a0d321fc030400f4f55b5cdb3d40a99db9624f76510c52f2c6665ed",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/desktop/test-service.ps1",
+      "bytes": 10077,
+      "sha256": "d21db60d4f8c864b565382924e57e6972a3c70489435f80b653ee4417e59f8a3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/ARCHITECTURE.md",
+      "bytes": 9481,
+      "sha256": "9fc7c1342808ba5baa223a822b9ae2bf114b781e78e8ce03326ebcb8b778102a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/DANMAKU.md",
+      "bytes": 7661,
+      "sha256": "a79ce1d60c57810c501dd459eb82200bab5bbfeffd1deb97ef9f6313067b4470",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/RELEASE-USER.txt",
+      "bytes": 5651,
+      "sha256": "74616a9a54254ec1e6fff0e57d41b700cdf6b66ed04224e1e43f490d01f25108",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/RELEASE.md",
+      "bytes": 9258,
+      "sha256": "9640ccc1210f91c829586d428fd31a2977e4397722c99d5141768cf3ce5d30be",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/licenses/douyinLive-MIT.txt",
+      "bytes": 1069,
+      "sha256": "792d236d726b8bd52d4958cbbf40f160d19491c94915c4ef4416411f5051b008",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/docs/licenses/streamget-MIT.txt",
+      "bytes": 1062,
+      "sha256": "66769bc39760cfc912ab318c6f08694948363b5485550934d2e50710e0227adc",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/index.html",
+      "bytes": 372,
+      "sha256": "8cd75cc81343bdcf1b6e68f93ac62273076a6a639b892341a6d0089cf0a30ef2",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/installer/ChineseSimplified.isl",
+      "bytes": 21099,
+      "sha256": "bf0751fa176569c6faa2f6e17ed2734617bef325d5cc06eae030fdd0258ee778",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/installer/README.md",
+      "bytes": 1549,
+      "sha256": "534e72a144d904c671d39efcccd3620d64cd8c39ad8b9de8cdda17abb7ac7155",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/installer/setup.iss",
+      "bytes": 9463,
+      "sha256": "751d3061816d87f63a7db4e856c06239fecba1ed96baeca7b92df140de9b7262",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/installer/translation-LICENSE.txt",
+      "bytes": 1072,
+      "sha256": "02f0dd3b98833040147d01daf91243c24392a33ddced674152220b5216782c6a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/launch.ps1",
+      "bytes": 5526,
+      "sha256": "58aee49462b6f47f9da7f9914e0d766a880894c17bc57df23b55c774a795c354",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/package-lock.json",
+      "bytes": 44716,
+      "sha256": "197509b82d3017caeeff091da9ae1482c316527f4e25effcbb22fdb094cce1fd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/package.json",
+      "bytes": 533,
+      "sha256": "edb3a0f9faede9092abbf9da642e2f12b4119f124b7cad68fa6dfca091244a7d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/benchmark-source-stream.mjs",
+      "bytes": 3588,
+      "sha256": "2671bcaa852fb5bbd043eb033181298cd833a28c756e3b7f769009c960b8f7bf",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/build-ffmpeg.mjs",
+      "bytes": 8435,
+      "sha256": "951cbc205e4902270332f5d349fd5319e12f7776ba69102b07e06bc1136dd0d5",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/build-ffmpeg.ps1",
+      "bytes": 975,
+      "sha256": "e7f84f7506e2164486dda5c075681843d388b0f644645e0ef5e965c4e7cfa2e0",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/build-ffmpeg.sh",
+      "bytes": 1789,
+      "sha256": "f01ddca66c8a9e55381042d4d33727db072578359e5f99a5da4c371541d27f07",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/build-installer.ps1",
+      "bytes": 2549,
+      "sha256": "069e4754ebc9f96df3d184c95e64e3568f76d06d66a08bd6cd71219c5cdcdb91",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/build-release.ps1",
+      "bytes": 19241,
+      "sha256": "54aa2f85364f5d740cbfdfc7eef4b65474bfc2d76c1e8a28b53396fdc03bca50",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/clean-build-artifacts.ps1",
+      "bytes": 3583,
+      "sha256": "934eb2f832db6a5d24350a513c8ea7bdb7a609540364e59b857b2657a5d288f7",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/dev-context.js",
+      "bytes": 1830,
+      "sha256": "48326059fceffd5064f97d8e8960ca49ba4e69d334983bd7e30ec924f6e0d499",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/dev-env.ps1",
+      "bytes": 1157,
+      "sha256": "af475c4995037bd1bab8c5e2bc561c683fa33b469c63580385410667e5a96bca",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/dev.js",
+      "bytes": 2147,
+      "sha256": "09d658542ede0667617335731fa83d98219d2d2e91f986604cc0f5673811805e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/dev.test.js",
+      "bytes": 1019,
+      "sha256": "59a9f1157381fe35ae5f409f65c9b16c34f08a148d01f7b400c23bf33a920842",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/fetch-tool.mjs",
+      "bytes": 1274,
+      "sha256": "08180e78bdd356c2d318b5970b59845c983c0c66576b20ea51291af05aaeda2f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/package-source.ps1",
+      "bytes": 14328,
+      "sha256": "e1d1f6e09eb0c951e62b9915cae56a45b60b03547b8a5725f2b8430f81d59d5f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/prepare-release-tools.ps1",
+      "bytes": 4761,
+      "sha256": "3fe9cdc301401fe7336b10b08c3a317cb79a1f9550de72614a145808138d894d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/test-installer.ps1",
+      "bytes": 10673,
+      "sha256": "dbb652b51c7f4ec8f33aa4d549ef33eabc689eca446d36821e414c256a53efdc",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/scripts/test-release.ps1",
+      "bytes": 7648,
+      "sha256": "0f61883e30fa1192d4405f44f2d98c3504c7b7aa16c1915c5f0a6eae0a59db99",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/background-preparation.js",
+      "bytes": 17864,
+      "sha256": "857f43b6314b9097e6060fbb4fde20f48999e92ed75620ca4c5f882453022eb0",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/bilibili-rooms.js",
+      "bytes": 4650,
+      "sha256": "61e9090da1df9de0db36a1db48f78f4783614834a363edb3231483d3393372ff",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/chat-filter.js",
+      "bytes": 1096,
+      "sha256": "6f92c7766a4fa75de0c6da15b623a8060c032bfc7ad8bf5245716204d93a2ef5",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/chat-intake.js",
+      "bytes": 6364,
+      "sha256": "f814bb05b6d6bbd525bedee4aaf40aa9577e38107eb6aef84787bfc4565c0868",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/chat-rules.js",
+      "bytes": 5576,
+      "sha256": "70c4ca59293a589d7130f3f363e9e2b4c772fdc33b83164141f0406aacd83d5f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/compact-storage.js",
+      "bytes": 16681,
+      "sha256": "a7dbbc10fc381d0d610d5eec742f382d32230af2313967caab8c9710a0c771b4",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/deletion-control.js",
+      "bytes": 1777,
+      "sha256": "dae1db3921d3604ac6f515e8a911c63aa08f8710b0210e9f2feaf06f57409bff",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/deletion-maintenance.js",
+      "bytes": 2145,
+      "sha256": "5dbd7fa055f28097854f93be1dbd8bac0ac9d941c493b560ed7fef4aa6094d0a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/deletion-work.js",
+      "bytes": 635,
+      "sha256": "c8c6c1a84b3415629e54ea1f1407aa49efb6d2d9f0160927aaeca54827b98125",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/deletion.js",
+      "bytes": 13054,
+      "sha256": "5d3165e2bcb2a3b9266b66ea96b74cca501ebc723aa316c0a682ab83ae4b446a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/density.js",
+      "bytes": 8707,
+      "sha256": "d6c7390fe62acb6029bbdf2c79df0df7fde240bc0cd44e6b4a78715376bd54d1",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/desktop-exit.js",
+      "bytes": 1873,
+      "sha256": "217fa907f950384c068018b44a791a32f1c5fb1031e896354878ca6c891ac9d6",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/directories.js",
+      "bytes": 2776,
+      "sha256": "48312b9192ebc1dfbc70a12aba0525ecd48a4c215909cf780d6a8b25e8b87d21",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-chat-worker.js",
+      "bytes": 5321,
+      "sha256": "ab658bc4dac2529a935aacfdc73e626e15aaa489856677701c39869821caaae3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-chat.js",
+      "bytes": 4112,
+      "sha256": "ba8731d38c2a30c71ce4686ccc79e95d5de35b4ecfc64d8e6e1805149e99a5b1",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-flv.js",
+      "bytes": 1656,
+      "sha256": "f5ed6993f4fce31da956c73ee438869635db7b0264c393fa38e8ad49fec6b975",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-protocol.js",
+      "bytes": 10236,
+      "sha256": "9dc163acb0bc15d47bd80aefaf1f776da8575b587e1c6579315791a1007db3d1",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-recorder.js",
+      "bytes": 13033,
+      "sha256": "22bdbd4a6d78159efec6f88d3f36de886a205131355b5e964afa321c8c710595",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-room.js",
+      "bytes": 10090,
+      "sha256": "1e2e7f958067f95a2d3f1ff1210c8976c695a172cd329b856f3e36007cf67ae8",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-signing.js",
+      "bytes": 4711,
+      "sha256": "6740da52b23e0104116b2a9f3d1bc428ad0632ea0eaa5efc4f9018bdd977b138",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/douyin-websocket.js",
+      "bytes": 5722,
+      "sha256": "0f2e74b0177a3ea68d930d282e1985d3121b57500c05a3105ebc28973477f0dd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/export-encoding.js",
+      "bytes": 4179,
+      "sha256": "110d7ca821c7741a955a519ca87b644624575155e46b5c2dbab1160bcd50e875",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/export-publication.js",
+      "bytes": 23866,
+      "sha256": "874fb16508a95b498506f7770c17b729ad43bf1ca37560e55df114f4fa1da48c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/index.js",
+      "bytes": 23459,
+      "sha256": "34e301734740028534a7d9e3872c7f785da04a1ec4c46acd43bd98ac7d7d429b",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/ingest.js",
+      "bytes": 15779,
+      "sha256": "a948e4f560ea9f1648c0800959ddeab69f535728f756a29131c95e229e806bb9",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/job-deletion.js",
+      "bytes": 13959,
+      "sha256": "9a1dd104cfe86209c03af0a5f82971ce5b0e65688e6ddb009c79048e245bf72c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/local-endpoint.js",
+      "bytes": 4394,
+      "sha256": "82e2da5eacf01e33cc2a9a2672e0bea77ddb0cb2852904f31d56b17927dc951f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/lottery-activities.js",
+      "bytes": 2205,
+      "sha256": "4656bc8eed62eb4af7c2dbeb5d73ce5a81862f69a3b222fe6720dd73160dea53",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/media.js",
+      "bytes": 38862,
+      "sha256": "77f8b94806bb7326d9fb7e4a140fa80d2446036a586a458336b1a14c8bc53fa1",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/multi-platform-recorder.js",
+      "bytes": 3071,
+      "sha256": "95778b5a0306581c81f1c6e5f5f2d2887aeb64809130ba5718380215ab455437",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/output-names.js",
+      "bytes": 4250,
+      "sha256": "4857f14a6ceb5a3d219b5659894e4665bb31173061eaa339faf05c56f4a8d213",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/recorder.js",
+      "bytes": 24695,
+      "sha256": "ebbee2ee75f11111baeaa3e4257c9690db6894241909f93d4a8c8237bff620b9",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/render-cache.js",
+      "bytes": 27542,
+      "sha256": "561409e5674e8eaefce5663ad916156ec62f3d08930ab99d5e009de8810858f9",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/render-plan.js",
+      "bytes": 23027,
+      "sha256": "873b0e2858307ec5ad86dcf7e24a072a42c8f9266d76bd8fca07ca2e785f1599",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/room-lookup.js",
+      "bytes": 2957,
+      "sha256": "26ab83f2a55b1d0ea0fe0f9d40e49c286f45c551670d7ab7f8f2f77e03a66f7d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/runtime-paths.js",
+      "bytes": 2849,
+      "sha256": "1bc2c24e31f273d9563245762280803b3ce7bfe62de879d843f690e555996ae0",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/service-runtime.js",
+      "bytes": 4751,
+      "sha256": "27fcbf1b5e246879ccf7014f5d659ae354e656d36627eedc7909f3273a211b20",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/session-deletion.js",
+      "bytes": 2026,
+      "sha256": "efbb0cbbbbeb8188d8f23ee76b89f37a7a801a072dfa4312ed2cc5e2abfa6ef3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/storage-files.js",
+      "bytes": 3986,
+      "sha256": "cf6af19d8134ea473dd5c1c3fd3f05d8e1d24ad1cded2b1f99ac827c6d49210d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/store.js",
+      "bytes": 15733,
+      "sha256": "a866356a615d436f3e6a10cc743b022aa38c4cc416c02b1d00470b3b3341a88b",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/temp-workspaces.js",
+      "bytes": 14186,
+      "sha256": "e97aef4a24e43a2d7f34bdb08f2afca3dd3762f35255dd7e2fca619c7dcc4b7d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/server/waveform.js",
+      "bytes": 14263,
+      "sha256": "3da42aca19c3ace329f9baafa48c14355dc54a0dc1b4c11803053c2e9a7c305a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/App.vue",
+      "bytes": 93323,
+      "sha256": "373fedb35ccea87b8ddd257c000d9eb59e849779022fe7a216b6d0814c503bc0",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/api.js",
+      "bytes": 661,
+      "sha256": "eae8d1bb39e0d0dbdc823b29f36213b74ca486edfe8f18e3272fc50d6703f19a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/assets/app-icon.png",
+      "bytes": 167233,
+      "sha256": "ad62074422135ffee1ee3267c09c81fabebdd7aab7b94dcc4e1e924bdc05512a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/components/DanmakuOverlay.vue",
+      "bytes": 8666,
+      "sha256": "35de034d611f6097429d39a849d7fe73d9358577cce08d128f6f83f59be155e8",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/components/TimelineMarker.vue",
+      "bytes": 3181,
+      "sha256": "14e283ca4856f76cafa0f93db77428f0d29069d5903703324854aa4a11e878cd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/components/TimelineNavigator.vue",
+      "bytes": 4289,
+      "sha256": "0af2a76569403dcd61269995c9542fde3f1a38189d5712f4a42f87884ee4db00",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/components/TimelineSignals.vue",
+      "bytes": 5202,
+      "sha256": "b7519b87192a3a0c8edc232e9b838997c133b09cadcd6d25cfad9985e770d201",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/danmaku-clock.js",
+      "bytes": 2905,
+      "sha256": "fdc76c1cc5711bed9aa51a0909ee0a95ae1eeb22f66da5541b9f8afac97bb550",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/danmaku-layout.js",
+      "bytes": 2647,
+      "sha256": "33a7646ab18313fccb97b7ddf05703c088ed47de03d631c154f77d88dafe90b2",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/desktop.js",
+      "bytes": 1108,
+      "sha256": "2399c3234a37cb3137a62f4842ffa9baeb477b29a02f219be1e7c785740d94c9",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/main.js",
+      "bytes": 114,
+      "sha256": "4f28b634f509f112d7c3fa22fd11a5611bd9b47ebc0553b770a468d09952bfd6",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/message-window.js",
+      "bytes": 447,
+      "sha256": "a2f5b718878c4c806ee540e04d1cb0f8d4610707edb671be534813ece003e1ff",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/recording-time.js",
+      "bytes": 5298,
+      "sha256": "4ed0b8026cdf4fcc12adf3b5f16d735f4b7a844409657de864844c1c5d466cb8",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/room-status.js",
+      "bytes": 713,
+      "sha256": "b3b6f030448020871aee88e578a69c3e41a0056b2f823753cdd428e9703c481c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/style.css",
+      "bytes": 49626,
+      "sha256": "89f371e7a31a41a43b4de258d3092cff5a0856c091070a8b6cf254f4f9917be3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/timeline-signals.js",
+      "bytes": 4485,
+      "sha256": "7760cc385223e3560342d4e467aaaf97eabc8a2e48f84aebc5288ac571df78a6",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/src/video-time.js",
+      "bytes": 1752,
+      "sha256": "bb3ef60a3fb516b5d1436f7ad5663882a217f39583bb720e7ec0b5ee9b1a2963",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/background-preparation-api.test.js",
+      "bytes": 20429,
+      "sha256": "dd829664c41d5a2cfe09d96e5a551c908ed08faf444ef23c278cdb86000a982e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/background-preparation.test.js",
+      "bytes": 19897,
+      "sha256": "100d605adb2d011092f40f0efac7628021925c5261bade831d9a004fe1b9b656",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/bilibili-room-state.test.js",
+      "bytes": 12805,
+      "sha256": "69b5894cc1d25c2334fe7ff0a38fc59502df4741669ac2e76fe4411c8b736a46",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/cache-deletion.test.js",
+      "bytes": 16605,
+      "sha256": "0fd5ff9c320eb0298230f73b667e0973af5e57b262aa63ad80f33b881dfc64f3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/chat-density-ingest.test.js",
+      "bytes": 4025,
+      "sha256": "c4ecfe52191e61f12692660e9702ecfcd18b4780cf19e54d8fe5a461586304bd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/chat-intake.test.js",
+      "bytes": 5765,
+      "sha256": "0897d1ea45ec46d9fb26682f08f7f86d3e000aed59ea70186524e10a0e4f4e18",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/chat-rules.test.js",
+      "bytes": 9198,
+      "sha256": "f7a4c99e459acf2993cf13a615d2c808760e3a11a20c1d8cdda4df8d16bf2835",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/compact-storage.test.js",
+      "bytes": 14437,
+      "sha256": "4b781d13fa1de23b8c75b6e0d11b8520069381b9426457568a4d1b9f52ef7036",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/danmaku.test.js",
+      "bytes": 5315,
+      "sha256": "985fe0cd75d02f635e1e5a8032657ecc86caf17973432887f6aa373c395934de",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/deletion-maintenance.test.js",
+      "bytes": 8135,
+      "sha256": "21e93dd3ce67517d9dfd31440ee772216351c1d71cfe2f8f43436b0e03c16dae",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/deletion-timeout.test.js",
+      "bytes": 7198,
+      "sha256": "6428a04bf4aa10e3d0bf63a8dca07f1d6060a878c2eff29f8923099fd11fdec3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/deletion-work.test.js",
+      "bytes": 1123,
+      "sha256": "e7c0b46bd87b6f46ac75b51d2ca61ca9258603816d75ec505dc355cf9f79754b",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/deletion.test.js",
+      "bytes": 14649,
+      "sha256": "cdfee8ee72ea7ebc9f0d4927531d88f5f85587861ca8c2c1c28dd2f4a6932b5c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/density.test.js",
+      "bytes": 10543,
+      "sha256": "80f2e52829279de8405a69e96c092d777045b9ad32e15f9034f9ba936351a522",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/desktop-exit.test.js",
+      "bytes": 12051,
+      "sha256": "4886a1b9b64e92d94a31831ab951d74c3510a7de6ea586add42780ad9040976c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-api.test.js",
+      "bytes": 4234,
+      "sha256": "efca48829269ede3a92924f94d88e28eafee5de2e5af351d4797d9a37cbe2d36",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-chat.test.js",
+      "bytes": 2983,
+      "sha256": "b6b65c76f8c26f7743bb9ef503c1a2188d679d5aa6013e7ed72681142579c565",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-protocol.test.js",
+      "bytes": 9735,
+      "sha256": "0390aadbb015b43a846b3ee2257c333cb7dffc37efdc6aeadc64bfe8806f1f3c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-recorder.test.js",
+      "bytes": 13779,
+      "sha256": "069f6d38d855efb4d2547e62c674f92b1895e9c5ccf9b3a70b9b91b6ba840b20",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-room.test.js",
+      "bytes": 7763,
+      "sha256": "13f83fd53b81ba19542fa9c7083c56b74222088a236a620964c488c59b3191cb",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-signing.test.js",
+      "bytes": 1079,
+      "sha256": "95ab82ca5d74c229b28da8ba04ed21ce48587f75c9d965db0c1ed61720d98c6e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/douyin-websocket.test.js",
+      "bytes": 1692,
+      "sha256": "20803e43dd3585a4a94a400c01b40c94958efeeca447e49ff911de1255f140d7",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/export-controls.test.js",
+      "bytes": 4589,
+      "sha256": "babb25bff8562a8db135aaa127795bc0a0cb6e77f86ab5423ca90ed4cb9e5caf",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/export-performance.test.js",
+      "bytes": 7503,
+      "sha256": "ebbcd7050ca6a89fdc11c3cd3f581fdf13d68a3e062aeabeeb36e0199095e3cf",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/export-publication.test.js",
+      "bytes": 21824,
+      "sha256": "671f3f7e42a22f6e16f904d6e38f6b499eb94ec95f38b578219ff6e2141e4a70",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/fixtures/douyin-fudai-chat.json",
+      "bytes": 428,
+      "sha256": "f56acf98864abd9d93a67cbf35038cc4d0973b323e6d8fb1ad762b09213cbd5f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/fixtures/minimal.mp4",
+      "bytes": 1442,
+      "sha256": "c86785495d6d68a9c63d4277c2c270a67c69809eb12a43f526242df26e2705dd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/foreground-rendering.test.js",
+      "bytes": 10872,
+      "sha256": "52d3780596239598e9e8c4091d6df3b1cc2e4569aa3fb5427e6df421beb7a988",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/full-audio-copy.test.js",
+      "bytes": 6298,
+      "sha256": "9518bc2e42b77fdf5bcb287bc0b01dd8cebcc0b5e42ca2710218b0c30ea6e77e",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/full-export-performance.test.js",
+      "bytes": 10299,
+      "sha256": "26f88f29c4bcc8bea955ce0630431188c283f8231e17dda94b465d0e74fc43be",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/full-export.test.js",
+      "bytes": 11527,
+      "sha256": "b6fb42e9c0daf1c47cfb2a5a55e816b67565e57463bf9eb86f692784f82fbf39",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/helpers/mp4-fixture.js",
+      "bytes": 278,
+      "sha256": "e0f9b9c7efe00c8a410fbbbdbff8044ddc36770da89813228f6e09b871a85156",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/helpers/save-retry-fixture.js",
+      "bytes": 1855,
+      "sha256": "ef3dcf892e39f0211123ea99f9ff409c34d0148f115e83b478922665d7ac919d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/helpers/source-stream-fixture.js",
+      "bytes": 3688,
+      "sha256": "f12e4a0fa79411df09fd7be5d31eac71b09a265aa98bc78b279871376f87f539",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/ingest-finalization.test.js",
+      "bytes": 5662,
+      "sha256": "13a168d1ff9eeaf1eeb785a9cebb0c4daa42a1c09376c3879997bbd865f31ebe",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/job-deletion.test.js",
+      "bytes": 30566,
+      "sha256": "daab66ae3407cbe54c448cc4157e40a6e6efb0c2670cfae9123eed265c68a07c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/local-endpoint.test.js",
+      "bytes": 4780,
+      "sha256": "6a510345fe4b6d2434a3db1bd723361ad50eaef9837fcbb837f297c751d35545",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/lottery-activities.test.js",
+      "bytes": 3329,
+      "sha256": "73655bc5ec668035422aa3b696be0d29b0ba5fc77f25c79a6caeb0b9e70eed6c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/lottery-filter.test.js",
+      "bytes": 16658,
+      "sha256": "1068e0d656c852dc117b9e8641258655bad1ea18956df3c545a266e7da35d71d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/media.test.js",
+      "bytes": 32251,
+      "sha256": "c57fdf1dd5b6a0c76a9c0f4533c8cba21b356ffcd1be0fc1477b6e923c28549d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/message-window.test.js",
+      "bytes": 1026,
+      "sha256": "83c66df3bf364b2047af17bd9cfde035dd6f622e2c1a4cf72d4222d2b8c58332",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/numeric-room-api.test.js",
+      "bytes": 5197,
+      "sha256": "cca414eb983147043f1c2e46bb4aa6aa64b756d747faddc729dc51fb40a7609b",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/output-names.test.js",
+      "bytes": 8153,
+      "sha256": "f0aef20d9474d81d0b8cf63f079beceb805258279ecfdb062319ac7c6c3b3709",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/recorder-lifecycle.test.js",
+      "bytes": 16697,
+      "sha256": "c9a864ceefec9e7c6bcd59665febc29d691e9dbac5ce0480f5d9d257b2c199cc",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/recording-completion.test.js",
+      "bytes": 11824,
+      "sha256": "65150f481865fefb0d5f0fffee6d68ee5e73937d57b0045dc2b5ad3e63731eb3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/recording-only-api.test.js",
+      "bytes": 3291,
+      "sha256": "f94edca22b75ef3abec0508d31ace317a24ad9caa362414493a13277c2b9f6b2",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/recording-time-api.test.js",
+      "bytes": 3076,
+      "sha256": "a17ec5da4ba0e64fe58590399dcb661d12c445714621106900cd57af6fd38306",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/recording-time.test.js",
+      "bytes": 6336,
+      "sha256": "0c0f00f344523203fb0b5d64cef2031b8fbc9602aebde2d9921625f084a89759",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/render-cache.test.js",
+      "bytes": 22964,
+      "sha256": "881bac5ce39b98529b1ba4023d3c9b6728e0488f92ad39969d97200b5927e8af",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/render-frame-boundaries.test.js",
+      "bytes": 1894,
+      "sha256": "8453e547ce60e241c23c937ee34aa422f6c46540615a3d021c8214a73a8a69c6",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/render-pipeline-settlement.test.js",
+      "bytes": 4881,
+      "sha256": "ec0ef237f2f88bf8b8a184d5d9ecbe8735bc39fb0e44c57bd1d1e674a3bb4c17",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/render-preparation.test.js",
+      "bytes": 12911,
+      "sha256": "a94948be8957abe1f70ae5a044766b19612f7d66681c9913a0bb0a89045db82d",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/retained-workspaces.test.js",
+      "bytes": 14745,
+      "sha256": "909ff79fe2aef0953784fe1d6201215eafb8280032597ada8f37eebad6a71ccb",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/room-lookup.test.js",
+      "bytes": 4214,
+      "sha256": "462dc733fa1e13164e3df43ff8fa9f6542031369d16627ac8b17203f40b038f7",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/room-status.test.js",
+      "bytes": 2536,
+      "sha256": "f38b1602956a87f852002a7fa747f47f9a84119d0e6eedc916aa708ba28016e7",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/runtime-paths.test.js",
+      "bytes": 4558,
+      "sha256": "9cd2e1560a82896d61a3d1cadbe6f1bde1c0984e3db24d5e4d118194628e42e3",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/save-retry-api.test.js",
+      "bytes": 9889,
+      "sha256": "7ac8b305d5a76a9c20ba5e15b571dc68c471b917bdf88f5ca3f178a7dbf36532",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/service-runtime.test.js",
+      "bytes": 8952,
+      "sha256": "613e55f82f9938efa0255bbe34a25b6d367f9305065a6c43ed7eaac14b166c4c",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/settings-cleanup.test.js",
+      "bytes": 3369,
+      "sha256": "357aa9c4ecb025b5a7b580ac0d050bf11a4a39831ec3f07544aee45852965fd9",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/source-package.test.js",
+      "bytes": 2569,
+      "sha256": "23b9098f0470bf302580172327b71e8c9d92af5695350f9af2c54d708af08066",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/source-stream-batching.test.js",
+      "bytes": 5875,
+      "sha256": "e1eb9eed84d85ba47300c04cf832bb3a6947048dcbc87db690b5ebdacc576ff5",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/sticker-filter.test.js",
+      "bytes": 9658,
+      "sha256": "4c9b262d06a520c132817baaca8cf638b067bd18a07d0085fd7e3b8064a0804a",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/storage-shutdown.test.js",
+      "bytes": 1260,
+      "sha256": "81d96b4af207f8acad24abbf6607e70000c45e8653a97a08f063e927aee74678",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/temporary-cleanup.test.js",
+      "bytes": 10424,
+      "sha256": "1247f1c92f10b355033efe20fd8bd6709a38867cf3089914e83c2fcfb199e8ad",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/timeline-signals.test.js",
+      "bytes": 6324,
+      "sha256": "6fdcb0840d00c178fa2a07b0c05161f10d6a085b3b82ea883b45cac834b0acdd",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/video-time.test.js",
+      "bytes": 2805,
+      "sha256": "c2dcbb538561c5383b4c52d1da766a7fa28731fd9c5d7419e8d9d93114f3e040",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/waveform.test.js",
+      "bytes": 14498,
+      "sha256": "7350f16a7f48db9a669e86c8221f8330ed9be3b940affac33956c152f9b0e2bb",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/test/window-close.test.js",
+      "bytes": 4505,
+      "sha256": "5dc1429c7bb73e49632a94f125465d1e6915dfd69db1aebe06246ffc24a305b0",
+      "origin": "current-editor"
+    },
+    {
+      "path": "live-editor/vite.config.js",
+      "bytes": 1170,
+      "sha256": "a4ee6cc57c0ce306c99125d7a8050f7c0320a435d1ca6db62a26cee7dc148c9f",
+      "origin": "current-editor"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Api/Http/WbiTests.cs",
+      "bytes": 1469,
+      "sha256": "c2d38217566c743b5c7822d8c7beca047a0ed505c659a763b62445b04a7b3108",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/BililiveRecorder.Core.UnitTests.csproj",
+      "bytes": 1300,
+      "sha256": "50b888afcdd82a6e3650a394779b1d667a3191deb4c6a892f6b93117f479dfc6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Config/ConfigTests.cs",
+      "bytes": 4326,
+      "sha256": "7705d2e94456b5eb1962b55b427ad73c83803d8656fec71b16edb5486a749add",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Danmaku/LotteryDanmakuTrackerTests.cs",
+      "bytes": 12908,
+      "sha256": "ae9186be53771e4ec72a93f589cc4b4cb6d7cae2f145043bd411cf3ffc802977",
+      "origin": "current-recorder"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Danmaku/ManualTests.cs",
+      "bytes": 1007,
+      "sha256": "c801f2bf5c56fd505e74936a3229804b65512290bc02fc968fcd9da33b880076",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Danmaku/ProtobufTestWriter.cs",
+      "bytes": 2447,
+      "sha256": "51b30e3e9ca71194c6173c7f9a9776987acd795f2ba48d624416bb343c3037ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Danmaku/SendGiftV2Tests.cs",
+      "bytes": 10125,
+      "sha256": "d5c2877380ef9da20b0e3c35f8c3a9dadc2a0e224d451965f79094d2e72af8c5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Expectations/ConfigTests.CanSerializeToJsonAsync.verified.txt",
+      "bytes": 405,
+      "sha256": "7b1929bb69d94f785b00c2cc4833b7f2b62bf59debbfed92874d15650794cea3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/Recording/CheckIsWithinPathTests.cs",
+      "bytes": 4138,
+      "sha256": "34d9ee8ad33057bc2c0b1bd808297968f653591d12bd0bd1f9c21cc61260f349",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/RoomIdFromUrlTests.cs",
+      "bytes": 2538,
+      "sha256": "a1f4e9a5d75093f33c8af1718c97a76624b17d59aa5ed49dbe9e45b701392ff6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Core.UnitTests/VerifyConfig.cs",
+      "bytes": 592,
+      "sha256": "d2a140ccbfecfdee05fdd8c4f2d37637d158f89490ba5cbee8ad16defcbf4359",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/AmfTests/AmfSerializerTests.cs",
+      "bytes": 5202,
+      "sha256": "7f640bfe483bb735e5cd5ff65f68dd01820ab7727971443d20cf2c15c6729d19",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/AssertTags.cs",
+      "bytes": 2976,
+      "sha256": "0f0a577ae2bc4372dd3f3f9428464de79f7bdf801216859ea9635b6cf4454026",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/BililiveRecorder.Flv.Tests.csproj",
+      "bytes": 1416,
+      "sha256": "d5cccd02b89d8e3194965fa994a2e23ca7c00e41d03c962d50370c724c212527",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/Expectations/TestData.MeetsExpectations.verified.txt",
+      "bytes": 707,
+      "sha256": "9e1adc3bc4be43b6cd66100c3ee4f3c47c9cab71380ae83fedcea34a9ba4d53f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/FlvTests/GroupingTests.cs",
+      "bytes": 1159,
+      "sha256": "e98e36c3416fc0038ff608da34192ba1ac173a1d12874e52a3f65020b018cbc1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/FlvTests/ParserTest.cs",
+      "bytes": 1780,
+      "sha256": "2a4f1b096d5807604a58110787b9c6b92a2cc638d914c6ac7346605d7c1f0dc7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/FlvTests/TagTests.cs",
+      "bytes": 1275,
+      "sha256": "5b887e126d00743e5d4799a54fdc2910db5e8a66549ec1e2951d8f27f4b2eeb7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/FlvTests/WriterTests.cs",
+      "bytes": 2012,
+      "sha256": "ea5f27c5cb328673994d397275fa8b4b883ff08c7ecf1b8e828e88b9ae76eb39",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/RuleTests/FfmpegDetectionRuleTests.cs",
+      "bytes": 3292,
+      "sha256": "e2f5fd37190f9123d7b0b105350e9181f8efaca52dc1f1b492ddf23bab3f0579",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/RuleTests/IntegratedBadTests.cs",
+      "bytes": 4218,
+      "sha256": "2bd651679c103e76ee2589502409c00e1a23aaff6dee7193e7dcdf8cd4fd89c4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/RuleTests/IntegratedGoodTests.cs",
+      "bytes": 3707,
+      "sha256": "ad9aac3ce42719ad744de64364050380e115e8b27c1ce28bc141d667ce5025bf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/RuleTests/IntegratedTestBase.cs",
+      "bytes": 2906,
+      "sha256": "f17f8f5e28ad6f89c76b9349ddf7d643c10e0260a0394669d17b535e9c87a7e2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/SampleFileLoader.cs",
+      "bytes": 944,
+      "sha256": "2c35b372d0b4970ede08611f27cdc3cb17604bd920b5e6f33c9fcec0cc233d8d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/SampleFileTestDataAttribute.cs",
+      "bytes": 1098,
+      "sha256": "be86a05f53821c86795a877d43f62d43deaa11d1ce32824432b87ace87ccf0ae",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/TestData.cs",
+      "bytes": 923,
+      "sha256": "6fdd846bd7518631da535a67b44d4324abee6114d79147f0dbc501c98cf1a795",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/TestRecyclableMemoryStreamProvider.cs",
+      "bytes": 578,
+      "sha256": "c43e566610368b43677776499ad48192c2c3fcd560179b70d8ec0d7f4a4e917f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/TestTagsExtensions.cs",
+      "bytes": 619,
+      "sha256": "05522fbd2a15eab36d7a6c3ca8c6642d5dd47017320069afb2e4ec126da38fc8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Flv.Tests/VerifyConfig.cs",
+      "bytes": 947,
+      "sha256": "d3c4d79d12048178b15f8891540cc288d41fa9776c19e2664adc9b58f26508e7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Web.Tests/BililiveRecorder.Web.Tests.csproj",
+      "bytes": 949,
+      "sha256": "86297988e595472dd2642c28556500adf794d32092b9bc78187d038d6ad466c4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Web.Tests/LogControllerTests.cs",
+      "bytes": 3265,
+      "sha256": "31e3bd9fcfc9802db3da666e7c1fabbdf29e755cd7fc43218ebb4bef1f379cdd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/BililiveRecorder.Web.Tests/WebApiLogEventSinkTests.cs",
+      "bytes": 3206,
+      "sha256": "23a85b73734698ab17d7061531d6fe990e9f32c6c3c4d13564a4a282c3c09c5f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/LICENSE",
+      "bytes": 35823,
+      "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/README.md",
+      "bytes": 32,
+      "sha256": "36e803acb912f7270fb1f3b51e3334927ed3ebc7bfd4f74008db944a230349a0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Amf/Json.Output_i1.verified.txt",
+      "bytes": 1064,
+      "sha256": "d510bc76702d72d0480f44ad0be9dba5bb8a50f88b88d43cee3ae620a56bb555",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Amf/Json.Output_i2.verified.txt",
+      "bytes": 164,
+      "sha256": "0ea2982b389a4faf541ba5f8c0142232358fef25e113fd18abf761290885c262",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p1-brec_legacy-20210309-double_audio_header.xml.verified.txt",
+      "bytes": 126831,
+      "sha256": "0d6e399163b9bab1469bb47c14b93700fa612ff62f6387e23edfe579f2c39118",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p1-mock-20211120-metadata_with_null.xml.verified.txt",
+      "bytes": 59038,
+      "sha256": "1ce43cedc935f7188022f49b970acccdc6fe9bbea3109a775e7c0222c983e9f4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p1-mock-20211120-no_metadata.xml.verified.txt",
+      "bytes": 58479,
+      "sha256": "36143f35096e68030d6f7bde8104f5a6224ebd7eb5f4e9e7f5cfb09c6bbb1ed4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p2-mock-20210310-same_header_audio.xml.verified.txt",
+      "bytes": 155904,
+      "sha256": "bd82ef16b26d31e830d5c2015b4d460a8e50ce9fbf016fba32ec57bf2c50a9dc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p2-mock-20210310-same_header_both.xml.verified.txt",
+      "bytes": 155904,
+      "sha256": "bd82ef16b26d31e830d5c2015b4d460a8e50ce9fbf016fba32ec57bf2c50a9dc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p2-mock-20210310-same_header_video.xml.verified.txt",
+      "bytes": 155904,
+      "sha256": "bd82ef16b26d31e830d5c2015b4d460a8e50ce9fbf016fba32ec57bf2c50a9dc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p3-brec_std-20220829-30s_timestamp_jump.xml.verified.txt",
+      "bytes": 448153,
+      "sha256": "8f46a0000de6f798b96e34f62399aa3bbbb5dd8e09b89919a3f4db482f1c8289",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p3-mock-20210310-change_header_audio.xml.verified.txt",
+      "bytes": 156640,
+      "sha256": "1da5cad3df1ac964b069c174dd24a0b2d1127fe594c3156a268392e75e50a91e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p3-mock-20210310-change_header_both.xml.verified.txt",
+      "bytes": 156652,
+      "sha256": "36212cce86c8dd4ee963f13cc119fad2ad2ad9741abb31b760aa7457a5130407",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p3-mock-20210310-change_header_video.xml.verified.txt",
+      "bytes": 156642,
+      "sha256": "83875cd11df39dcf26d97054df85d07be0a71deecb27e21225a36db6200eed37",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p3-mock-20210310-multiple_headers.xml.verified.txt",
+      "bytes": 9116,
+      "sha256": "590cf0b479329522816ff43a953c6de61e443f26fbd3d82973e1b5dac7954b24",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p4-brec_legacy-20210309-pk_agora_ts_offset.xml.verified.txt",
+      "bytes": 46163,
+      "sha256": "ea61abaedf1c213206d5e6dd0729a58454493943323bd59697b59ddc97fd817d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Bad/TestBadSamples.Output_path=p4-brec_legacy-20210313-issue_171.xml.verified.txt",
+      "bytes": 64928,
+      "sha256": "8369b7dece624a059b80da7c23532578da8d9f4b2ce0540347c8564d91b91af1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/FlvGrouping/GroupingFromFlv.Output_path=sample.flv.verified.txt",
+      "bytes": 136662,
+      "sha256": "63c9319fbe4cd92aa505357b843fcbcd0cf94c4d6de1487c1589ea85c674b129",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/FlvParser/XmlOutput.Output_path=sample.flv.verified.xml",
+      "bytes": 72883,
+      "sha256": "33921712ecb5bdaf7677d39f63173694f0758a2722d37157af075a801f41e121",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/StandardTest.Output_path=obs-fps10.xml.verified.xml",
+      "bytes": 105105,
+      "sha256": "7adbfbe51ee8911178bf74c02be4754781c218beb2eb715de8a041b3daa1e257",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/StandardTest.Output_path=obs-fps2997.xml.verified.xml",
+      "bytes": 152028,
+      "sha256": "842b060f84125abb2a750bf86bad4aa45bc547ecb93f3dadabee0105da1930fb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/StandardTest.Output_path=obs-fps30-end_with_keyframe.brec.xml.verified.xml",
+      "bytes": 117497,
+      "sha256": "967ce40904a6973f604cb61e8f2cc2a7e9244e775a7d9ec7dc34b67119320317",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/StandardTest.Output_path=obs-fps30.xml.verified.xml",
+      "bytes": 155813,
+      "sha256": "df2baa2f38a2144a9a011f4e821ecc94c87355068de48f1b320458821282893c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/StandardTest.Output_path=obs-fps60.xml.verified.xml",
+      "bytes": 165707,
+      "sha256": "88b3f91c791da0d8e9a64959344aa4338870d9ea87c6cc675009b9c8fa2eb64e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/WithOffsetTest.Output_path=obs-fps10.xml.verified.xml",
+      "bytes": 105105,
+      "sha256": "7adbfbe51ee8911178bf74c02be4754781c218beb2eb715de8a041b3daa1e257",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/WithOffsetTest.Output_path=obs-fps2997.xml.verified.xml",
+      "bytes": 152028,
+      "sha256": "842b060f84125abb2a750bf86bad4aa45bc547ecb93f3dadabee0105da1930fb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/WithOffsetTest.Output_path=obs-fps30-end_with_keyframe.brec.xml.verified.xml",
+      "bytes": 117497,
+      "sha256": "967ce40904a6973f604cb61e8f2cc2a7e9244e775a7d9ec7dc34b67119320317",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/WithOffsetTest.Output_path=obs-fps30.xml.verified.xml",
+      "bytes": 155813,
+      "sha256": "df2baa2f38a2144a9a011f4e821ecc94c87355068de48f1b320458821282893c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/Expectations/Good/WithOffsetTest.Output_path=obs-fps60.xml.verified.xml",
+      "bytes": 165707,
+      "sha256": "88b3f91c791da0d8e9a64959344aa4338870d9ea87c6cc675009b9c8fa2eb64e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/README.md",
+      "bytes": 1106,
+      "sha256": "0f16d7534c210bfd258dc69d362f2fcdfd979a788c88b15fc9645c2f7ca5bc5d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p1-brec_legacy-20210309-double_audio_header.xml",
+      "bytes": 137196,
+      "sha256": "f60dd13915e3bb0d8f4ab5b9a04794e9e185ee3ed07b07d838469dad1936d7f0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p1-mock-20211120-metadata_with_null.xml",
+      "bytes": 66623,
+      "sha256": "fe6091922c112cb01b4385c08ddb4606278a6421a4e17a8780762ef6e2ff650e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p1-mock-20211120-no_metadata.xml",
+      "bytes": 65825,
+      "sha256": "5413d5cc0ef1fd7ce336acffc715e3446d13cf2fde21d6ebec22e5eb7497b197",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p2-mock-20210310-same_header_audio.xml",
+      "bytes": 176390,
+      "sha256": "bf4714174340377a9a2a8c7c442c411d611a3a1932fe524060f62f8446ae43e8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p2-mock-20210310-same_header_both.xml",
+      "bytes": 176615,
+      "sha256": "b98837cafe718c5a2297221afab34bc5dfd51130f97930500296aa9e2d871554",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p2-mock-20210310-same_header_video.xml",
+      "bytes": 176484,
+      "sha256": "ed82ec6a09dff316ae7ef5a067f8cf871585253f8247cfbe4906b9c9de375aa9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p3-brec_std-20220829-30s_timestamp_jump.xml",
+      "bytes": 420886,
+      "sha256": "ccde6a394dc87838046eba40c1c25bf8531e0397bdd12173e352944d53a8a4ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p3-mock-20210310-change_header_audio.xml",
+      "bytes": 176400,
+      "sha256": "2bf3f94f0fa675b1cd73e05f94751da44ee1336d2fefa57748af8dc2481567b0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p3-mock-20210310-change_header_both.xml",
+      "bytes": 176637,
+      "sha256": "a9e5e83e96daa100e4cb8f5d780c25d395c89c3346c9f91b684047a5aadfa6ed",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p3-mock-20210310-change_header_video.xml",
+      "bytes": 176496,
+      "sha256": "e2557e62892ceca0ba10f16d78c0aba2baec7428124a325f77fd900a75e4e259",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p3-mock-20210310-multiple_headers.xml",
+      "bytes": 9849,
+      "sha256": "211a3df7ce7bcdab9602fa2037ee798be861feffab19f76b6eb17920332330e5",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Bad/p4-brec_legacy-20210309-pk_agora_ts_offset.xml",
+      "bytes": 950911,
+      "sha256": "b4b0da8c105852884d0e7a7052b67e3982bf66816bb80ab3ec02e1031607f91d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Good/obs-fps10.xml",
+      "bytes": 122585,
+      "sha256": "b9da0fe81c940a6f3d4c4bfcdae2358019baf7d8d0121c1055eb6b40df77d5e0",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Good/obs-fps2997.xml",
+      "bytes": 171935,
+      "sha256": "1d7afe9eaaeac34c24f6661fc30323d45956f41719a88ca9d2680fc99576caba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Good/obs-fps30-end_with_keyframe.brec.xml",
+      "bytes": 132834,
+      "sha256": "401de6455fdec837e4b1de08b8122d2615d363864a5db82b2954ac6852d10f69",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Good/obs-fps30.xml",
+      "bytes": 176199,
+      "sha256": "3e2fa4b904634bc299f5f21148f20c860a2983ee586724f38c638b24c63a9590",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "test/data/flv/TestData/Good/obs-fps60.xml",
+      "bytes": 184208,
+      "sha256": "5f90c3e49bbe02b4d4f02577ecebf62516f4a047fbab811f22f97f11bf354b04",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/build.ps1",
+      "bytes": 316,
+      "sha256": "9d2800e2e62136078bfc658e093b5d55119e5942d037bd1f36e82b193371b8b8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/build.sh",
+      "bytes": 365,
+      "sha256": "ddb5c8c7eefedc58c54d5a1a867e94b4e577be83f0ee1172310949feaf69aa09",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.editorconfig",
+      "bytes": 242,
+      "sha256": "3fbff62c679cf7e8ca1b1f7ec613a3aecea21ab6a6b6c5822f009b8cfbc0573e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.gitattributes",
+      "bytes": 129,
+      "sha256": "a7ab7428d710483a3f81741fbb0fd63ac92774b85ece60a3f5a603980e4038f4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/Dockerfile.githubactions",
+      "bytes": 128,
+      "sha256": "e4de6fcd090a6c8740864d028522395f46eebd66917bbdadc6c703a54bf0c607",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/default.conf",
+      "bytes": 229,
+      "sha256": "ad18597e6462655f587b899b2b0a140394f50710b7b1bd2698ab3b2fa9f9db82",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/workflows/build.yml",
+      "bytes": 2780,
+      "sha256": "59056fd7019a06c23d97f64e7963bea774d589365d30287d61a51bdb1c7f3a5f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/workflows/codeql.yml",
+      "bytes": 2191,
+      "sha256": "86018d3e748fe64df9929deb051a837e1efff3109ca82eba504b18e948e67d6b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/workflows/pages.yml",
+      "bytes": 1309,
+      "sha256": "59086516e56b7a664bcebd62cf27ce5ba4d1a4438b9f2765308130a1d8cd6e36",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/workflows/release.yml",
+      "bytes": 3140,
+      "sha256": "ca9877f015722220b9ea1ba359420946d32c5f6c3b1ed4b0977c5ea67d8855ba",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.github/workflows/update-copyright-years.yml",
+      "bytes": 492,
+      "sha256": "edf6a47fb37157393a51c08887da4600d78b986834d494bac38de38ac8a05f9e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.gitignore",
+      "bytes": 289,
+      "sha256": "8b40aa6380441c6e44d85bed8d9471970dd6db0212a1530944244c869b5bccdb",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.nojekyll",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/.vscode/extensions.json",
+      "bytes": 46,
+      "sha256": "9c94b6370374db665743882f9db4d407d752838791de822585f237cd42b78de4",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/Dockerfile",
+      "bytes": 270,
+      "sha256": "56a755a964018ae9a59372cb3ff04721d7036b9ea585a8944f966f64d19358e6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/LICENSE",
+      "bytes": 35777,
+      "sha256": "006442e7c12e5e9de7535d9937f575e3fa3a5b8666bd4a4740ad2986a081eb51",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/README.md",
+      "bytes": 1985,
+      "sha256": "8213518a83a0de67fb01aaf9439391d91a9bb957766377139ca5e71ff38b3909",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/eslint.config.mjs",
+      "bytes": 608,
+      "sha256": "8bf57401cd08b5f281066c22497bc28d34ea31c411559ad14edb3a4433742d4c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/index.html",
+      "bytes": 354,
+      "sha256": "63d7cb516ff8c80e41a1d49bd27a9c3c9983f4983384d773ed3d3ea27071657f",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/package-lock.json",
+      "bytes": 170253,
+      "sha256": "6600e079bd95d9f07d597ba1cab2c17859357ad53d3051a22252eeddcab78a07",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/package.json",
+      "bytes": 989,
+      "sha256": "0b75272b6949d40941e5d47a3f20daff18f99578029a3871657c47fd7d651d37",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/public/favicon.ico",
+      "bytes": 16393,
+      "sha256": "54719271c8a5a8934aa764b83914999705087dc203738906e0130558bc231d24",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/public/favicon.svg",
+      "bytes": 2329,
+      "sha256": "3f9b750563ba09d4cafc120baec571d82e5175c5ba470e9dfa7104db5c52bcb8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/App.vue",
+      "bytes": 1878,
+      "sha256": "b34d34aefb2f3657be6c34be7087499dd965c59880bd9a383f6f937144a0101b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/assets/funthing.png",
+      "bytes": 19622,
+      "sha256": "bc6b66cc5185597055377de0f438885802ea3402b506bb152bb001d9a6cce7dd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/ArtPlayer.vue",
+      "bytes": 1600,
+      "sha256": "68f0d7640c7fae0453e274b85bb99231c7c103de63f6034446c3115d6319fb8b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/FileItem.vue",
+      "bytes": 3458,
+      "sha256": "3a24d2abbb48f02515dca18f0b55b956375768c7e421234001a28f68cdd6894b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/FileNamePreviewModal.vue",
+      "bytes": 4035,
+      "sha256": "7a45ffaf97605803e2b3f8a405e8fafd54f21e988ae4286797d5f4df4dd39d49",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/GlobalProvider.vue",
+      "bytes": 2338,
+      "sha256": "0a9a1248af16c6360605158057f44b6a85b360353c0dde208a4dd64796cda41c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/LogDetail.tsx",
+      "bytes": 359,
+      "sha256": "4d7dbfc5c47a86b8bf3bc20697b921560ae0e55eb5b246f6e787dd1db65f6de2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/LogLine.tsx",
+      "bytes": 3260,
+      "sha256": "b3e9bf91d54b505b1b2bcd7c7d2a80012995cd80636ec21258a251c44c48c43a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/NetworkInterfaceInput.vue",
+      "bytes": 4656,
+      "sha256": "4fb2f81770609088295024f5e4942eeaac7a718d191d3b2a49f7b22b66ff530c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/OptionalInput.vue",
+      "bytes": 4359,
+      "sha256": "3a49b60b2b2bab39fec35951fa2fac6248126989bb2d2e45d40c5d2618777b7a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/RoomCard.vue",
+      "bytes": 12104,
+      "sha256": "d33a4597d088485dce613738a5ecf28c3a3884fba9bc697f53d3b87a639a99de",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/RoomSettingModal.vue",
+      "bytes": 8871,
+      "sha256": "483fc0e2af3c2fef0c55faebff503610cd6e184acb2475ee235a0cc9201dacf3",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/ServerOption.vue",
+      "bytes": 3699,
+      "sha256": "d62fb07cfec6512ee61ec376b815846db28d5401dcc5efbf52808bf4cd441f8b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/SideMenu.vue",
+      "bytes": 5955,
+      "sha256": "449dd662d1b0562c23cdf61aac7296f6b2857d73fb81346140ce80a07cd0c74d",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/TopBar.vue",
+      "bytes": 846,
+      "sha256": "5ad2c9edb4191df1a45f35dc2c06c1ffd60c6fd719639c47a343b2e3c0cc61d2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/UpdateNotifier.vue",
+      "bytes": 5017,
+      "sha256": "6011880949e56a02e4e84932fda0081f59fab6f5c4f5f30cf266daf850e06c6c",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/components/VersionTag.vue",
+      "bytes": 2825,
+      "sha256": "e8b944daeb443abe1f8324a8dbf586f45d839b99368dcd11a8e103eddd76d9bc",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/const.ts",
+      "bytes": 504,
+      "sha256": "5f6bf51fcf13e3e1c3a299dde472a0544bee8693ba2f7f427f7930a04836ecab",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/env.d.ts",
+      "bytes": 629,
+      "sha256": "00b1b6cda970fb7a3e2b0f32ebc29031614893e34baddff952f2c8b5b39235db",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/main.ts",
+      "bytes": 137,
+      "sha256": "325537301b01aaf4089dbbbcefff19dd5e2a2e5624c8d6a79a31c9f354ea1543",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/router.ts",
+      "bytes": 3030,
+      "sha256": "1ec4cac9263cdd24fee34d62d30a0a236f2c2b8900c1915e71991d2961c7436b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/RecorderController.ts",
+      "bytes": 5786,
+      "sha256": "7596beea197610931a2547dd1e9cc05ef4ee20d15f9093a6cd14b8c8c12f57ef",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/ServerIconGenerator.ts",
+      "bytes": 1175,
+      "sha256": "eb6da6985d95aba0b4a0c0c03342e8425b483f70b0cc4b4d6f09f02d2e53c998",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/api.ts",
+      "bytes": 16765,
+      "sha256": "0b4e95d95ec80bd74c5dca5b52d9ac5e9ecb6f57262dcd87f4728abd53e9be87",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/color.ts",
+      "bytes": 490,
+      "sha256": "46793daa9fc6abda95232bcc723897c1f5c47867083b801506b517f463c4a137",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/unitConvert.ts",
+      "bytes": 1287,
+      "sha256": "ebc50ed141e0e8b9c8ab3c794b302e31d653a0418846d8584d10ad275396e54e",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/utils/version.ts",
+      "bytes": 2491,
+      "sha256": "9a11014dabc8c1e52bf6ac9451433655edb919298e1f47a827f1b0ed7336b28a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/About.vue",
+      "bytes": 4708,
+      "sha256": "75288367518404ec9ffff45fb623c0973403e18a3e712ac6f9beaf3f0d154ab9",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/Blank.vue",
+      "bytes": 40,
+      "sha256": "9460e4b395437e490249344d22518fa9091d69d70147e7ca7aae1c38f109edcf",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/ComponentsDebug.vue",
+      "bytes": 98,
+      "sha256": "b6913c4671ceb9151c969c9a89b12e1f2c2ab488ce384e857a528aa4b7ad9aa6",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/Home.vue",
+      "bytes": 11004,
+      "sha256": "e09893a8f16e226609bdae53ccb1c4392e26cd70bdbdcd27cdc691099d27e53b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/Dashboard.vue",
+      "bytes": 6068,
+      "sha256": "cdc15084d952ddd7f2ed379b9cf1da121588f108f87d879f00b3d06f3c2092cd",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/FileBrowser.vue",
+      "bytes": 4891,
+      "sha256": "741c0845ece0318d2f7df9b811d42e0e35d0935dfca52674e221215d4a4753a8",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/LogViewer.vue",
+      "bytes": 8690,
+      "sha256": "337e92d4e3bfff8bea41476cf5ea8f3a32683517d9234b4ace0fbb1ca771b975",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/RoomList.vue",
+      "bytes": 19717,
+      "sha256": "513e9ccaa93b1920e875596032848ceaa71786a64d26f22ffe7645a650cafa01",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/SettingPage.vue",
+      "bytes": 22747,
+      "sha256": "f1a4a826914e6d03e979755f42fe0edd356c0b48a22560915030f6c5d53d9d49",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/recorder/VideoPlayer.vue",
+      "bytes": 4730,
+      "sha256": "6b683b4fe40ebe4813da2200b069792c8f789a561e5cbe128377cc9058a34b0b",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/toolbox/FindSameRoom.vue",
+      "bytes": 5827,
+      "sha256": "c851773abd02fee49fea820c80ec6666543badde65038907bfd5ff2ad1756be1",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/src/views/toolbox/ToolboxHome.vue",
+      "bytes": 503,
+      "sha256": "34d1db09f2c451a1b193a17fa6ee44c3a0833a250af2ce0f1cb91f52c889306a",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/tsconfig.json",
+      "bytes": 650,
+      "sha256": "98e07a5b7ce891440b067c35ac1773fccbe0f7ec7a0eee42b62f81b298059fe2",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/tsconfig.node.json",
+      "bytes": 117,
+      "sha256": "74bd3e020ad7107e3ccc454a71747d26283ad31b73f602cebf1ab98fad6a45f7",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "webui/source/vite.config.ts",
+      "bytes": 1580,
+      "sha256": "0de64290e98a9fa4fca2fef4c0aa86e96da06fae1e40466b861ad882dd8f9875",
+      "origin": "tracked-upstream"
+    },
+    {
+      "path": "启动录播机.cmd",
+      "bytes": 132,
+      "sha256": "58fdff90edbb3e7079026eed7295148a24ae789f3fc4d8679cf632dea4c2f97b",
+      "origin": "project-entrypoint"
+    },
+    {
+      "path": "项目说明.md",
+      "bytes": 191,
+      "sha256": "987c539bd421a1eeab89bb34dfa0b45d18823c4f2cd6340677ab65033b0e4e84",
+      "origin": "project-entrypoint"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "BililiveRecorder.WPF/lib/miniffmpeg",
+      "reason": "Private/runtime/build/binary path excluded by source allowlist"
+    },
+    {
+      "path": "test/data/flv/Expectations/Amf/Binary.Output_i1.verified.bin",
+      "reason": "Private/runtime/build/binary path excluded by source allowlist"
+    },
+    {
+      "path": "test/data/flv/Expectations/Amf/Binary.Output_i2.verified.bin",
+      "reason": "Private/runtime/build/binary path excluded by source allowlist"
+    },
+    {
+      "path": "test/data/flv/Expectations/FlvWriter/Output.Output_path=sample.flv.verified.flv",
+      "reason": "Private/runtime/build/binary path excluded by source allowlist"
+    },
+    {
+      "path": "test/data/flv/TestData/Flv/sample.flv",
+      "reason": "Private/runtime/build/binary path excluded by source allowlist"
+    }
+  ]
+}

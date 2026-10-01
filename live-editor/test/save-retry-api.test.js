@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import net from 'node:net';
 import { execFileSync } from 'node:child_process';
 import { createApp } from '../server/index.js';
 import { Store } from '../server/store.js';
@@ -14,16 +13,9 @@ import { saveRetryFixture, collideSave } from './helpers/save-retry-fixture.js';
 // dev-env.ps1 places os.tmpdir() under the source .tools tree. Every Store and
 // HTTP listener here is isolated from the deployed recorder and its data.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bili-save-retry-'));
-async function availablePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve));
-  return port;
-}
 async function appFor(t, name) {
   const base = path.join(root, name);
-  const app = await createApp({automaticClean:false,preparation:false, port: await availablePort(), data: path.join(base, 'data'), projectRoot: base, noRecorder: true, compact: false, ffmpeg: 'must-not-launch', ffprobe: 'must-not-launch' });
+  const app = await createApp({automaticClean:false,preparation:false, port: 0, data: path.join(base, 'data'), projectRoot: base, noRecorder: true, compact: false, ffmpeg: 'must-not-launch', ffprobe: 'must-not-launch' });
   app.ingestor.stop();
   t.after(() => app.close());
   app.request = async (route, body, headers = {}) => {

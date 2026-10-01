@@ -1,7 +1,12 @@
-// The core keeps autoRecord (future broadcasts) separate from the user's
-// start/stop choice for this broadcast. Waiting rooms can therefore be armed.
+// The editor persists start/stop intent separately from automatic recording.
+export function roomAvailable(room, recorder) {
+  return room.platform === 'douyin'
+    ? !!recorder.douyinOnline
+    : !!(recorder.biliOnline ?? recorder.online);
+}
 export function roomRecordEnabled(room) {
-  return !!room.recording || (!!room.autoRecord && room.autoRecordForThisSession !== false);
+  return !!room.recording || (typeof room.recordingEnabled==='boolean'
+    ? room.recordingEnabled : !!room.autoRecord && room.autoRecordForThisSession !== false);
 }
 export function roomStatus(room) {
   if (room.recording) return '正在录制';

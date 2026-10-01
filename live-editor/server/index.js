@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
+import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { Ingestor } from './ingest.js';
 import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
@@ -13,7 +14,7 @@ import { DeletionMaintenance } from './deletion-maintenance.js';
 import { SessionDeletion } from './session-deletion.js';
 import { WaveformService } from './waveform.js';
 import { DensityService } from './density.js';
-import { Recorder, resolveRoom } from './recorder.js';
+import { MultiPlatformRecorder } from './multi-platform-recorder.js';
 import { directories, writableDirectory, openDirectory } from './directories.js';
 import { exportedJobFile } from './output-names.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
@@ -39,7 +40,7 @@ async function createManagedApp(options,runtime) {
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
   const waveform=new WaveformService(store,media),density=new DensityService(store);
   store.density=density;
-  const recorder=new Recorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port});
+  const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
   await media.recoverPendingSaves();
   const clients=new Set(); let closing=false,app,closePromise;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000});
@@ -47,7 +48,7 @@ async function createManagedApp(options,runtime) {
     ...options.preparationOptions,
     busyReason:()=>{
       if(closing)return 'foreground';
-      if(!options.noRecorder&&!recorder.online)return 'connection';
+      if(!options.noRecorder&&recorder.connectionPending)return 'connection';
       if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
       if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
       if(storage.busy)return 'compaction';
@@ -65,14 +66,14 @@ async function createManagedApp(options,runtime) {
     const preparing=!!preparation.active||!!store.get("SELECT session FROM preparation_jobs WHERE paused=0 AND status IN ('queued','preparing') LIMIT 1");
     const organising=ingestor.busy||storage.busy||deletingSessions.size>0||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1");
     const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
-    const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy;
+    const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy||!!recorder.douyin.polling;
     const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
     return {busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
   }
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
-  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.online,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction()};}
+  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -119,7 +120,7 @@ async function createManagedApp(options,runtime) {
         await recorder.event(await body(req));return json(res,{ok:true});
       }
       if(p==='/api/rooms'&&req.method==='POST'){
-        const input=await body(req);const result=await recorder.api('room',{roomId:await resolveRoom(input.url),autoRecord:input.autoRecord!==false});await recorder.poll();return json(res,result);
+        const result=await recorder.addRoom(await body(req));return json(res,result);
       }
       let match;
       if(p==='/api/preparation/settings'&&req.method==='POST'){
@@ -138,19 +139,18 @@ async function createManagedApp(options,runtime) {
         }
         return json(res,preparation.snapshot());
       }
-      if((match=/^\/api\/rooms\/(\d+)\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
-        const input=await body(req);if(match[2]==='stop')await recorder.stopRoom(Number(match[1]));
-        else if(match[2]==='remove')await recorder.removeRoom(Number(match[1]),input.confirmed);
-        else if(match[2]==='auto')await recorder.api(`room/${match[1]}/config`,{autoRecord:!!input.enabled});
-        else await recorder.api(`room/${match[1]}/start`,{});await recorder.poll();return json(res,{ok:true});
+      if((match=/^\/api\/rooms\/(\d+|douyin:\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
+        await recorder.action(match[1],match[2],await body(req));return json(res,{ok:true});
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(Object.keys(input).some(key=>!['exportDirectory','closeAction'].includes(key)))throw new Error('不支持的设置项。');
+        if(Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond'].includes(key)))throw new Error('不支持的设置项。');
         if('closeAction' in input)validateCloseAction(input.closeAction);
+        if('danmakuPerSecond' in input)validateChatRate(input.danmakuPerSecond);
         if('exportDirectory' in input)store.setting('export-directory',await writableDirectory(input.exportDirectory));
         if('closeAction' in input)store.setting('window-close-action',input.closeAction);
-        return json(res,{ok:true,paths:directories(store),closeAction:closeAction()});
+        if('danmakuPerSecond' in input){store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);}
+        return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)});
       }
       if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
       if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){
@@ -183,6 +183,7 @@ async function createManagedApp(options,runtime) {
         if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
         const from=Math.max(0,Number(url.searchParams.get('from')||0)),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),search=(url.searchParams.get('q')||'').slice(0,200);
         if(!Number.isFinite(from)||!Number.isFinite(to))throw new Error('时间范围无效。');
+        await store.chatRules.prepare(match[1]);
         return json(res,store.messages(match[1],from,to,search,url.searchParams.get('overlay')==='1'?3000:500));
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/signals$/.exec(p))&&req.method==='GET'){
@@ -212,10 +213,10 @@ async function createManagedApp(options,runtime) {
     }catch(e){if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
   });
   try{port=await listenLocal(server,port);}
-  catch(error){media.close();recorder.close();store.close();throw error;}
+  catch(error){media.close();await recorder.close();store.close();throw error;}
   port=server.address().port;recorder.editorPort=port;
   try{await media.recoverInterruptedExports();await runtime.publish(port);}
-  catch(error){media.close();recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
+  catch(error){media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
   ingestor.start();void media.work();if(options.preparation!==false)preparation.start();
   let nextTemporarySweep=0;
   const maintain=()=>{
@@ -243,7 +244,7 @@ async function createManagedApp(options,runtime) {
   },1000);
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
   app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();recorder.close();
+    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
@@ -256,6 +257,7 @@ async function createManagedApp(options,runtime) {
     await media.waitForSaves();
     await Promise.allSettled([...media.probes,...media.enqueues,...media.previews.values()].map(operation=>operation.done));
     await httpClosed;
+    await recorderClosed;
     while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
     store.close();
     await runtime.release();

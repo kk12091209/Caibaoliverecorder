@@ -6,7 +6,7 @@ import TimelineNavigator from './components/TimelineNavigator.vue';
 import TimelineMarker from './components/TimelineMarker.vue';
 import { signalWindow, viewWindow, windowPercent, visibleRange, panWindow, zoomWindow } from './timeline-signals.js';
 import appIcon from './assets/app-icon.png';
-import { roomRecordEnabled, roomStatus } from './room-status.js';
+import { roomAvailable, roomRecordEnabled, roomStatus } from './room-status.js';
 import { formatVideoTime as format, displayedSpan, markPreviewPosition } from './video-time.js';
 import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecordingInput, recordingTimeBounds } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
@@ -17,6 +17,7 @@ import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Sett
 const state=ref({sessions:[],rooms:[],jobs:[],recorder:{online:false,error:''},dataPath:'',paths:{},preparation:{enabled:true,items:[]}} );
 const selected=ref(null),detail=ref(null),edit=ref({revision:0,ranges:[],excluded:[],undo:[]});
 const roomUrl=ref(''),addingRoom=ref(false),notice=ref(''),noticeKind=ref('error'),saving=ref(false),connected=ref(false);
+const roomChoice=shallowRef(null),roomChoicePlatform=ref(''),roomChoiceError=ref('');
 const video=ref(null),previewUrl=ref(''),position=ref(0),previewBase=ref(0),isPlaying=ref(false),loading=ref(false),previewEnded=ref(false),scrubbing=ref(false);
 const previewVolume=ref(1),previewMuted=ref(false);
 try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
@@ -31,6 +32,8 @@ const jobDeleteRecordOnly=ref(false);
 const retrySaveTarget=ref(null),retrySaveDirectory=ref(''),retrySaveError=ref(''),retrySavingIds=ref([]),jobRetryErrors=ref({});
 const preparationBusyIds=ref([]),preparationErrors=ref({}),preparationSettingsBusy=ref(false),preparationSettingsError=ref(''),preparationEnabledDraft=ref(null);
 const closeActionBusy=ref(false),closeActionError=ref(''),closeActionDraft=ref(null);
+const chatRateBusy=ref(false),chatRateError=ref(''),chatRateDraft=ref(null);
+const chatRateValue=computed(()=>chatRateDraft.value??state.value.danmakuPerSecond??50);
 const positionMode=ref('video'),startDateText=ref(''),endDateText=ref('');
 const panelBreakpoint=window.matchMedia('(max-width: 1100px)'),compactBreakpoint=window.matchMedia('(max-width: 1440px)');
 const narrowLayout=ref(panelBreakpoint.matches),compactLayout=ref(compactBreakpoint.matches);
@@ -69,7 +72,7 @@ const deleteBlock=computed(()=>{
   if(s.archive_status==='running'||state.value.jobs.some(j=>j.session===s.id&&['queued','running','finalizing','saving','cancelling'].includes(j.status)))return '这份素材正在归档、导出或保存，请完成后再删除。';
   return '';
 });
-const modalTitle=computed(()=>({settings:'设置',export:exportScope.value==='full'?'导出完整素材':'导出选段','remove-room':'移除监控房间','delete-session':'删除已录制素材','delete-job':'删除导出任务','retry-save':'更换保存位置'})[modal.value]||'');
+const modalTitle=computed(()=>({settings:'设置',export:exportScope.value==='full'?'导出完整素材':'导出选段','choose-room':'选择主播','remove-room':'移除监控房间','delete-session':'删除已录制素材','delete-job':'删除导出任务','retry-save':'更换保存位置'})[modal.value]||'');
 const activeSession=computed(()=>state.value.sessions.find(s=>s.id===selected.value)||detail.value);
 const preparationEnabled=computed(()=>state.value.preparation?.enabled!==false);
 const selectedPreparation=computed(()=>preparationFor(selected.value));
@@ -113,7 +116,7 @@ function parse(text){const values=String(text).split(':').map(Number);if(values.
 function date(text){return new Date(text).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function categoryPath(root,category){const value=String(root||'').replace(/[\\/]+$/,'');return value?value+'\\'+category:category;}
 function formatBytes(bytes){const size=Math.max(0,Number(bytes)||0);if(size<1024)return size+' 字节';const units=['KB','MB','GB','TB'],power=Math.min(4,Math.floor(Math.log(size)/Math.log(1024)));return (size/1024**power).toFixed(1)+' '+units[power-1];}
-function closeModal(){if(modalBusy.value)return;const kind=modal.value,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(jobId)void nextTick(()=>focusJob(jobId));}
+function closeModal(){if(modalBusy.value)return;const kind=modal.value,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(jobId)void nextTick(()=>focusJob(jobId));}
 function fullExportBlock(session){return session.status!=='finished'?'录制或整理完成后才能导出完整素材。':!(session.duration>0)?'这份素材暂时没有可导出的画面。':'';}
 function preparationFor(id){return state.value.preparation?.items?.find(item=>item.session===id);}
 function preparationStatus(entry){return ({queued:'等待预处理',preparing:'正在后台预处理',waiting:'暂缓预处理',paused:'预处理已暂停',ready:'预处理已完成',exported:'完整弹幕版已导出',error:'预处理未完成'})[entry?.status]||'尚未预处理';}
@@ -317,7 +320,22 @@ async function choose(id){
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
 async function save(){if(saving.value||!selectionReady.value)return false;const id=selected.value,version=selectionGeneration;saving.value=true;try{const result=await api(`sessions/${id}/edit`,{...edit.value,filterLottery:true});if(selected.value===id&&version===selectionGeneration){edit.value=result;return true;}return false;}catch(e){tell(e.message);if(selected.value===id&&version===selectionGeneration){const result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration)edit.value=result.edit;}return false;}finally{saving.value=false;}}
-async function addRoom(){if(!roomUrl.value.trim())return;addingRoom.value=true;try{await api('rooms',{url:roomUrl.value});roomUrl.value='';tell('直播间已添加，开播后自动录制。','success');await refresh();}catch(e){tell(e.message);}finally{addingRoom.value=false;}}
+async function addRoom(){
+  if(addingRoom.value||modal.value||!roomUrl.value.trim())return;const entered=roomUrl.value.trim();addingRoom.value=true;
+  try{
+    const result=await api('rooms',{url:entered});if(disposing)return;
+    if(result.needsSelection){roomChoice.value={...result,entered};roomChoicePlatform.value='';roomChoiceError.value='';modal.value='choose-room';await nextTick();document.querySelector('.room-choice-options input')?.focus();return;}
+    if(roomUrl.value.trim()===entered)roomUrl.value='';tell('直播间已添加，开播后自动录制。','success');await refresh();
+  }catch(e){if(!disposing)tell(e.message);}finally{addingRoom.value=false;}
+}
+async function confirmRoomChoice(){
+  const candidate=roomChoice.value?.candidates.find(room=>room.platform===roomChoicePlatform.value);if(modalBusy.value||!candidate)return;
+  const entered=roomChoice.value.entered;modalBusy.value=true;roomChoiceError.value='';
+  try{
+    await api('rooms',{url:candidate.url});if(disposing)return;
+    if(roomUrl.value.trim()===entered)roomUrl.value='';modal.value='';roomChoice.value=null;roomChoicePlatform.value='';tell('直播间已添加，开播后自动录制。','success');await refresh();
+  }catch(e){if(!disposing)roomChoiceError.value=e.message;}finally{modalBusy.value=false;}
+}
 async function roomAction(room,action,data={}){if(roomBusyIds.value.includes(room.roomId))return;roomBusyIds.value.push(room.roomId);try{await api(`rooms/${room.roomId}/${action}`,data);await refresh();}catch(e){tell(e.message);}finally{roomBusyIds.value=roomBusyIds.value.filter(id=>id!==room.roomId);}}
 function containsTime(ranges,time){for(let i=0;i<ranges.length;i++)if(time>=ranges.start(i)&&time<ranges.end(i)-.05)return true;return false;}
 async function playFrom(time,play=true){
@@ -382,7 +400,8 @@ async function loadOverlay(){
   try{const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&overlay=1`);if(request===overlayRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(overlayFeed.value,result))overlayFeed.value=result;overlayWindow=window;}}
   catch{}finally{if(request===overlayRequest)overlayBusy=false;}
 }
-function openSettings(){const current=state.value.paths?.exports||'';savedExportDirectory.value=current;exportDirectory.value=current;closeActionError.value='';modal.value='settings';}
+function openSettings(){const current=state.value.paths?.exports||'';savedExportDirectory.value=current;exportDirectory.value=current;closeActionError.value='';chatRateError.value='';chatRateDraft.value=null;modal.value='settings';}
+async function setChatRate(value){if(chatRateBusy.value)return;chatRateBusy.value=true;chatRateDraft.value=Number(value);chatRateError.value='';try{const result=await api('settings',{danmakuPerSecond:Number(value)});state.value={...state.value,danmakuPerSecond:result.danmakuPerSecond};await refresh();invalidateMessages();invalidateSignals(true);await Promise.all([loadMessages(true),loadOverlay()]);}catch(e){chatRateError.value=e.message;}finally{chatRateDraft.value=null;chatRateBusy.value=false;}}
 async function setCloseAction(value){if(closeActionBusy.value)return;closeActionBusy.value=true;closeActionDraft.value=value;closeActionError.value='';try{const result=await api('settings',{closeAction:value});state.value={...state.value,closeAction:result.closeAction};await refresh();}catch(e){closeActionError.value=e.message;}finally{closeActionDraft.value=null;closeActionBusy.value=false;}}
 function openExport(){if(!selected.value||!selectedRanges.value.length){tell('请先勾选至少一个选段。');return;}exportScope.value='clips';exportTarget.value={id:selected.value,title:activeSession.value?.title};exportRanges.value=selectedRanges.value.map(r=>({start:r.start,end:r.end}));exportExcluded.value=edit.value.excluded.length;exportMode.value='dual';exportDirectory.value=state.value.paths?.exports||'';modal.value='export';}
 function openFullExport(session){const latest=state.value.sessions.find(s=>s.id===session.id),blocked=latest?fullExportBlock(latest):'素材已被删除。';if(blocked){tell(blocked);return;}closeContext();exportScope.value='full';exportTarget.value={id:latest.id,title:latest.title};exportRanges.value=[];exportExcluded.value=0;exportMode.value='dual';exportDirectory.value=state.value.paths?.exports||'';modal.value='export';}
@@ -404,26 +423,27 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
   <div class="app-shell">
     <header class="topbar">
       <div class="brand"><img class="brand-icon" :src="appIcon" alt="" width="30" height="30"/><strong>菜播·录包机</strong></div>
-      <div class="top-actions"><button class="button subtle panel-toggle" aria-label="切换素材栏" @keydown.stop :aria-expanded="libraryVisible" aria-controls="library-panel" title="展开或收起直播间与素材栏" @click="libraryPreference=!libraryVisible"><Film :size="16"/><span>素材</span></button><button class="button subtle panel-toggle" aria-label="切换弹幕栏" @keydown.stop :aria-expanded="danmakuVisible" aria-controls="danmaku-panel" title="展开或收起弹幕列表" @click="danmakuPreference=!danmakuVisible"><Radio :size="16"/><span>弹幕</span></button><span class="core-status" :title="state.recorder.error"><i :class="{online:state.recorder.online}"/>{{ state.recorder.online?'录制核心在线':'录制核心未连接' }}</span><button class="button subtle" @click="openSettings"><Settings :size="16"/><span>设置</span></button></div>
+      <div class="top-actions"><button class="button subtle panel-toggle" aria-label="切换素材栏" @keydown.stop :aria-expanded="libraryVisible" aria-controls="library-panel" title="展开或收起直播间与素材栏" @click="libraryPreference=!libraryVisible"><Film :size="16"/><span>素材</span></button><button class="button subtle panel-toggle" aria-label="切换弹幕栏" @keydown.stop :aria-expanded="danmakuVisible" aria-controls="danmaku-panel" title="展开或收起弹幕列表" @click="danmakuPreference=!danmakuVisible"><Radio :size="16"/><span>弹幕</span></button><span class="core-status" :title="state.recorder.error"><i :class="{online:state.recorder.online}"/>{{ state.recorder.online?'录制服务就绪':'录制服务未连接' }}</span><button class="button subtle" @click="openSettings"><Settings :size="16"/><span>设置</span></button></div>
     </header>
     <div class="workspace" :class="{'library-collapsed':!libraryVisible,'danmaku-collapsed':!danmakuVisible}">
       <aside id="library-panel" v-show="libraryVisible" class="library">
         <button v-if="pendingCleanup.length" class="button subtle" @click="openSettings">有素材尚未清理完成 · 查看</button>
         <section class="room-section"><h2><Radio :size="17"/>直播间</h2>
-          <form class="room-form" @submit.prevent="addRoom"><input v-model="roomUrl" aria-label="B站直播间链接" placeholder="添加 B 站直播间"/><button class="button primary small" type="submit" :disabled="addingRoom||!state.recorder.online"><LoaderCircle v-if="addingRoom" class="spin" :size="15"/><span v-else>添加</span></button></form>
+          <form class="room-form" @submit.prevent="addRoom"><input v-model="roomUrl" aria-label="直播间链接或房间号" placeholder="直播链接或房间号" :disabled="addingRoom"/><button class="button primary small" type="submit" :disabled="addingRoom||!state.recorder.online"><LoaderCircle v-if="addingRoom" class="spin" :size="15"/><span v-else>添加</span></button></form>
           <p v-if="!state.recorder.online" class="room-offline" role="status">{{ state.recorder.error || '正在连接录制服务…' }}<span>连接恢复后会自动启用添加按钮，可先填写直播间链接。</span></p>
           <div v-if="!state.rooms.length" class="rail-empty">添加房间号或直播间链接<br/>开播后自动录制</div>
           <article v-for="room in state.rooms" :key="room.roomId" class="room-item">
-            <div class="room-title"><i :class="['live-dot',{online:room.recording}]"/><strong>{{ room.name||`直播间 ${room.roomId}` }}</strong><button class="icon-button remove-room" :aria-label="'移除监控：'+(room.name||room.roomId)" title="移除监控房间" :disabled="!state.recorder.online" @click="requestRemove(room)"><X :size="15"/></button></div>
-            <p>{{ roomStatus(room) }} · {{ room.roomId }}</p>
-            <div class="room-controls"><label><input type="checkbox" :checked="room.autoRecord" :disabled="!state.recorder.online||roomBusyIds.includes(room.roomId)" @change="roomAction(room,'auto',{enabled:$event.target.checked})"/>自动录制</label><button class="text-button" :disabled="!state.recorder.online||roomBusyIds.includes(room.roomId)" @click="roomAction(room,roomRecordEnabled(room)?'stop':'start')">{{ roomRecordEnabled(room)?'停止':'开始' }}</button></div>
+            <div class="room-title"><i :class="['live-dot',{online:room.recording}]"/><strong>{{ room.name||`直播间 ${room.webRid||room.roomId}` }}</strong><button class="icon-button remove-room" :aria-label="'移除监控：'+(room.name||room.roomId)" title="移除监控房间" :disabled="!roomAvailable(room,state.recorder)" @click="requestRemove(room)"><X :size="15"/></button></div>
+            <p :title="room.error||room.chatError">{{ roomStatus(room) }} · {{ room.platform==='douyin'?'抖音':'B站' }} {{ room.webRid||room.roomId }}</p>
+            <p v-if="room.error||room.chatError" class="room-offline" role="status">{{ room.error||room.chatError }}</p>
+            <div class="room-controls"><label><input type="checkbox" :checked="room.autoRecord" :disabled="!roomAvailable(room,state.recorder)||roomBusyIds.includes(room.roomId)" @change="roomAction(room,'auto',{enabled:$event.target.checked})"/>自动录制</label><button class="text-button" :disabled="!roomAvailable(room,state.recorder)||roomBusyIds.includes(room.roomId)" @click="roomAction(room,roomRecordEnabled(room)?'stop':'start')">{{ roomRecordEnabled(room)?'停止':'开始' }}</button></div>
           </article>
         </section>
         <section class="recording-section"><div class="section-heading"><h2><Film :size="17"/>录像素材</h2></div>
           <div v-if="!state.sessions.length" class="rail-empty">录制开始后，素材会出现在这里。</div>
           <button v-for="session in state.sessions" :key="session.id" class="session-item" :class="{selected:selected===session.id}" @click="choose(session.id)" @contextmenu.prevent="showContext($event,session)" @keydown.shift.f10.prevent="showContext($event,session)" @keydown.context-menu.prevent="showContext($event,session)" title="右键管理素材"><Film :size="20"/><span><strong>{{ session.title }}</strong><small>{{ date(session.created) }}</small><span class="session-meta"><i v-if="session.status==='recording'" class="live-dot online"/>{{ statusText(session.status) }} · {{ format(session.duration) }}</span></span></button>
         </section>
-        <footer class="library-credit"><p>软件作者：瞌睡小菜包</p><p>技术支持：用一句话让豆包</p><p><a href="https://space.bilibili.com/3546729402076115" @click.prevent="openAuthorPage">联系我们</a></p></footer>
+        <footer class="library-credit"><p>软件作者：瞌睡小菜包</p><p>技术支持：藤椒麦旋风</p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">联系我们</a></p></footer>
       </aside>
       <main class="editor">
         <div class="editor-heading"><div><Film :size="21"/><h1>{{ activeSession?.title||'直播剪辑工作台' }}</h1><span v-if="activeSession?.status==='recording'" class="recording-label"><i class="live-dot online"/>录制中</span></div></div>
@@ -492,7 +512,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
       </main>
       <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>弹幕</h2><button class="icon-button" title="撤销最近一次排除" aria-label="撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="search-input"><Search :size="17"/><input v-model="query" aria-label="搜索弹幕" placeholder="搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>跟随播放位置</label></div><div class="danmaku-list"><div v-if="!visibleMessages.length" class="danmaku-empty"><Radio :size="28"/><strong>{{ query?'没有匹配的弹幕':'这里会显示录制的弹幕' }}</strong><span>{{ selected?'弹幕会随录像持续更新':'选择录像后查看和编辑' }}</span></div><div v-for="message in visibleMessages" :key="message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1}"><button class="message-content" @click="playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text">{{ message.text }}</span></button><button class="icon-button" :aria-label="`${excluded.has(message.id)?'恢复':'删除'}弹幕：${message.text}`" :title="excluded.has(message.id)?'恢复到剪辑':'从剪辑中排除，保留原始弹幕'" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></div><div class="danmaku-footer">已排除 {{ edit.excluded.length }} 条 · 原始弹幕保留</div></aside>
     </div>
-    <footer class="statusbar"><span><i :class="['live-dot',{online:connected}]"/>剪辑不改动原始录像和弹幕</span><span>{{ saving?'正在保存剪辑…':selected?'剪辑自动保存':'暂时仅支持 B 站' }}</span></footer>
+    <footer class="statusbar"><span><i :class="['live-dot',{online:connected}]"/>剪辑不改动原始录像和弹幕</span><span>{{ saving?'正在保存剪辑…':selected?'剪辑自动保存':'支持 B 站、抖音' }}</span></footer>
     <div v-if="notice" class="toast" :class="noticeKind" role="status"><Check v-if="noticeKind==='success'" :size="18"/><AlertCircle v-else :size="18"/><span>{{ notice }}</span><button class="icon-button" aria-label="关闭提示" @click="notice=''"><X :size="16"/></button></div>
     <div v-if="sessionMenu" class="session-context" role="menu" aria-label="素材操作" :style="{left:sessionMenu.x+'px',top:sessionMenu.y+'px'}" @pointerdown.stop><button role="menuitem" :disabled="!!fullExportBlock(sessionMenu.session)" :title="fullExportBlock(sessionMenu.session)" @click="openFullExport(sessionMenu.session)"><Download :size="16"/>导出完整素材</button><p v-if="fullExportBlock(sessionMenu.session)" class="context-hint">{{ fullExportBlock(sessionMenu.session) }}</p><button role="menuitem" :disabled="!!preparationActionBlock(sessionMenu.session)" :title="preparationActionBlock(sessionMenu.session)" @click="actPreparation(sessionMenu.session)"><Pause v-if="preparationAction(preparationFor(sessionMenu.session.id))==='pause'" :size="16"/><Check v-else-if="preparationFor(sessionMenu.session.id)?.status==='ready'" :size="16"/><Play v-else :size="16"/>{{ preparationActionLabel(preparationFor(sessionMenu.session.id),true) }}</button><p v-if="!preparationEnabled&&preparationAction(preparationFor(sessionMenu.session.id))!=='pause'" class="context-hint">请在设置中开启后台预处理。</p><button role="menuitem" class="context-danger" @click="requestDelete(sessionMenu.session)"><Trash2 :size="16"/>删除素材…</button></div>
     <div v-if="jobMenu" class="session-context job-context" role="menu" aria-label="导出任务操作" tabindex="-1" :style="{left:jobMenu.x+'px',top:jobMenu.y+'px'}" @pointerdown.stop>
@@ -517,7 +537,15 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         <template v-else-if="modal==='delete-session'"><p>确认删除「{{ confirmTarget.title }}」？</p><p class="confirm-meta">{{ date(confirmTarget.created) }} · {{ format(confirmTarget.duration) }}</p><p>将永久删除程序为这份素材保存的原视频、弹幕、剪辑记录和缓存，释放磁盘空间。删除后无法恢复。</p><p class="muted">已导出的成片保留。</p><p v-if="materialDeleteError" class="inline-warning" role="alert">{{ materialDeleteError }}</p><p v-if="deleteBlock" class="inline-warning">{{ deleteBlock }}</p></template>
         <div class="confirm-actions"><button class="button" :class="{'job-delete-cancel':modal==='delete-job'}" :disabled="modalBusy" @click="closeModal">取消</button><button class="button danger" :disabled="modalBusy||!!(modal==='delete-job'?jobDeleteBlock:deleteBlock)" @click="modal==='delete-job'?confirmJobRemoval():confirmRemoval()"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>{{ modal==='delete-job'&&jobDeleteRecordOnly?'确认移除记录':modal==='remove-room'?'确认移除':'确认永久删除' }}</button></div>
       </template>
+      <template v-else-if="modal==='choose-room'"><h2><Radio :size="22"/>选择主播</h2>
+        <p v-if="roomChoice.candidates.length>1">找到同号房间，请选择主播。</p><p v-else>请确认要添加的主播。</p>
+        <p v-if="roomChoice.unavailable?.length" class="inline-warning">{{ roomChoice.unavailable.map(platform=>platform==='bilibili'?'B站':'抖音').join('、') }}暂时无法查询，可重试或使用完整链接。</p>
+        <div class="room-choice-options" role="radiogroup" aria-label="选择直播间"><label v-for="room in roomChoice.candidates" :key="room.platform" class="room-choice-option" :class="{chosen:roomChoicePlatform===room.platform}"><input v-model="roomChoicePlatform" type="radio" name="room-platform" :value="room.platform" :disabled="modalBusy" :aria-label="(room.platform==='bilibili'?'B站':'抖音')+' · '+room.name"/><span><strong>{{ room.name }}</strong><small>{{ room.platform==='bilibili'?'B站':'抖音' }} · {{ room.roomNumber }} · {{ room.streaming?'直播中':'未开播' }}</small><small v-if="room.title" class="room-choice-title" :title="room.title">{{ room.title }}</small></span></label></div>
+        <p v-if="roomChoiceError" class="inline-warning" role="alert">{{ roomChoiceError }}</p>
+        <div class="confirm-actions"><button class="button" :disabled="modalBusy" @click="closeModal">取消</button><button class="button primary" :disabled="modalBusy||!roomChoicePlatform" @click="confirmRoomChoice"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>确认添加</button></div>
+      </template>
       <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2>
+        <section class="chat-settings" aria-label="弹幕设置"><div class="chat-rate-heading"><label for="chat-rate-limit">每秒弹幕上限</label><output for="chat-rate-limit">{{ chatRateValue }} 条</output></div><input id="chat-rate-limit" type="range" min="1" max="50" step="1" :value="chatRateValue" :style="{'--chat-rate-fill':(chatRateValue-1)/49*100+'%'}" :disabled="chatRateBusy||modalBusy" @input="chatRateDraft=Number($event.target.value)" @change="setChatRate($event.target.value)"/><p class="muted">每个直播间独立计算 · 自动保存</p><p class="muted">30 字及以上过滤；10 秒内同文达到 5 条，只留一条。</p><p v-if="chatRateError" class="inline-warning" role="alert">{{ chatRateError }}</p></section>
         <fieldset v-if="isDesktop" class="export-versions" aria-label="关闭窗口时"><legend>关闭窗口时</legend><label v-for="choice in [{value:'ask',label:'每次询问'},{value:'exit',label:'退出'},{value:'background',label:'后台运行'}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
         <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>
         <div class="directory-settings"><label class="field-label">默认导出根目录<div class="path-picker"><input v-model="exportDirectory" aria-label="默认导出文件夹" placeholder="填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>选择</button></div></label><p class="muted">按北京时间分类：完整视频保存为「完整素材 / 日期 / 起止时间.mp4」；选段保存为「导出片段 / 日期 / 起止时间 / 视频.mp4」。修改路径或重新选择后自动保存。</p><div class="export-destinations"><span>完整素材</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>导出片段</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>打开文件目录</button></div></div>

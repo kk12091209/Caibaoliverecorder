@@ -152,7 +152,7 @@ internal sealed class MainWindow : Form
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return false;
         return uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
             && uri.Host.Equals("space.bilibili.com", StringComparison.OrdinalIgnoreCase)
-            && uri.AbsolutePath.TrimEnd('/') == "/3546729402076115";
+            && uri.AbsolutePath.TrimEnd('/') == "/5162836";
     }
     private static void OpenAuthorPage(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     private void RestoreWindow()

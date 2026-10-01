@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>录播机</AssemblyName>
     <RootNamespace>LiveRecorderDesktop</RootNamespace>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Product>菜播·录包机</Product>
     <AssemblyTitle>菜播·录包机</AssemblyTitle>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

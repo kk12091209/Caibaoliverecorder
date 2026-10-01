@@ -41,7 +41,7 @@ async function ready(density, session = 'one', options = {}) {
   assert.fail('Density did not finish its bounded history scan');
 }
 
-test('counts all ordinary duplicates beyond 500 and filters only explicit lottery and non-chat types', async t => {
+test('high frequency ordinary copies collapse, explicit lottery and non-chat types stay excluded', async t => {
   const { store, density, add } = fixture(t);
   store.transaction(() => {
     for (let i = 0; i < 720; i++) add(i < 600 ? 70 + i / 100 : 200 + i / 1000);
@@ -49,18 +49,19 @@ test('counts all ordinary duplicates beyond 500 and filters only explicit lotter
     for (const type of ['gift', 'guard', 'sc']) add(71, { type });
   });
   const result = await ready(density, 'one', { from: 0, to: 600, bins: 600 });
-  assert.equal(total(result), 720);
-  assert.equal(total(await ready(density, 'one', { from: 70, to: 80, bins: 1000 })), 600);
+  assert.equal(total(result), 2);
+  assert.equal(total(await ready(density, 'one', { from: 70, to: 80, bins: 1000 })), 1);
   assert.equal(result.bins[130], 0);
   assert.ok(result.bins.every(Number.isInteger));
   store.saveEdit('one', { ...store.edit('one'), filterLottery: false });
-  assert.equal(total(await ready(density)), 720);
+  assert.equal(total(await ready(density)), 2);
 });
 
 test('history backfill yields after finite row batches including excluded types', async t => {
-  const { density, add } = fixture(t, { batchSize: 3 });
+  const { store, density, add } = fixture(t, { batchSize: 3 });
   for (let i = 0; i < 4; i++) add(1, { type: 'gift' });
-  for (let i = 0; i < 7; i++) add(1);
+  for (let i = 0; i < 7; i++) add(1,{text:'普通弹幕'+i});
+  await store.chatRules.prepare('one');
   const first = density.request('one', { from: 0, to: 10 });
   assert.equal(first.status, 'building');
   assert.equal(total(first), 0);
@@ -184,4 +185,34 @@ test('close cancels pending database work and scan failures remain observable an
   assert.equal(density.cache.size, 0);
   assert.throws(() => density.request('one'), error => error.status === 503);
   store.all = originalAll;
+});
+
+test('sampling keeps uncapped peaks without double counting or losing manual exclusions', async t => {
+  const {store,density,add}=fixture(t,{batchSize:7});
+  const source=store.addSource('one',path.join(store.root,'originals','sample.flv'),0);
+  const ids=[];
+  for(let i=0;i<50;i++)ids.push(add(8+i/1000,{text:'普通弹幕'+i}));
+  store.run('INSERT INTO danmaku_density VALUES(?,?,?,?)','one',source.id,8,9950);
+  let result=await ready(density,'one',{from:0,to:10,bins:10});
+  assert.equal(result.bins[8],10000);
+  assert.equal(total(await ready(density,'one',{from:0,to:10,bins:10})),10000);
+  store.saveEdit('one',{...store.edit('one'),excluded:[ids[0]]});
+  result=await ready(density,'one',{from:0,to:10,bins:10});
+  assert.equal(result.bins[8],9999);
+  store.saveEdit('one',{...store.edit('one'),excluded:[]});
+  assert.equal(total(await ready(density,'one',{from:0,to:10,bins:10})),10000);
+});
+
+test('density counters append independently after cached messages and respect bounded batches', async t => {
+  const {store,density,add}=fixture(t,{batchSize:2});
+  const source=store.addSource('one',path.join(store.root,'originals','sample.flv'),0);
+  add(1); assert.equal(total(await ready(density)),1);
+  const entry=density.cache.get('one');
+  for(let i=0;i<5;i++)store.run('INSERT INTO danmaku_density VALUES(?,?,?,?)','one',source.id,i,1000);
+  assert.equal(density.request('one').status,'building');
+  await yieldTurn(); assert.equal(entry.densityCursor,2);
+  assert.equal(total(await ready(density)),5001);
+  assert.equal(density.cache.get('one'),entry);
+  density.drop('one');
+  assert.equal(total(await ready(density)),5001);
 });

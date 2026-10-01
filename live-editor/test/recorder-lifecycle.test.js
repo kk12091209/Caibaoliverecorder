@@ -187,9 +187,9 @@ test('启动时自动恢复完整退出前启用的监控房间',async t=>{
 test('确认退出停止录制及监控，只记住启用房间，下次启动恢复一次',async t=>{
   const {recorder,state,settings,store,calls,executable}=await fixture(t,{port:0,healthMs:10000});
   const writes=[];store.run=(...args)=>writes.push(args);
-  state.rooms=[{roomId:42,recording:true,recordingEnabled:true,autoRecord:true},
-    {roomId:43,recording:false,recordingEnabled:true,autoRecord:true},
-    {roomId:44,recording:false,recordingEnabled:false,autoRecord:true}];
+  state.rooms=[{roomId:42,recording:true,autoRecordForThisSession:true,autoRecord:true},
+    {roomId:43,recording:false,autoRecordForThisSession:true,autoRecord:true},
+    {roomId:44,recording:false,autoRecordForThisSession:false,autoRecord:true}];
   let stopped=0;
   Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44002,isAlive:()=>true,
     stopProcess:async endpoint=>{assert.equal(endpoint.directory,recorder.directory);assert.equal(endpoint.executable,executable);stopped++;state.available=false;return true;}});

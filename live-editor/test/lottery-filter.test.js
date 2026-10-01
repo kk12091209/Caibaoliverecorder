@@ -34,27 +34,27 @@ function save(store, session, patch) {
   return store.saveEdit(session, { ...store.edit(session), ...patch });
 }
 
- test('600 条同文同发送者普通弹幕全部保留，仅可信抽奖标记默认排除且重读不重复', async () => {
-  const normal = Array.from({ length: 600 }, () => xml('恭喜发财')).join('');
+ test('600 条同文按新规则折叠，可信抽奖仍独立分类且重读不重复', async () => {
+  const normal = Array.from({ length: 600 }, (_,i) => xml('恭喜发财',undefined,i/50)).join('');
   const invalid = ['', 'anchor:0', 'anchor:01', 'anchor:-1', 'anchor:1x', 'anchor:123 ', 'other:123', 'red-pocket:0', 'anchor:123456789012345678901'];
   const valid = ['anchor:123', 'red-pocket:456', 'anchor:99999999999999999999'];
-  const f = await fixture('whitelist', '<i>' + normal + invalid.map((value, n) => xml('无效标记' + n, value)).join('') + valid.map(value => xml('恭喜发财', value)).join('') + '<gift ts="1">礼物</gift></i>');
+  const f = await fixture('whitelist', '<i>' + normal + invalid.map((value, n) => xml('无效标记' + n, value,13)).join('') + valid.map(value => xml('恭喜发财', value,13)).join('') + '<gift ts="1">礼物</gift></i>');
   try {
     const original = await fingerprint(f.xmlFile);
     await f.read();
     const visible = allMessages(f.store, f.session.id);
-    assert.equal(visible.length, 600 + invalid.length);
-    assert.equal(visible.filter(message => message.text === '恭喜发财').length, 600);
+    assert.equal(visible.length, 2 + invalid.length);
+    assert.equal(visible.filter(message => message.text === '恭喜发财').length, 2);
     assert.equal(new Set(visible.map(message => message.id)).size, visible.length);
-    assert.equal(allMessages(f.store, f.session.id, false).length, 600 + invalid.length + valid.length);
-    assert.equal(f.store.get('SELECT COUNT(*) AS n FROM danmaku_filters').n, valid.length);
-    assert.deepEqual(f.store.all('SELECT DISTINCT reason FROM danmaku_filters').map(row => row.reason), ['lottery']);
+    assert.equal(allMessages(f.store, f.session.id, false).length, 2 + invalid.length + valid.length);
+    assert.equal(f.store.get('SELECT COUNT(*) AS n FROM danmaku_filters').n, 598 + valid.length);
+    assert.deepEqual(f.store.all('SELECT DISTINCT reason FROM danmaku_filters ORDER BY reason').map(row => row.reason), ['lottery','repeat']);
     const ids = allMessages(f.store, f.session.id, false).map(message => message.id);
     await f.read();
     f.store.run('UPDATE sources SET xmlpos=0 WHERE id=?', f.source.id);
     await new Ingestor(f.store).readDanmaku(f.store.get('SELECT * FROM sources WHERE id=?', f.source.id));
     assert.deepEqual(allMessages(f.store, f.session.id, false).map(message => message.id), ids);
-    assert.equal(f.store.get('SELECT COUNT(*) AS n FROM danmaku_filters').n, valid.length);
+    assert.equal(f.store.get('SELECT COUNT(*) AS n FROM danmaku_filters').n, 598 + valid.length);
     assert.equal(await fingerprint(f.xmlFile), original);
   } finally { f.store.close(); opened.delete(f.store); }
 });
@@ -117,8 +117,8 @@ test('超过 4 MiB 的弹幕积压跨批读取，末尾抽奖标记不会丢失�
     assert.equal(f.ingestor.xmlStates.get(f.source.id).complete, false);
     for (let n = 0; n < 8 && !f.ingestor.xmlStates.get(f.source.id).complete; n++) await f.read();
     assert.equal(f.ingestor.xmlStates.get(f.source.id).complete, true);
-    assert.equal(allMessages(f.store, f.session.id).length, count);
-    assert.equal(allMessages(f.store, f.session.id, false).length, count + 2);
+    assert.equal(allMessages(f.store, f.session.id).length, 0);
+    assert.equal(allMessages(f.store, f.session.id, false).length, 2);
     assert.equal(f.store.get('SELECT COUNT(*) AS n FROM danmaku_filters').n, 2);
     assert.equal(await fs.readFile(f.xmlFile, 'utf8'), body);
   } finally { f.store.close(); opened.delete(f.store); }

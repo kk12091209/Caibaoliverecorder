@@ -91,16 +91,16 @@ test('reopening a legacy finished database applies the shared rule immediately w
   assert.deepEqual(f.store.all('SELECT * FROM danmaku ORDER BY id'), before);
 });
 
-test('SQL filters before LIMIT and search, preserving ordinary repeated comments after 650 placeholders', async t => {
+test('SQL filters before LIMIT and search, preserving distinct short comments after 650 placeholders', async t => {
   const f = await fixture(t);
   f.store.transaction(() => {
     for (let i = 0; i < 650; i++) f.add(placeholders[i % placeholders.length], 1);
-    for (let i = 0; i < 600; i++) f.add('普通重复弹幕', 2);
-    for (const text of retained.slice(0, 6)) f.add(text, 3);
+    for (let i = 0; i < 600; i++) f.add('普通弹幕'+i, 2+Math.floor(i/50));
+    for (const text of retained.slice(0, 6)) f.add(text, 14);
   });
   const messages = f.store.messages('one', 0, 20, '', 500);
   assert.equal(messages.length, 500);
-  assert.ok(messages.every(message => message.text === '普通重复弹幕'));
+  assert.ok(messages.every(message => message.text.startsWith('普通弹幕')));
   assert.equal(f.store.messages('one', 0, 20, '', 10000).length, 606);
   assert.deepEqual(f.store.messages('one', 0, 20, 'Mygo', 500).map(message => message.text), retained.slice(4, 6));
   assert.equal(await densityTotal(f), 606);

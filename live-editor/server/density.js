@@ -6,13 +6,13 @@ const BLOCK_SECONDS = 256;
 // avoid allocating a recording-length array when a source has a large time gap.
 class Histogram {
   constructor() { this.blocks = new Map(); }
-  add(time) {
+  add(time, count=1) {
     if (!Number.isFinite(time) || time < 0 || !Number.isSafeInteger(Math.floor(time))) return;
     const second = Math.floor(time), key = Math.floor(second / BLOCK_SECONDS);
     let block = this.blocks.get(key);
     if (!block) this.blocks.set(key, block = { values: new Float64Array(BLOCK_SECONDS), total: 0 });
-    block.values[second % BLOCK_SECONDS]++;
-    block.total++;
+    block.values[second % BLOCK_SECONDS]+=count;
+    block.total+=count;
   }
   sum(from, to) {
     if (from >= to) return 0;
@@ -79,7 +79,7 @@ export class DensityService {
     const result = windowBins(session, options);
     let entry = this.cache.get(sessionId);
     if (!entry) {
-      entry = { id: sessionId, histogram: new Histogram(), cursor: 0, target: 0,
+      entry = { id: sessionId, histogram: new Histogram(), cursor: 0, target: 0, densityCursor: 0, densityTarget: 0,
         revision: undefined, excluded: new Set(), filterLottery: true, status: 'ready', scheduled: null };
       this.cache.set(sessionId, entry);
       while (this.cache.size > this.maxSessions) this.drop(this.cache.keys().next().value);
@@ -92,7 +92,9 @@ export class DensityService {
     // batches efficient. A timestamp watermark would miss late XML messages.
     const latest = this.store.get('SELECT rowid AS value FROM danmaku WHERE session=? ORDER BY rowid DESC LIMIT 1', sessionId)?.value || 0;
     entry.target = Math.max(entry.target, latest);
-    if (entry.cursor < entry.target) {
+    const latestDensity=this.store.get('SELECT rowid AS value FROM danmaku_density WHERE session=? ORDER BY rowid DESC LIMIT 1',sessionId)?.value||0;
+    entry.densityTarget=Math.max(entry.densityTarget,latestDensity);
+    if (entry.cursor < entry.target || entry.densityCursor < entry.densityTarget) {
       // Surface a failed batch to this caller before the deferred retry starts.
       if (entry.status !== 'error') entry.status = 'building';
       this.schedule(entry);
@@ -118,7 +120,8 @@ export class DensityService {
     if (changed) {
       entry.histogram = new Histogram();
       entry.cursor = 0;
-      entry.status = entry.target ? 'building' : 'ready';
+      entry.densityCursor=0;
+      entry.status = entry.target || entry.densityTarget ? 'building' : 'ready';
     }
   }
 
@@ -130,16 +133,18 @@ export class DensityService {
     });
   }
 
-  scan(entry) {
+  async scan(entry) {
     if (this.closed || this.cache.get(entry.id) !== entry) return;
     try {
-      if (!this.store.session(entry.id)) { this.drop(entry.id); return; }
       entry.status = 'building';
       entry.error = undefined;
+      await this.store.chatRules?.prepare(entry.id);
+      if (this.closed || this.cache.get(entry.id) !== entry) return;
+      if (!this.store.session(entry.id)) { this.drop(entry.id); return; }
       this.syncEdit(entry);
-      const allowed = entry.filterLottery
-        ? "NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason='lottery')"
-        : '1';
+      const allowed = "NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason IN ('length','repeat','rate'))" + (entry.filterLottery
+        ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason='lottery')"
+        : '');
       // Read all message types and project the filter. Filtering in WHERE could
       // scan an unbounded run of excluded gifts/lottery messages in one turn.
       const rows = this.store.all(`SELECT d.rowid AS rowid,d.id,d.time,d.type,d.text,${allowed} AS allowed
@@ -150,7 +155,12 @@ export class DensityService {
         entry.cursor = row.rowid;
       }
       if (rows.length < this.batchSize) entry.cursor = entry.target;
-      if (entry.cursor < entry.target) this.schedule(entry);
+      // Add only the messages omitted by sampling. Stored comments still use
+      // their original timestamps and respect the user's exclusion list.
+      const counts=this.store.all('SELECT rowid,time,extra FROM danmaku_density WHERE session=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?',entry.id,entry.densityCursor,entry.densityTarget,this.batchSize);
+      for(const row of counts){entry.histogram.add(row.time,row.extra);entry.densityCursor=row.rowid;}
+      if(counts.length<this.batchSize)entry.densityCursor=entry.densityTarget;
+      if (entry.cursor < entry.target || entry.densityCursor < entry.densityTarget) this.schedule(entry);
       else entry.status = 'ready';
     } catch (error) {
       entry.status = 'error';

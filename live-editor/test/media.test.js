@@ -198,7 +198,8 @@ test('移除监控先结束写入，调用核心删除并保留已有素材',asy
   const recorder=new Recorder(store),calls=[];recorder.poll=async()=>{};
   recorder.api=async(route,body,method)=>{calls.push({route,body,method});return route==='room'?[{roomId:42,recording:false}]:null;};
   await assert.rejects(recorder.removeRoom(42,false),/确认/);assert.equal(calls.length,0);await recorder.removeRoom(42,true);
-  assert.deepEqual(calls.map(c=>c.route),['room/42/config','room/42/stop','room','room/42']);assert.equal(calls[0].body.autoRecord,false);assert.equal(calls.at(-1).method,'DELETE');
+  assert.deepEqual(calls.map(c=>c.route),['room','room/42/config','room/42/stop','room','room/42']);assert.equal(calls[1].body.autoRecord,false);assert.equal(calls.at(-1).method,'DELETE');
+  assert.deepEqual(store.setting('bilibili-rooms'),[]);
   assert.equal(store.session(session.id).status,'finishing');assert.equal(store.sources(session.id)[0].closed,1);await fs.access(fixture);store.close();
 });
 

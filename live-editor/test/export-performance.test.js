@@ -14,7 +14,7 @@ const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH|
 const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-export-performance-'));
 const fixture=path.join(root,'black.flv');
 execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=black:size=480x270:rate=30','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','5','-c:v','libx264','-preset','ultrafast','-g','60','-bf','0','-c:a','aac','-y',fixture]);
-await fs.writeFile(fixture.replace('.flv','.xml'),'<i><d p="0.1,1,25,16777215,0,0,0,0">Smoother moving danmaku verification</d></i>');
+await fs.writeFile(fixture.replace('.flv','.xml'),'<i><d p="0.1,1,25,16777215,0,0,0,0">Moving danmaku test</d></i>');
 const opened=[];
 async function setup(name) {
   const store=new Store(path.join(root,name));opened.push(store);

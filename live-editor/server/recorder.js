@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { availableLocalPort, findOwnedCore, stopOwnedCore } from './local-endpoint.js';
 import { alive } from './service-runtime.js';
+import {BilibiliRooms,roomEnabled} from './bilibili-rooms.js';
 
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
@@ -16,7 +17,8 @@ export const CHAT_ONLY_CONFIG={
 export class Recorder {
   constructor(store,{executable,port=17861,editorPort=17860,lifecycle={}}={}) {
     this.store=store;this.executable=executable;this.port=port;this.editorPort=editorPort;
-    this.directory=path.join(store.root,'originals');this.rooms=[];this.online=false;this.error='';this.log='';
+    this.roomState=new BilibiliRooms(store);
+    this.directory=path.join(store.root,'originals');this.rooms=this.roomState.snapshot();this.online=false;this.error='';this.log='';
     this.secret=store.setting('recorder-secret')||randomBytes(24).toString('hex');store.setting('recorder-secret',this.secret);
     this.webhookSecret=store.setting('webhook-secret')||randomBytes(24).toString('hex');store.setting('webhook-secret',this.webhookSecret);
     this.pollBusy=false;this.process=null;this.childRunning=false;this.closed=false;this.monitoring=false;this.starting=null;
@@ -110,19 +112,26 @@ export class Recorder {
     });
     this.assertOpen();const rooms=await this.api('room');this.assertOpen();
     const resume=this.store.setting('recorder-resume-rooms');
-    if(Array.isArray(resume)){
-      for(const id of resume)if(rooms.some(room=>room.roomId===id)){this.assertOpen();await this.api(`room/${id}/start`,{});}
-      this.store.setting('recorder-resume-rooms',null);
-    }
+    this.roomState.capture(rooms,{resume:Array.isArray(resume)?resume:[]});
+    for(const room of rooms)await this.roomState.serial(room.roomId,()=>this.restoreRoom(room,Array.isArray(resume)&&resume.includes(room.roomId)));
+    if(Array.isArray(resume))this.store.setting('recorder-resume-rooms',null);
     // Reapply room overrides after each reconnection; the core may have restarted separately.
     for(const room of rooms){this.assertOpen();await this.api(`room/${room.roomId}/config`,CHAT_ONLY_CONFIG);}
-    this.assertOpen();this.rooms=await this.api('room');
+    this.assertOpen();this.rooms=this.roomState.capture(await this.api('room'),{prune:true});
+  }
+  async restoreRoom(raw,resume=false){
+    this.assertOpen();const room=this.roomState.get(raw.roomId);if(!room)return;
+    const automatic=room.enabled&&room.autoRecord;
+    if(!!raw.autoRecord!==automatic)await this.api(`room/${raw.roomId}/config`,{autoRecord:automatic});
+    if(!room.enabled){if(raw.recording||raw.autoRecordForThisSession!==false)await this.api(`room/${raw.roomId}/stop`,{});}
+    else if(resume||raw.autoRecordForThisSession===false||!room.autoRecord&&!raw.recording)await this.api(`room/${raw.roomId}/start`,{});
   }
   async launchCore(){
       try{await fs.access(this.executable);}catch{
         throw new Error('找不到录制核心。请完整解压发布包并保留 runtime/recorder，或通过 RECORDER_PATH 指定录制核心。');
       }
       this.assertOpen();this.childFailure=null;
+      await this.roomState.prepareLaunch(this.directory,()=>this.assertOpen());this.assertOpen();
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
       const logFd=openSync(path.join(this.store.root,'recorder.log'),'a');
       let child;
@@ -146,7 +155,13 @@ export class Recorder {
     if(this.closed||this.quitting||this.pollBusy)return;this.pollBusy=true;
     try{
       if(!this.online){await this.ensureReady();return;}
-      const rooms=await this.api('room');this.assertOpen();this.rooms=rooms;this.error='';
+      let rooms=await this.api('room');this.assertOpen();this.roomState.capture(rooms);
+      let repaired=false;
+      for(const raw of rooms)if(this.roomState.get(raw.roomId)?.enabled===false&&(raw.autoRecord||raw.recording||raw.autoRecordForThisSession!==false)){
+        await this.roomState.serial(raw.roomId,async()=>{if(this.roomState.get(raw.roomId)?.enabled===false){await this.restoreRoom(raw);repaired=true;}});
+      }
+      if(repaired)rooms=await this.api('room');
+      this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true});this.error='';
       for(const session of this.store.all("SELECT * FROM sessions WHERE room>0 AND status IN ('recording','waiting')")){
         const room=this.rooms.find(r=>Number(r.roomId)===session.room);
         if(room&&!room.recording&&!room.streaming){this.store.run("UPDATE sessions SET status='finished' WHERE id=?",session.id);this.store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);}
@@ -161,7 +176,7 @@ export class Recorder {
     if(this.closed)return;
     // Webhooks are advisory: recover files created while the editor was not running.
     const files=[],recorder=this;
-    async function walk(dir){for(const entry of await fs.readdir(dir,{withFileTypes:true})){if(recorder.closed)return;const full=path.join(dir,entry.name);if(entry.isDirectory())await walk(full);else if(entry.isFile()&&/\.flv$/i.test(full))files.push({path:full,stat:await fs.stat(full)});}}
+    async function walk(dir){for(const entry of await fs.readdir(dir,{withFileTypes:true})){if(recorder.closed)return;if(dir===recorder.directory&&entry.name.toLowerCase()==='douyin')continue;const full=path.join(dir,entry.name);if(entry.isDirectory())await walk(full);else if(entry.isFile()&&/\.flv$/i.test(full))files.push({path:full,stat:await fs.stat(full)});}}
     await walk(this.directory);if(this.closed)return;files.sort((a,b)=>a.stat.birthtimeMs-b.stat.birthtimeMs);
     const newest=new Map();
     for(const file of files){
@@ -216,12 +231,33 @@ export class Recorder {
     }
     this.store.run('INSERT OR IGNORE INTO events VALUES(?)',event.EventId);
   }
-  async stopRoom(room){await this.api(`room/${room}/stop`,{});this.assertOpen();this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",room);}
+  async roomControl(id){if(!this.roomState.get(id))this.roomState.capture(await this.api('room'));this.assertOpen();const room=this.roomState.get(id);if(!room)throw new Error('直播间不存在或已移除。');return room;}
+  async addRoom(input){
+    const id=await resolveRoom(input.url),automatic=input.autoRecord!==false;
+    const result=await this.roomState.serial(id,async()=>{
+      const result=await this.api('room',{roomId:id,autoRecord:automatic});this.assertOpen();
+      this.roomState.capture([result||{roomId:id,autoRecord:automatic,autoRecordForThisSession:automatic}]);
+      this.roomState.set(result?.roomId||id,{autoRecord:automatic,enabled:automatic});return result;
+    });await this.poll();return result;
+  }
+  async startRoom(id){return this.roomState.serial(id,async()=>{
+    const room=await this.roomControl(id);this.roomState.set(id,{enabled:true});
+    await this.api(`room/${id}/config`,{autoRecord:room.autoRecord});await this.api(`room/${id}/start`,{});this.assertOpen();
+  });}
+  async setAuto(id,enabled){return this.roomState.serial(id,async()=>{
+    await this.roomControl(id);const current=this.rooms.find(room=>room.roomId===id);
+    const room=this.roomState.set(id,{autoRecord:!!enabled,...(enabled?{enabled:true}:current?.recording?{}:{enabled:false})});
+    await this.api(`room/${id}/config`,{autoRecord:room.enabled&&room.autoRecord});
+    if(enabled)await this.api(`room/${id}/start`,{});this.assertOpen();
+  });}
+  async stopRoom(id,{remember=true}={}){return this.roomState.serial(id,async()=>{
+    if(remember){await this.roomControl(id);this.roomState.set(id,{enabled:false});}
+    await this.api(`room/${id}/config`,{autoRecord:false});await this.api(`room/${id}/stop`,{});this.assertOpen();
+    this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",id);
+  });}
   async removeRoom(room,confirmed){
     if(confirmed!==true)throw new Error('请先确认是否移除这个监控房间。');
     // Wait for the writer to close before removing the room; Dispose only requests a stop.
-    await this.api(`room/${room}/config`,{autoRecord:false});
-    this.assertOpen();
     await this.stopRoom(room);
     let stopped=false;
     for(let n=0;n<40;n++){
@@ -232,6 +268,7 @@ export class Recorder {
     if(!stopped)throw new Error('已关闭自动录制，录制核心仍在收尾，请稍后重试移除。');
     await this.api(`room/${room}`,undefined,'DELETE');
     this.assertOpen();
+    this.roomState.remove(room);
     this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",room);
     this.store.run('UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room=?)',room);
     await this.poll();
@@ -240,10 +277,10 @@ export class Recorder {
     if(!this.executable)return this.rooms;
     if(this.starting)await this.starting;
     if(!this.online&&!this.childRunning&&(!this.ownedEndpoint||!this.lifecycle.isAlive(this.ownedEndpoint.pid)))return this.rooms;
-    return await this.api('room');
+    return this.roomState.capture(await this.api('room'));
   }
   rememberExitRooms(rooms){
-    const resume=rooms.filter(room=>room.recording||room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
+    const resume=rooms.filter(roomEnabled).map(room=>room.roomId);
     this.store.setting('recorder-resume-rooms',resume);
   }
   async stopForExit(rooms){
@@ -251,8 +288,8 @@ export class Recorder {
     let stopError;
     if(this.executable){
       try{
-        const ids=rooms.filter(room=>room.recording||room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
-        await Promise.all(ids.map(id=>this.stopRoom(id)));
+        const ids=rooms.filter(roomEnabled).map(room=>room.roomId);
+        await Promise.all(ids.map(id=>this.stopRoom(id,{remember:false})));
         const deadline=this.lifecycle.now()+5000;
         while((await this.api('room')).some(room=>room.recording)){
           if(this.lifecycle.now()>=deadline)throw new Error('录制收尾超时。');
@@ -279,8 +316,9 @@ export class Recorder {
     if(rooms.some(room=>room.recording))return false;
     // Temporarily stop idle monitors, preserving the user's enabled rooms for
     // the next launch. API stop gracefully handles a stream starting in a race.
-    const resume=rooms.filter(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
-    if(resume.length){this.store.setting('recorder-resume-rooms',resume);for(const id of resume)await this.api(`room/${id}/stop`,{});}
+    const resume=this.roomState.capture(rooms).filter(roomEnabled).map(room=>room.roomId);
+    this.store.setting('recorder-resume-rooms',resume);
+    for(const id of resume)await this.stopRoom(id,{remember:false});
     if((await this.api('room')).some(room=>room.recording))return false;
     const endpoint=this.ownedEndpoint;
     if(!endpoint)return false;

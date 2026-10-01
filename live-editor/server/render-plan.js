@@ -7,12 +7,12 @@ import { sourceStream, seekBase } from './ingest.js';
 import { preparedEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
 
-export const RENDER_VERSION = 1;
+export const RENDER_VERSION = 2;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export function layoutComments(messages) {
   const lanes = Array(8).fill(-Infinity);
-  return messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !isStickerPlaceholder(m.text))
+  return messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !m.policyFiltered && !isStickerPlaceholder(m.text))
     .sort((a, b) => a.time - b.time || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map(message => {
       let lane = lanes.findIndex(time => time <= message.time);
@@ -98,6 +98,7 @@ export class RenderPipeline {
   }
   invalidate(id){this.layouts.delete(id);}
   async layout(id,signal) {
+    await this.store.chatRules?.prepare(id);
     const stamp=this.store.get(`SELECT COALESCE(MAX(rowid),0) AS last,COUNT(*) AS count FROM danmaku WHERE session=?`,id);
     const flags=this.store.get(`SELECT COUNT(*) AS count,COALESCE(MAX(f.rowid),0) AS last FROM danmaku_filters f JOIN danmaku d ON d.id=f.message WHERE d.session=?`,id);
     const signature=JSON.stringify([stamp,flags]),cached=this.layouts.get(id);
@@ -105,7 +106,8 @@ export class RenderPipeline {
     const rows=[];let cursor=0;
     while(cursor<stamp.last) {
       canceled(signal);
-      const batch=this.store.all(`SELECT d.rowid AS rowid,d.*,EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason='lottery') AS lottery
+      const batch=this.store.all(`SELECT d.rowid AS rowid,d.*,EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason='lottery') AS lottery,
+        EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason IN ('length','repeat','rate')) AS policyFiltered
         FROM danmaku d WHERE d.session=? AND d.rowid>? AND d.rowid<=? ORDER BY d.rowid LIMIT 2048`,id,cursor,stamp.last);
       if(!batch.length)break;
       rows.push(...batch);cursor=batch.at(-1).rowid;await yieldTurn();

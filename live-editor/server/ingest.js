@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { acquireReader, checkedFile, fingerprint, originalTags, isMedia, isCodecHeader } from './storage-files.js';
+import { chatRate, isLongChat } from './chat-rules.js';
 
 export const FLV_HEADER = Buffer.from([70,76,86,1,5,0,0,0,9,0,0,0,0]);
 export function timestamp(tag) { return tag.readUIntBE(4, 3) + tag[7] * 16777216; }
@@ -125,18 +126,25 @@ export class Ingestor {
       const buffer = Buffer.alloc(Math.min(4 * 1024 * 1024, stat.size - current.xmlpos));
       const { bytesRead } = await file.read(buffer, 0, buffer.length, current.xmlpos);
       const text = buffer.subarray(0, bytesRead).toString('utf8');
-      const regex = /<(d|sc|gift|guard)\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/g;
-      let match, consumed = 0; const messages = [], lotteryMessages = [];
+      const regex = /<(d|sc|gift|guard|density)\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/g;
+      let match, consumed = 0; const messages = [], lotteryMessages = [], density = [];
       while ((match = regex.exec(text))) {
         // Advance past all complete events, but only index ordinary chat messages.
         consumed = regex.lastIndex;
-        if(match[1]!=='d')continue;
+        if(match[1]!=='d'&&match[1]!=='density')continue;
         const attributes = {}; for (const attr of match[2].matchAll(/([\w-]+)="([^"]*)"/g)) attributes[attr[1]] = decodeXML(attr[2]);
+        if(match[1]==='density') {
+          const local=Number(attributes.ts), count=Number(attributes.count), kept=Number(attributes.kept);
+          if(Number.isSafeInteger(local)&&local>=0&&local<=366*86400&&Number.isSafeInteger(count)&&count>=0&&count<=1000000000&&Number.isSafeInteger(kept)&&kept>=0&&kept<=count&&kept<=2000) {
+            density.push([source.session,source.id,source.start+local,count-kept]);
+          }
+          continue;
+        }
         const time = Number((attributes.p || '').split(',')[0] || attributes.ts || 0) + source.start;
         const byteOffset = current.xmlpos + Buffer.byteLength(text.slice(0, match.index));
         const id = createHash('sha256').update(`${source.id}:${byteOffset}`).digest('hex').slice(0, 32);
         const content = decodeXML(match[3] || '');
-        if (Number.isFinite(time)) {
+        if (Number.isFinite(time) && !isLongChat(content)) {
           messages.push([id, source.session, source.id, time, attributes.user || '观众', content.slice(0, 10000), match[1], (attributes.p || '').split(',')[3] || '16777215']);
           // Written only after the recorder observed an explicit lottery event,
           // matching its exact passphrase inside the server's activity window.
@@ -145,7 +153,14 @@ export class Ingestor {
       }
       if (consumed && this.store.session(source.session)) this.store.transaction(() => {
         const inserted=new Set();
-        for (const values of messages) if(this.store.run('INSERT OR IGNORE INTO danmaku VALUES(?,?,?,?,?,?,?,?)', ...values).changes)inserted.add(values[0]);
+        const counts = new Map(), rate = chatRate(this.store);
+        for (const values of messages) {
+          const second = Math.floor(values[3]);
+          if (!counts.has(second)) counts.set(second,this.store.get("SELECT COUNT(*) AS count FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<?",source.session,second,second+1).count);
+          if (counts.get(second) >= rate) continue;
+          if(this.store.run('INSERT OR IGNORE INTO danmaku VALUES(?,?,?,?,?,?,?,?)', ...values).changes){inserted.add(values[0]);counts.set(second,counts.get(second)+1);}
+        }
+        for(const values of density)this.store.run('INSERT OR IGNORE INTO danmaku_density VALUES(?,?,?,?)',...values);
         let changed=false;
         for (const id of lotteryMessages) if(this.store.run("INSERT OR IGNORE INTO danmaku_filters(message,reason) VALUES(?,'lottery')",id).changes&&!inserted.has(id))changed=true;
         // New rows and their flags become visible atomically to the rowid
