@@ -75,9 +75,9 @@ internal sealed class MainWindow : Form
     private readonly System.Windows.Forms.Timer health = new() { Interval = 2000 };
     private readonly NotifyIcon tray = new() { Text = "菜播·录包机" };
     private bool checking, closing, exitWhenReady, ready;
-    private readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(16, 20, 24) };
+    private readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(20, 16, 18) };
     private readonly Label splash = new() { Dock = DockStyle.Fill, Text = "正在打开菜播·录包机…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, Font = new Font("Microsoft YaHei UI", 14) };
-    private bool choosingFolder;
+    private bool choosingFolder, choosingClose;
     private static readonly JavaScriptSerializer Json = new() { MaxJsonLength = 16 * 1024 * 1024 };
 
     public MainWindow(string projectRoot, EventWaitHandle activationSignal, EventWaitHandle shutdown)
@@ -85,7 +85,7 @@ internal sealed class MainWindow : Form
         root = projectRoot; Text = "菜播·录包机";
         activation = activationSignal; backend = new BackendService(root);
         shutdownSignal = shutdown;
-        BackColor = Color.FromArgb(16, 20, 24); StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Color.FromArgb(20, 16, 18); StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1460, 960); MinimumSize = new Size(1100, 720);
         using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("LiveRecorderDesktop.app.ico")
             ?? throw new InvalidOperationException("未找到应用图标资源。"))
@@ -98,7 +98,7 @@ internal sealed class MainWindow : Form
         tray.ContextMenuStrip = menu;
         tray.DoubleClick += (_, _) => RestoreWindow();
         health.Tick += async (_, _) => await CheckBackendAsync();
-        FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; await RequestCloseAsync(false); };
+        FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; var external = e.CloseReason != CloseReason.UserClosing; await RequestCloseAsync(external, external); };
         FormClosed += (_, _) => { health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
         Controls.Add(web); Controls.Add(splash);
         health.Start();
@@ -127,7 +127,7 @@ internal sealed class MainWindow : Form
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             web.CoreWebView2.Settings.IsZoomControlEnabled = false;
             web.CoreWebView2.NavigationStarting += (_, e) => { if (!IsLocal(e.Uri)) e.Cancel = true; };
-            web.CoreWebView2.NewWindowRequested += (_, e) => e.Handled = true;
+            web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; if (IsAuthorPage(e.Uri)) OpenAuthorPage(e.Uri); };
             web.CoreWebView2.WebMessageReceived += OnWebMessage;
             web.CoreWebView2.NavigationCompleted += (_, e) =>
             {
@@ -147,6 +147,14 @@ internal sealed class MainWindow : Form
     }
 
     private bool IsLocal(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.GetLeftPart(UriPartial.Authority) == backend.Origin;
+    private static bool IsAuthorPage(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return false;
+        return uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
+            && uri.Host.Equals("space.bilibili.com", StringComparison.OrdinalIgnoreCase)
+            && uri.AbsolutePath.TrimEnd('/') == "/3546729402076115";
+    }
+    private static void OpenAuthorPage(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     private void RestoreWindow()
     {
         if (closing) return;
@@ -157,30 +165,57 @@ internal sealed class MainWindow : Form
         tray.Visible = true; Hide();
         tray.ShowBalloonTip(4000, "菜播·录包机", message, ToolTipIcon.Info);
     }
-    private async Task RequestCloseAsync(bool fullExit)
+    private async Task RequestCloseAsync(bool fullExit, bool maintenance = false)
     {
-        if (checking || closing || exitWhenReady) return;
-        checking = true;
+        if (choosingClose || closing || exitWhenReady) return;
+        choosingClose = true;
         try
         {
             var status = await backend.HeartbeatAsync();
-            if (!fullExit && status?.Background == true)
+            var action = fullExit ? "exit" : status?.CloseAction;
+            if (action != "exit" && action != "background")
             {
-                KeepInTray("窗口已收起，录制和处理任务继续运行。双击托盘图标可返回。"); return;
+                using var dialog = new CloseChoiceDialog { Icon = Icon };
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                action = dialog.SelectedAction;
+                if (dialog.RememberSelection) await backend.SaveCloseActionAsync(action);
             }
-            exitWhenReady = true;
-            status = await backend.RequestExitAsync();
-            if (status?.Busy == true) KeepInTray("正在等待录制和处理任务完成，完成后将自动退出。");
-            else if (status is null) { closing = true; Close(); }
-            else splash.Text = "正在安全退出…";
+            if (action == "background")
+            {
+                KeepInTray("已在后台运行。"); return;
+            }
+            if (maintenance)
+            {
+                exitWhenReady = true;
+                status = await backend.RequestExitAsync();
+                if (status is null) { closing = true; Close(); }
+                return;
+            }
+            status = await backend.RequestQuitAsync(false);
+            if (status?.RequiresExitConfirmation == true)
+            {
+                using var confirmation = new ExitConfirmationDialog { Icon = Icon };
+                if (confirmation.ShowDialog(this) != DialogResult.OK) return;
+                status = await backend.RequestQuitAsync(true);
+            }
+            if (status?.QuitAccepted != true)
+            {
+                if (status is null && !backend.IsProcessAlive()) { closing = true; Close(); return; }
+                throw new IOException("退出失败，请重试。");
+            }
+            closing = true; Close();
         }
-        finally { checking = false; }
+        catch (Exception error)
+        {
+            MessageBox.Show(this, error.Message, "菜播·录包机", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally { choosingClose = false; }
     }
     private async Task CheckBackendAsync()
     {
         if (activation.WaitOne(0)) { RestoreWindow(); backend.RefreshBuild(); }
         if (checking || closing) return;
-        if (shutdownSignal.WaitOne(0)) { await RequestCloseAsync(true); return; }
+        if (!choosingClose && shutdownSignal.WaitOne(0)) { await RequestCloseAsync(true, true); return; }
         checking = true;
         try
         {
@@ -211,7 +246,14 @@ internal sealed class MainWindow : Form
         {
             var request = Json.Deserialize<Dictionary<string, object>>(e.WebMessageAsJson);
             id = request.TryGetValue("id", out var rawId) ? rawId as string : null;
-            if (id is null || id.Length > 100 || !request.TryGetValue("action", out var action) || action as string != "pickExportFolder") return;
+            var actionName = request.TryGetValue("action", out var action) ? action as string : null;
+            if (actionName == "openExternal")
+            {
+                var url = request.TryGetValue("url", out var rawUrl) ? rawUrl as string : null;
+                if (IsAuthorPage(url)) OpenAuthorPage(url!);
+                return;
+            }
+            if (id is null || id.Length > 100 || actionName != "pickExportFolder") return;
             var initial = request.TryGetValue("initial", out var value) ? value as string : null;
             using var dialog = new FolderBrowserDialog { Description = "选择导出视频的保存文件夹", ShowNewFolderButton = true };
             if (initial is not null && initial.Length >= 3 && char.IsLetter(initial[0]) && initial[1] == ':' && (initial[2] == '\\' || initial[2] == '/') && Directory.Exists(initial)) dialog.SelectedPath = initial;

@@ -15,7 +15,6 @@ import { TemporaryWorkspaces } from './temp-workspaces.js';
 import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments } from './render-plan.js';
-import { fullCleanAttempt } from './completed-recording.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
 export function assText(messages, width = 1280, height = 720) {
@@ -60,7 +59,7 @@ export class Media {
   }
   exportJob(job) {
     if(this.exportOperations.has(job.id))throw new Error('这个导出任务正在执行。');
-    const operation={controller:new AbortController(),done:null};
+    const operation={job,controller:new AbortController(),done:null};
     this.exportOperations.set(job.id,operation);
     operation.done=this.exportContext.run(operation,()=>Promise.resolve().then(()=>{this.assertExportActive();return this.performExportJob(job);}))
       .finally(()=>this.exportOperations.delete(job.id));
@@ -168,25 +167,23 @@ export class Media {
       await active.done;
     } finally { this.previews.delete(token); }
   }
-  async enqueue(id, input, {automatic=false}={}) {
-    const operation={sessionId:id,done:this.enqueueInternal(id,input,automatic)};this.enqueues.add(operation);
+  async enqueue(id, input) {
+    const operation={sessionId:id,done:this.enqueueInternal(id,input)};this.enqueues.add(operation);
     try{return await operation.done;}finally{this.enqueues.delete(operation);}
   }
-  async enqueueInternal(id, input, automatic=false) {
+  async enqueueInternal(id, input) {
     this.assertSessionAvailable(id);
     if(this.preparation)await this.preparation.yieldForForeground();
     this.assertSessionAvailable(id);
     const session=this.store.session(id); if(!session) throw new Error('找不到录像。');
     const scope=input.scope??'clips';if(!['clips','full'].includes(scope))throw new Error('请选择有效的导出范围。');
-    const sources=this.store.sources(id);if(scope==='full')this.assertFullReady(session,sources,automatic);
+    const sources=this.store.sources(id);if(scope==='full')this.assertFullReady(session,sources);
     const edit=this.store.edit(id),requested=scope==='full'?[{start:0,end:session.duration}]:input.ranges??edit.ranges;
     if(!Array.isArray(requested)||requested.some(r=>!r||typeof r!=='object'))throw new Error('请选择有效的导出选段。');
     const ranges=validateRanges(requested.filter(r=>r.selected!==false),session.duration);
     if(['includeDanmaku','burn','danmakuFps'].some(key=>key in input))throw new Error('不支持的导出选项，请使用纯净版、弹幕版或双文件模式。');
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
-    if(automatic && (scope!=='full'||mode!=='clean'))throw new Error('自动保存仅支持完整纯净版。');
-    if(automatic && fullCleanAttempt(this.store,id))return null;
-    const job={id:randomUUID(),session:id,ranges,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,mode,scope,...(automatic?{automaticFullClean:true,inputPolicy:'original-flv'}:{})};
+    const job={id:randomUUID(),session:id,ranges,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,mode,scope};
     try {
     job.outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
     this.assertSessionAvailable(id);
@@ -195,41 +192,16 @@ export class Media {
     if(mode!=='clean')job.output.danmakuFile=clipFile(job.output.file,'danmaku');
     this.assertSessionAvailable(id);
     if(!this.store.session(id))throw new Error('素材不存在，无法导出。');
-    if(automatic){
-      this.assertFullReady(this.store.session(id),this.store.sources(id),true);
-      if(fullCleanAttempt(this.store,id)){await this.releaseReservation(job);return null;}
-    }
     this.store.run('INSERT INTO jobs(id,session,created,status,data,file,mode) VALUES(?,?,?,?,?,?,?)',job.id,id,new Date().toISOString(),'queued',JSON.stringify(job),mode==='danmaku'?clipFile(job.output.file,'danmaku'):job.output.file,job.mode);
     void this.work(); return job;
     }catch(error){
       if(job.output?.reservation)await fs.rmdir(job.output.reservation).catch(()=>{});
       else if(job.output?.dir)await fs.rmdir(job.output.dir).catch(()=>{});
-      // An unavailable destination is a visible terminal attempt, not a retry
-      // every maintenance tick. The original recording is never removed here.
-      if(automatic&&!this.closed&&!this.blockedSessions.has(id)&&!this.store.deletions?.has(id)&&this.store.session(id)) {
-        this.store.run('INSERT INTO jobs(id,session,created,status,data,file,mode,error) VALUES(?,?,?,?,?,?,?,?)',job.id,id,new Date().toISOString(),'failed',JSON.stringify(job),'',mode,error.message);
-        return job;
-      }
       throw error;
     }
   }
-  assertFullReady(session,sources,requireNoError=false) {
-    if(session?.status!=='finished'||!sources.length||sources.some(source=>source.closed!==2||(requireNoError&&source.error)))throw new Error('请等待录制结束、素材整理完成后再导出完整素材。');
-  }
-  usesOriginal(job) { return job.automaticFullClean===true&&job.scope==='full'&&job.mode==='clean'&&job.inputPolicy==='original-flv'; }
-  exportSourceInfo(job,source,from) {
-    // A blocked compaction check says the two representations differ. Probe and
-    // copy the actual FLV for the automatic original, without trusting that cache.
-    return this.usesOriginal(job)?this.probe(source.path):this.probeSource(source,from);
-  }
-  async *exportSourceStream(job,source,from,to) {
-    if(!this.usesOriginal(job)){yield* sourceStream(this.store,source.id,from,to);return;}
-    this.assertSessionAvailable(job.session);
-    const file=await fs.open(source.path,'r');
-    try {
-      if(!(await file.stat()).isFile())throw new Error('完整原片不是可读取的视频文件。');
-      yield* file.createReadStream({autoClose:false});
-    } finally {await file.close();}
+  assertFullReady(session,sources) {
+    if(session?.status!=='finished'||!sources.length||sources.some(source=>source.closed!==2))throw new Error('请等待录制结束、素材整理完成后再导出完整素材。');
   }
   async reserveOutput(job,session,sources) {
     const root=exportScopeDirectory(job.outputRoot||directories(this.store).exports,job.scope);
@@ -242,11 +214,15 @@ export class Media {
       this.store.run("UPDATE jobs SET status='running',progress=.01 WHERE id=?",job.id);
       let details;
       try { details=JSON.parse(job.data);await this.exportJob(details); }
-      catch(e){const cancelled=e.code==='EXPORT_CANCELLED'||this.store.get('SELECT status FROM jobs WHERE id=?',job.id)?.status==='cancelling';this.store.run("UPDATE jobs SET status=?,error=?,data=? WHERE id=?",cancelled?'cancelled':e.savePending?'save_failed':'failed',cancelled?'':e.message,details===undefined?job.data:JSON.stringify(details),job.id);}
+      catch(e){
+        const suspended=this.suspendedJobs?.has(job.id),cancelled=e.code==='EXPORT_CANCELLED'||this.store.get('SELECT status FROM jobs WHERE id=?',job.id)?.status==='cancelling';
+        if(details){if(suspended)details.resumeOnLaunch=true;else delete details.resumeOnLaunch;}
+        this.store.run("UPDATE jobs SET status=?,error=?,data=? WHERE id=?",suspended?'interrupted':cancelled?'cancelled':e.savePending?'save_failed':'failed',suspended||cancelled?'':e.message,details===undefined?job.data:JSON.stringify(details),job.id);
+      }
     }} finally {this.processing=false;}
   }
   async recoverPendingSaves() {
-    for(const row of this.store.all("SELECT id,data FROM jobs WHERE status IN ('failed','saving','save_failed','finalizing','running')")) {
+    for(const row of this.store.all("SELECT id,data FROM jobs WHERE status IN ('failed','saving','save_failed','finalizing','running','interrupted')")) {
       const job=JSON.parse(row.data);
       const pending=await this.publication.discover(row.id);
       if(!pending) {
@@ -255,6 +231,44 @@ export class Media {
       }
       job.pendingPublication=pending;job.canRetrySave=true;
       this.store.run("UPDATE jobs SET status='save_failed',progress=.98,data=?,error=? WHERE id=?",JSON.stringify(job),'视频已处理完成，请重试保存。',row.id);
+    }
+  }
+  suspendForExit(){
+    const suspended=[];
+    this.store.transaction(()=>{
+      for(const row of this.store.all("SELECT * FROM jobs WHERE status IN ('queued','running','finalizing','saving','save_failed')")){
+        if(row.status==='save_failed'&&!this.retrying.has(row.id))continue;
+        const job={...(this.exportOperations.get(row.id)?.job??JSON.parse(row.data)),resumeOnLaunch:true};
+        suspended.push(row.id);
+        this.store.run("UPDATE jobs SET status='interrupted',error='',data=? WHERE id=?",JSON.stringify(job),row.id);
+      }
+    });
+    this.closed=true;this.suspendedJobs??=new Set();
+    for(const id of suspended){this.suspendedJobs.add(id);const operation=this.exportOperations.get(id);if(operation)operation.job.resumeOnLaunch=true;}
+    for(const operation of this.exportOperations.values())operation.controller.abort();
+    this.close();
+  }
+  async recoverInterruptedExports(){
+    for(const row of this.store.all("SELECT * FROM jobs WHERE status IN ('interrupted','save_failed')")){
+      const job=JSON.parse(row.data);
+      if(job.resumeOnLaunch!==true)continue;
+      if(!this.store.session(job.session)){
+        delete job.resumeOnLaunch;
+        this.store.run("UPDATE jobs SET status='failed',error='素材不存在，无法恢复导出。',data=? WHERE id=?",JSON.stringify(job),row.id);continue;
+      }
+      if(row.status==='save_failed'){
+        try{await this.retrySave(row.id);}catch(error){delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET data=?,error=? WHERE id=?",JSON.stringify(job),error.message,row.id);}continue;
+      }
+      try{
+        const occupied=async file=>{try{await fs.access(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+        if(job.scope==='full'||!job.output||await occupied(job.output.file)||job.output.danmakuFile&&await occupied(job.output.danmakuFile)){
+          await this.releaseReservation(job);
+          job.output=await this.reserveOutput(job,this.store.session(job.session),this.store.sources(job.session));
+          Object.assign(job.output,{namingVersion:2,sidecars:false});
+          if(job.mode!=='clean')job.output.danmakuFile=clipFile(job.output.file,'danmaku');
+        }
+        this.store.run("UPDATE jobs SET status='queued',progress=0,error='',data=?,file=? WHERE id=?",JSON.stringify(job),job.mode==='danmaku'?job.output.danmakuFile:job.output.file,row.id);
+      }catch(error){delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET status='failed',error=?,data=? WHERE id=?",error.message,JSON.stringify(job),row.id);}
     }
   }
   async retrySave(id,input={}) {
@@ -324,13 +338,14 @@ export class Media {
     try {
       const result=await this.publication.publish(job.id,directory,{outputRoot:job.outputRoot,output:job.output});
       job.publishedFiles=result.publishedFiles;
+      if(this.suspendedJobs?.has(job.id))job.resumeOnLaunch=true;
       this.store.run('UPDATE jobs SET data=?,file=? WHERE id=?',JSON.stringify(job),result.file,job.id);
       await this.publication.commit(job.id,directory,result.publishedFiles);
       return this.completeSave(job,result.file);
     }catch(error){error.savePending=true;error.directory=directory;throw error;}
   }
   completeSave(job,file=job.mode==='danmaku'?clipFile(job.output.file,'danmaku'):job.output.file) {
-    delete job.pendingPublication;job.canRetrySave=false;
+    delete job.pendingPublication;delete job.resumeOnLaunch;job.canRetrySave=false;
     this.store.run("UPDATE jobs SET status='done',progress=1,error='',data=?,file=? WHERE id=?",JSON.stringify(job),file,job.id);
     this.preparation?.wake();
     return file;
@@ -342,14 +357,14 @@ export class Media {
     job.scope??='clips';if(!['clips','full'].includes(job.scope))throw new Error('导出范围无效。');
     job.outputRoot??=directories(this.store).exports;
     if(job.scope==='full') {
-      const session=this.store.session(job.session);this.assertFullReady(session,this.store.sources(job.session),job.automaticFullClean===true);
+      const session=this.store.session(job.session);this.assertFullReady(session,this.store.sources(job.session));
       job.ranges=validateRanges([{start:0,end:session.duration}],session.duration);
     }
     if(!['clean','danmaku','dual'].includes(job.mode))throw new Error('导出版本无效，请重新创建导出任务。');
     const sources=this.store.sources(job.session);
     const first=sources.find(s=>s.start<job.ranges[0].end&&s.start+s.duration>job.ranges[0].start);
     if(!first)throw new Error('选段中没有已录制的画面。');
-    const info=await this.exportSourceInfo(job,first,Math.max(first.start,job.ranges[0].start));
+    const info=await this.probeSource(first,Math.max(first.start,job.ranges[0].start));
     const copyClean=canCopyFullSource(job,sources,info,seekBase(this.store,first.id,job.ranges[0].start));
     if(job.scope==='full'&&job.mode==='clean'){
       job.cleanStreamCopy=false;
@@ -421,7 +436,7 @@ export class Media {
       if(range.end-cursor>.15)throw new Error('选段末尾尚未完整写入，请稍后重新导出。');
     }
     const first=segments[0]?.source;if(!first)throw new Error('选段中没有已录制的画面。');
-    const info=prepared.first?.id===first.id?prepared.info:await this.exportSourceInfo(job,first,segments[0].from);
+    const info=prepared.first?.id===first.id?prepared.info:await this.probeSource(first,segments[0].from);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session):null;
     const workDir=await this.temporaryDirectory('bili-export-',job.session);
@@ -436,15 +451,14 @@ export class Media {
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
           await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height));
         }
-        const sourceInfo=source.id===first.id?info:await this.exportSourceInfo(job,source,from);
+        const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=videoGeometryFilter(sourceInfo,width,height);
         const overlayFilter=`fps=60,ass=${subFile}`;
         const compatibleFull=singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
         let copyClean=!bakedOnly&&compatibleFull;
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;
         const mux=singlePart?['-movflags','+faststart']:[];
-        const inputBase=this.usesOriginal(job)?source.start:base;
-        const encode=(map,file,baked=false)=>['-ss',String(Math.max(0,from-inputBase)),'-t',String(to-from),'-map',map,'-map','0:a:0?',
+        const encode=(map,file,baked=false)=>['-ss',String(Math.max(0,from-base)),'-t',String(to-from),'-map',map,'-map','0:a:0?',
           ...encoderArguments(encoder,dual&&!copyClean),'-pix_fmt','yuv420p','-r',String(baked?60:info.fps),
           ...(copyAudio?['-c:a','copy']:['-c:a','aac','-b:a','192k']),...mux,'-y',file];
         const copied=file=>['-t',String(to-from),'-map','0:v:0','-map','0:a:0?',
@@ -465,7 +479,7 @@ export class Media {
         };
         let lastProgress=0;
         const render=()=>this.process(command(),
-            {cwd:workDir,input:this.exportSourceStream(job,source,from,to),progress:log=>{
+            {cwd:workDir,input:sourceStream(this.store,source.id,from,to),progress:log=>{
               if(this.closed)return;
               const matches=[...log.matchAll(/(?:^|\n)out_time_us=(\d+)/g)],seconds=Number(matches.at(-1)?.[1])/1000000;
               if(!Number.isFinite(seconds)||Date.now()-lastProgress<750)return;lastProgress=Date.now();

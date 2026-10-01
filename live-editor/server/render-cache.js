@@ -44,8 +44,8 @@ async function readJson(root, file) {
   if (fingerprint(await checkedFile(root, file)) !== fingerprint(stat)) throw error('PREP_MANIFEST', '缓存记录读取时发生变化。');
   return { value, identity: fileIdentity(stat) };
 }
-async function removeEmptyDirectory(directory) {
-  try { await plainDirectory(directory); await fs.rmdir(directory); }
+async function removeEmptyDirectory(directory, control) {
+  try { await plainDirectory(directory); control?.check(); await fs.rmdir(directory); control?.progress(); }
   catch (failure) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(failure.code)) throw failure; }
 }
 async function durableJson(file, value) {
@@ -253,7 +253,8 @@ export class RenderCache {
       await fs.unlink(path.join(directory, 'owner.json')); await fs.rmdir(directory);
     } catch { /* Never broaden cleanup after an identity/path failure. */ }
   }
-  async removeEntry(entry) {
+  async removeEntry(entry, { control }={}) {
+    control?.check();
     if (entry.deleting || entry.leases || this.building.has(entry.key)) return { freedBytes: 0, deletedFiles: 0, preserved: [{ path: entry.directory, reason: '缓存正在使用，已保留' }] };
     entry.deleting = true; let freedBytes = 0, deletedFiles = 0;
     try {
@@ -272,7 +273,9 @@ export class RenderCache {
       const names = await fs.readdir(entry.directory);
       if (names.some(name => !['owner.json', 'manifest.json', 'video.mp4', REMOVAL].includes(name))) return { freedBytes: 0, deletedFiles: 0, preserved: [publicEntry(entry)] };
       if (!receipt) {
+        control?.check();
         await durableJson(path.join(entry.directory, REMOVAL), value);
+        control?.progress();
         receipt = await readJson(this.root, path.join(entry.directory, REMOVAL));
       }
       entry.removing = true;
@@ -280,35 +283,42 @@ export class RenderCache {
         const file = path.join(entry.directory, name), stat = await checkedFile(this.root, file, { missing: true });
         if (!stat) continue;
         if (stat.nlink !== 1n || !matchRemovalIdentity(stat, expected)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
+        control?.check();
         await fs.unlink(file); freedBytes += Number(stat.size); deletedFiles++;
+        control?.progress();
       }
       // The short-lived receipt was created by cleanup itself and is not
       // counted as reclaimed recording bytes. Remove it last, without rm -r.
       if ((await fs.readdir(entry.directory)).some(name=>name!==REMOVAL)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
       if (!matchRemovalIdentity(await checkedFile(this.root,path.join(entry.directory,REMOVAL)),receipt.identity)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
+      control?.check();
       await fs.unlink(path.join(entry.directory, REMOVAL));
+      control?.progress();
       await fs.rmdir(entry.directory); this.entries.delete(entry.id);
-      for (const parent of [path.dirname(entry.directory), path.dirname(path.dirname(entry.directory))]) try { await plainDirectory(parent); await fs.rmdir(parent); } catch (failure) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(failure.code)) throw failure; }
+      control?.progress();
+      for (const parent of [path.dirname(entry.directory), path.dirname(path.dirname(entry.directory))]) try { await plainDirectory(parent); control?.check(); await fs.rmdir(parent); control?.progress(); } catch (failure) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(failure.code)) throw failure; }
       return { freedBytes, deletedFiles, preserved: [] };
-    } catch { return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] }; }
+    } catch (failure) { control?.check(); return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] }; }
     finally { entry.deleting = false; }
   }
-  async prune({ keepKeys, sessionId, targetBytes = this.maxBytes } = {}) {
+  async prune({ keepKeys, sessionId, targetBytes = this.maxBytes, control } = {}) {
+    control?.check();
     if (sessionId) await this.loadSession(sessionId, true); else await this.loadAll();
     const keep = keepKeys && new Set(keepKeys), result = { freedBytes: 0, deletedFiles: 0, preserved: [] };
     let used = [...this.entries.values()].reduce((sum, entry) => sum + entry.bytes, 0);
     for (const entry of [...this.entries.values()].sort((a, b) => a.lastUsed - b.lastUsed)) {
+      control?.check();
       if (sessionId && entry.spec.sessionId !== sessionId || keep?.has(entry.key) || (!keep && used <= targetBytes)) continue;
-      const removed = await this.removeEntry(entry); result.freedBytes += removed.freedBytes; result.deletedFiles += removed.deletedFiles; result.preserved.push(...removed.preserved);
+      const removed = await this.removeEntry(entry,{control}); control?.progress(); result.freedBytes += removed.freedBytes; result.deletedFiles += removed.deletedFiles; result.preserved.push(...removed.preserved);
       if (!this.entries.has(entry.id)) used -= entry.bytes;
     }
     return result;
   }
-  async removeSession(id) {
-    await this.cancelSession(id);
+  async removeSession(id, { control }={}) {
+    if(control)await control.wait(this.cancelSession(id));else await this.cancelSession(id);
     let result;
-    try { result = await this.prune({ sessionId: id, keepKeys: [] }); }
-    catch { return { freedBytes: 0, deletedFiles: 0, preserved: [{ path: path.join(this.root, id), reason: '缓存目录异常，已保留' }] }; }
+    try { result = await this.prune({ sessionId: id, keepKeys: [], control }); }
+    catch { control?.check(); return { freedBytes: 0, deletedFiles: 0, preserved: [{ path: path.join(this.root, id), reason: '缓存目录异常，已保留' }] }; }
     const sessionRoot = path.join(this.root, id);
     try {
       await plainDirectory(sessionRoot);
@@ -317,13 +327,14 @@ export class RenderCache {
       // and live/partial generations are never removed by this sweep.
       for (const key of (await fs.readdir(sessionRoot)).filter(name => KEY.test(name))) {
         const directory = path.join(sessionRoot, key); await plainDirectory(directory);
-        for (const token of (await fs.readdir(directory)).filter(name => UUID.test(name))) await removeEmptyDirectory(path.join(directory, token));
-        await removeEmptyDirectory(directory);
+        for (const token of (await fs.readdir(directory)).filter(name => UUID.test(name))) await removeEmptyDirectory(path.join(directory, token),control);
+        await removeEmptyDirectory(directory,control);
       }
       const remaining = await fs.readdir(sessionRoot);
-      if (remaining.length) result.preserved.push({ path: sessionRoot, reason: '缓存目录仍含未知、未完成或被替换的文件，已保留' }); else await fs.rmdir(sessionRoot);
+      control?.check();
+      if (remaining.length) result.preserved.push({ path: sessionRoot, reason: '缓存目录仍含未知、未完成或被替换的文件，已保留' }); else {await fs.rmdir(sessionRoot);control?.progress();}
     }
-    catch (failure) { if (failure.code !== 'ENOENT') result.preserved.push({ path: sessionRoot, reason: '缓存目录异常，已保留' }); }
+    catch (failure) { control?.check(); if (failure.code !== 'ENOENT') result.preserved.push({ path: sessionRoot, reason: '缓存目录异常，已保留' }); }
     return result;
   }
   async close() { this.closed = true; const ids = new Set([...this.building.values()].map(work => work.spec.sessionId)); for (const entry of this.entries.values()) if (entry.leases) ids.add(entry.spec.sessionId); await Promise.all([...ids].map(id => this.cancelSession(id))); }

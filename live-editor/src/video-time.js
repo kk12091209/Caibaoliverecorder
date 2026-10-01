@@ -3,11 +3,21 @@ export function formatVideoTime(value, milliseconds = false) {
   const seconds = Number.isFinite(number) ? Math.max(0, number) : 0;
   // Quantize once before splitting fields: floating-point frame stepping can
   // land just below a whole second, so a separately rounded fraction overflows.
-  const totalMilliseconds = milliseconds ? Math.round(seconds * 1000) : Math.floor(seconds) * 1000;
-  const wholeSeconds = Math.floor(totalMilliseconds / 1000);
+  const totalMilliseconds = Math.round(seconds * 1000);
+  const wholeSeconds = milliseconds ? Math.floor(totalMilliseconds / 1000) : Math.round(seconds);
   const time = [Math.floor(wholeSeconds / 3600), Math.floor(wholeSeconds / 60) % 60, wholeSeconds % 60]
     .map(part => String(part).padStart(2, '0')).join(':');
   return time + (milliseconds ? '.' + String(totalMilliseconds % 1000).padStart(3, '0') : '');
+}
+
+// Shown durations use the same rounded seconds as the start and end labels,
+// so 00:00:07 → 00:00:13 reads as 6 seconds rather than the truncated raw gap.
+export function displayedSpan(start, end) {
+  const seconds = value => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
+  };
+  return Math.max(0, seconds(end) - seconds(start));
 }
 
 // An exclusive clip end can be exactly before a stream gap. Keep the marker,

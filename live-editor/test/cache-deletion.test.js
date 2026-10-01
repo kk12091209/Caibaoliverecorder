@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { setImmediate as nextTurn } from 'node:timers/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { Store } from '../server/store.js';
 import { RenderCache } from '../server/render-cache.js';

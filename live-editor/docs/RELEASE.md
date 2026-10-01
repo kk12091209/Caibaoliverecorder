@@ -40,7 +40,7 @@
   -AppRoot '<最新 live-editor 源码目录>' `
   -DesktopRoot '<desktop/package 目录>' `
   -RuntimeRoot '<包含 node 与 recorder 的 runtime 目录>' `
-  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.1'
+  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.2'
 ```
 
 输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。输出包含 `.zip`、`-setup.exe`、`.7z`、体积/哈希报告、未压缩工作目录；`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256。安装版额外加入安装器许可、卸载程序与卸载快捷方式。安装器脚本与中文翻译许可位于 `installer`。

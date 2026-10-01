@@ -11,7 +11,7 @@ const thumbWidth=computed(()=>Math.min(trackWidth.value,Math.max(28,props.durati
 const travel=computed(()=>Math.max(0,trackWidth.value-thumbWidth.value));
 const movable=computed(()=>!props.disabled&&maxFrom.value>.001&&travel.value>0);
 const thumbStyle=computed(()=>({left:(maxFrom.value>0?Math.max(0,Math.min(1,props.from/maxFrom.value))*travel.value:0)+'px',width:thumbWidth.value+'px'}));
-const description=computed(()=>`显示 ${format(props.from,true)} 至 ${format(props.to,true)}，共 ${format(props.duration)}`);
+const description=computed(()=>`显示 ${format(props.from)} 至 ${format(props.to)}，共 ${format(props.duration)}`);
 function pan(from){emit('pan',Math.max(0,Math.min(maxFrom.value,from)));}
 function pointerDown(event){
   if(!movable.value||event.button!==0||drag)return;

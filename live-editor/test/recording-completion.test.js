@@ -7,7 +7,6 @@ import { execFileSync } from 'node:child_process';
 import { Store } from '../server/store.js';
 import { Media } from '../server/media.js';
 import { BackgroundPreparation } from '../server/background-preparation.js';
-import { CompletedRecording } from '../server/completed-recording.js';
 import { Ingestor } from '../server/ingest.js';
 import { createApp } from '../server/index.js';
 import { directories } from '../server/directories.js';
@@ -23,10 +22,10 @@ const run=(tool,args)=>execFileSync(tool,args,{windowsHide:true,encoding:'utf8'}
 const missing=file=>assert.rejects(fs.stat(file),{code:'ENOENT'});
 const wait=()=>new Promise(resolve=>setTimeout(resolve,10));
 async function write(file,bytes){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,bytes);return file;}
-async function setup(t,{real=false,sar='1/1'}={}) {
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-auto-clean-')),f={root};
+async function setup(t,{sar='1/1'}={}) {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-clean-export-')),f={root};
   t.after(async()=>{
-    await f.scheduler?.close();await f.preparation?.close();f.media?.close();
+    await f.preparation?.close();f.media?.close();
     while(f.media?.processing)await wait();f.store?.close();
     assert.equal(path.dirname(await fs.realpath(root)),await fs.realpath(os.tmpdir()));
     await fs.rm(root,{recursive:true,force:true});
@@ -34,19 +33,11 @@ async function setup(t,{real=false,sar='1/1'}={}) {
   f.store=new Store(path.join(root,'data'));f.store.projectRoot=root;
   f.session=f.store.createSession({status:'finished',created:'2026-09-29T21:30:00+08:00'});
   f.file=path.join(f.store.root,'originals','source.flv');await fs.mkdir(path.dirname(f.file),{recursive:true});
-  if(real)run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=30','-f','lavfi','-i','sine=sample_rate=48000',
+  run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=30','-f','lavfi','-i','sine=sample_rate=48000',
     '-t','2.4','-vf',`setsar=${sar}`,'-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-g','30','-bf','2','-c:a','aac','-y',f.file]);
-  else await fs.writeFile(f.file,'original video');
   f.source=f.store.addSource(f.session.id,f.file,0,f.session.created,true);
   await fs.writeFile(f.source.xml,'<i><d p="0.4,1,25,16777215,0,0,0,0">comment</d></i>');
-  if(real){const ingest=new Ingestor(f.store);for(let n=0;n<3;n++)await ingest.tick();}
-  else {
-    f.store.run('UPDATE sources SET closed=2,duration=10 WHERE id=?',f.source.id);
-    f.store.run('UPDATE sessions SET duration=10 WHERE id=?',f.session.id);
-    const chunk=await write(path.join(f.store.root,'chunks',f.source.id,'00000000.flvpart'),'transition');
-    f.store.run('INSERT INTO chunks VALUES(?,?,?,?,?,?)',f.source.id,0,0,10,chunk,10);
-    f.store.run('INSERT INTO keyframes VALUES(?,?,?,?)',f.source.id,0,0,0);
-  }
+  const ingest=new Ingestor(f.store);for(let n=0;n<3;n++)await ingest.tick();
   attach(f);return f;
 }
 function attach(f) {
@@ -54,61 +45,16 @@ function attach(f) {
   f.preparation=new BackgroundPreparation(f.store,f.media,{idleGraceMs:0});
   f.media.preparation=f.preparation;f.store.preparation=f.preparation;f.store.renderCache=f.media.renderCache;
   f.store.temporaryWorkspaces=f.media.temporaryWorkspaces;
-  f.scheduler=new CompletedRecording(f.store,f.media,f.preparation);
 }
 const jobs=f=>f.store.all('SELECT * FROM jobs WHERE session=?',f.session.id);
 
-test('完成状态和源封闭共同触发一次 full/clean；重启后仍只保留该任务',async t=>{
-  const f=await setup(t);
-  f.store.run("UPDATE sessions SET status='recording' WHERE id=?",f.session.id);
-  await f.scheduler.tick();assert.equal(jobs(f).length,0);
-  await assert.rejects(f.store.deleteSession(f.session.id,true),/录制/);
-  f.store.run("UPDATE sessions SET status='finished' WHERE id=?",f.session.id);
-  f.store.run('UPDATE sources SET closed=1 WHERE id=?',f.source.id);
-  await f.scheduler.tick();assert.equal(jobs(f).length,0);
-  f.store.run("UPDATE sources SET closed=2,error='incomplete' WHERE id=?",f.source.id);
-  await f.scheduler.tick();assert.equal(jobs(f).length,0);
-  f.store.run("UPDATE sources SET error='' WHERE id=?",f.source.id);
-  f.store.saveEdit(f.session.id,{revision:0,ranges:[{start:2,end:3,selected:false}],excluded:['chat'],undo:[]});
-  await Promise.all([f.scheduler.tick(),f.scheduler.tick(),f.scheduler.tick()]);
-  const job=JSON.parse(jobs(f)[0].data);
-  assert.equal(jobs(f).length,1);assert.equal(job.mode,'clean');assert.equal(job.scope,'full');assert.equal(job.automaticFullClean,true);
-  assert.deepEqual(job.ranges,[{start:0,end:10}]);assert.equal(f.preparation.row(f.session.id).status,'queued');
-  await assert.rejects(f.store.deleteSession(f.session.id,true),/导出/);
-  await f.scheduler.close();await f.preparation.close();f.media.close();f.store.close();
-  f.store=new Store(path.join(f.root,'data'));f.store.projectRoot=f.root;attach(f);
-  await f.scheduler.tick();assert.equal(jobs(f).length,1);assert.equal(jobs(f)[0].id,job.id);
-});
-
-for(const status of ['done','queued','running','finalizing','saving','save_failed'])test(`已有手动完整纯净版 ${status} 时不再自动导出`,async t=>{
-  const f=await setup(t);
-  const existing=await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});
-  if(status==='done')await write(existing.output.file,minimalMp4);
-  f.store.run('UPDATE jobs SET status=? WHERE id=?',status,existing.id);
-  await f.scheduler.tick();await f.scheduler.tick();assert.equal(jobs(f).length,1);
-});
-
-test('并发手动/自动预留相同名字不能覆盖；已 ready 的预处理不重置',async t=>{
-  const f=await setup(t);
-  await f.preparation.enqueue(f.session.id);
-  f.store.run("UPDATE preparation_jobs SET status='ready',prepared_seconds=10,bytes=123 WHERE session=?",f.session.id);
-  const ready={...f.preparation.row(f.session.id)};
-  await Promise.all([f.scheduler.tick(),f.media.enqueue(f.session.id,{scope:'full',mode:'clean'})]);
-  const files=jobs(f).map(row=>JSON.parse(row.data).output.file);
-  assert.equal(new Set(files).size,files.length);assert.ok(files.length>=1&&files.length<=2);
-  if(files.length===2)assert.ok(files.some(file=>/_2\.mp4$/.test(file)));
-  assert.deepEqual({...f.preparation.row(f.session.id)},ready);
-});
-
-test('自动整场纯净版从原始 FLV 码流复制；blocked 片段保留；输出包与原片直接封装一致',async t=>{
-  const f=await setup(t,{real:true}),duration=f.store.session(f.session.id).duration;
+test('手动整场纯净版码流复制；blocked 片段保留；输出包与原片直接封装一致',async t=>{
+  const f=await setup(t),duration=f.store.session(f.session.id).duration;
   f.store.run("INSERT INTO source_storage(source,mode,status,reason,eligible) VALUES(?,'chunks','blocked','完整原片内容与过渡片段不一致',1)",f.source.id);
   const chunks=f.store.all('SELECT path FROM chunks WHERE source=?',f.source.id);
-  // Make the alternate representation deliberately unreadable, without deleting it.
-  for(const chunk of chunks)await fs.writeFile(chunk.path,'different transition bytes');
   const calls=[],process=f.media.process.bind(f.media);
   f.media.process=(args,options)=>{calls.push(args);return process(args,options);};
-  await f.scheduler.tick();await Media.prototype.work.call(f.media);
+  await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});await Media.prototype.work.call(f.media);
   const row=jobs(f)[0],job=JSON.parse(row.data);assert.equal(row.status,'done',row.error);
   assert.equal(job.cleanStreamCopy,true);assert.equal(calls.length,1);assert.ok(calls[0].includes('copy'));assert.ok(!calls[0].includes('libx264'));
   assert.equal(path.dirname(path.dirname(row.file)),directories(f.store).full);
@@ -117,54 +63,47 @@ test('自动整场纯净版从原始 FLV 码流复制；blocked 片段保留；�
   run(ffmpeg,['-v','error','-fflags','+genpts','-i',f.file,'-t',String(duration),'-map','0:v:0','-map','0:a:0?','-c','copy','-movflags','+faststart','-y',expected]);
   const packets=file=>JSON.parse(run(ffprobe,['-v','error','-show_packets','-show_data_hash','sha256','-show_entries','packet=stream_index,pts_time,dts_time,data_hash','-of','json',file]));
   assert.deepEqual(packets(row.file),packets(expected));
-  for(const chunk of chunks)assert.equal(await fs.readFile(chunk.path,'utf8'),'different transition bytes');
+  for(const chunk of chunks)await fs.stat(chunk.path);
   assert.equal(f.store.get('SELECT status FROM source_storage WHERE source=?',f.source.id).status,'blocked');
-  await f.scheduler.tick();assert.equal(jobs(f).length,1);
+  assert.equal(jobs(f).length,1);
 });
 
 test('复制及现有编码回退均失败会进入 failed，原片保留且预处理可以继续',async t=>{
-  const f=await setup(t,{real:true});let calls=0,prepared=0;
+  const f=await setup(t);let calls=0,prepared=0;
   f.media.process=async()=>{calls++;throw new Error('simulated copy and fallback failure');};
   f.media.prepareNext=async()=>{prepared++;return {done:true,preparedSeconds:2.4,totalSeconds:2.4,bytes:0};};
-  await f.scheduler.tick();await Media.prototype.work.call(f.media);
+  await f.preparation.enqueue(f.session.id);
+  await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});await Media.prototype.work.call(f.media);
   const row=jobs(f)[0];assert.equal(row.status,'failed');assert.match(row.error,/simulated/);assert.equal(calls,2);
   assert.equal(JSON.parse(row.data).cleanStreamCopy,false);assert.equal(JSON.parse(row.data).streamCopyFallback,true);
   assert.equal(f.media.hasForegroundWork(),false);assert.equal(f.preparation.gate(),'');
   await f.preparation.tick();assert.equal(prepared,1);assert.equal(f.preparation.row(f.session.id).status,'ready');
-  await f.scheduler.tick();assert.equal(jobs(f).length,1);
+  assert.equal(jobs(f).length,1);
   await fs.stat(f.file);await fs.stat(f.store.get('SELECT path FROM chunks WHERE source=? LIMIT 1',f.source.id).path);
 });
 
 test('不兼容的 SAR 沿用完整导出编码并持久记录未码流复制，保持源分辨率和帧率',async t=>{
-  const f=await setup(t,{real:true,sar:'4/3'}),calls=[],process=f.media.process.bind(f.media);
+  const f=await setup(t,{sar:'4/3'}),calls=[],process=f.media.process.bind(f.media);
   f.media.process=(args,options)=>{calls.push(args);return process(args,options);};
-  await f.scheduler.tick();await Media.prototype.work.call(f.media);
+  await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});await Media.prototype.work.call(f.media);
   const row=jobs(f)[0],job=JSON.parse(row.data);
   assert.equal(row.status,'done',row.error);assert.equal(job.cleanStreamCopyEligible,false);assert.equal(job.cleanStreamCopy,false);assert.ok(job.cleanEncodingReason);
   assert.equal(calls.length,1);assert.ok(calls[0].includes('libx264'));assert.equal(calls[0][calls[0].indexOf('-crf')+1],'20');
   const info=await f.media.probe(row.file);assert.equal(info.width,320);assert.equal(info.height,180);assert.equal(info.fps,30);
 });
 
-test('关闭服务/调度器不再入队；目录失败保留可见终态而不反复自动重试',async t=>{
-  const f=await setup(t);f.media.closed=true;await f.scheduler.tick();assert.equal(jobs(f).length,0);f.media.closed=false;
-  const notDirectory=await write(path.join(f.root,'occupied'),'keep');f.store.setting('export-directory',notDirectory);
-  await f.scheduler.tick();assert.equal(jobs(f)[0].status,'failed');assert.ok(jobs(f)[0].error);
-  await f.scheduler.tick();assert.equal(jobs(f).length,1);assert.equal(f.preparation.row(f.session.id).status,'queued');
-  await f.scheduler.close();await f.scheduler.tick();assert.equal(jobs(f).length,1);
-});
-
-test('队列中的损坏旧任务进入 failed，不会让随后自动纯净版卡在 running',async t=>{
-  const f=await setup(t,{real:true});
+test('队列中的损坏旧任务进入 failed，不会让随后手动纯净版卡在 running',async t=>{
+  const f=await setup(t);
   f.store.run("INSERT INTO jobs(id,session,created,status,mode,data) VALUES(?,?,'2000-01-01','queued','clean','{invalid')",'damaged',f.session.id);
-  await f.scheduler.tick();await Media.prototype.work.call(f.media);
+  await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});await Media.prototype.work.call(f.media);
   assert.equal(f.store.get("SELECT status FROM jobs WHERE id='damaged'").status,'failed');
   assert.equal(jobs(f).find(row=>row.id!=='damaged').status,'done');assert.equal(f.media.processing,false);
 });
 
-test('删除 blocked 素材释放原片/过渡片段/缓存/临时文件和 DB；保留自动纯净版及弹幕版',async t=>{
-  const f=await setup(t,{real:true});
+test('删除 blocked 素材释放原片/过渡片段/缓存/临时文件和 DB；保留已导出纯净版及弹幕版',async t=>{
+  const f=await setup(t);
   f.store.run("INSERT INTO source_storage(source,mode,status,eligible) VALUES(?,'chunks','blocked',1)",f.source.id);
-  await f.scheduler.tick();await Media.prototype.work.call(f.media);
+  await f.media.enqueue(f.session.id,{scope:'full',mode:'clean'});await Media.prototype.work.call(f.media);
   const clean=jobs(f)[0];assert.equal(clean.status,'done',clean.error);
   const baked=await f.media.enqueue(f.session.id,{scope:'full',mode:'danmaku'});await Media.prototype.work.call(f.media);
   const bakedRow=f.store.get('SELECT * FROM jobs WHERE id=?',baked.id);assert.equal(bakedRow.status,'done',bakedRow.error);

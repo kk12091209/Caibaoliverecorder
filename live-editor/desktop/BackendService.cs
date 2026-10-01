@@ -8,8 +8,8 @@ namespace LiveRecorderDesktop;
 
 internal sealed class BackendStatus
 {
-    internal bool Busy, Background;
-    internal string Reason = "", Pending = "", Build = "";
+    internal bool Busy, Background, QuitAccepted, RequiresExitConfirmation, Stopping;
+    internal string Reason = "", Pending = "", Build = "", CloseAction = "ask";
 }
 
 internal sealed class BackendService : IDisposable
@@ -80,11 +80,16 @@ internal sealed class BackendService : IDisposable
             using var response = await http.SendAsync(request); if (!response.IsSuccessStatusCode) return null;
             var value = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
             if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data)) return null;
-            return new BackendStatus { Busy = Flag(value, "busy"), Background = Flag(value, "background"), Reason = Text(value, "reason"), Pending = Text(value, "pending"), Build = Text(value, "build") };
+            return new BackendStatus { Busy = Flag(value, "busy"), Background = Flag(value, "background"), QuitAccepted = Flag(value, "quitAccepted"), RequiresExitConfirmation = Flag(value, "requiresExitConfirmation"), Stopping = Flag(value, "stopping"), Reason = Text(value, "reason"), Pending = Text(value, "pending"), Build = Text(value, "build"), CloseAction = Text(value, "closeAction") };
         }
         catch (Exception error) when (error is HttpRequestException || error is TaskCanceledException || error is IOException || error is ArgumentException || error is KeyNotFoundException || error is FormatException || error is InvalidOperationException) { return null; }
     }
     internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", client, pid = Process.GetCurrentProcess().Id });
+    internal async Task SaveCloseActionAsync(string closeAction)
+    {
+        var status = await CallAsync(new { action = "setCloseAction", closeAction });
+        if (status?.CloseAction != closeAction) throw new IOException("设置保存失败，请重试。");
+    }
     private bool HasDataWriter()
     {
         var file = Path.Combine(data, "desktop-service.lock.sqlite");
@@ -146,6 +151,12 @@ internal sealed class BackendService : IDisposable
         ExitRequested = true;
         return await CallAsync(new { action = "exit" });
     }
+    internal async Task<BackendStatus?> RequestQuitAsync(bool confirmed)
+    {
+        var status = await CallAsync(new { action = "quit", confirmed });
+        if (status?.QuitAccepted == true) ExitRequested = true;
+        return status;
+    }
     internal Task<BackendStatus> EnsureAsync() => connecting ??= EnsureCoreAsync();
     private async Task<BackendStatus> EnsureCoreAsync()
     {
@@ -161,6 +172,7 @@ internal sealed class BackendService : IDisposable
                     var status = await HeartbeatAsync();
                     if (status is not null)
                     {
+                        if (status.Stopping || status.Pending == "quit") { await Task.Delay(100); continue; }
                         if (status.Build == build) return status;
                         if (restartRequested != instance)
                         {

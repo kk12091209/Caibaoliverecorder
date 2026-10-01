@@ -7,7 +7,7 @@ param(
     [string]$DesktopRoot = '',
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
-    [string]$Version = '0.1.1',
+    [string]$Version = '0.1.2',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
     [long]$MaxDownloadBytes = 100000000
@@ -88,6 +88,8 @@ function Write-Text([string]$relative, [string]$text) {
     New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
     [IO.File]::WriteAllText($destination, $text, [Text.UTF8Encoding]::new($false))
 }
+$desktopVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $DesktopRoot '录播机.exe'))
+if ($desktopVersion.ProductName -ne '菜播·录包机' -or $desktopVersion.ProductVersion -ne $Version) { throw 'Desktop executable does not match the requested application release version.' }
 Add-File (Join-Path $DesktopRoot '录播机.exe') '录播机.exe'
 Add-ComponentFile (Join-Path $DesktopRoot '程序组件\录播机.exe.config') '录播机.exe.config'
 # Create fresh, empty destinations. Never copy files from a user's export folders.

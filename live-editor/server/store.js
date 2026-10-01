@@ -60,19 +60,22 @@ export class Store {
   session(id) { return this.get("SELECT * FROM sessions WHERE id=? AND deleted_at=''", id); }
   sessions() { return this.all("SELECT * FROM sessions WHERE deleted_at='' ORDER BY created DESC LIMIT 200"); }
   pendingCleanup() { return this.all("SELECT id,title,created,status,duration,purge_started_at,purge_error FROM sessions WHERE deleted_at!='' AND purge_started_at!='' AND purged_at='' ORDER BY purge_started_at DESC"); }
-  async deleteSession(id, confirmed) {
+  async deleteSession(id, confirmed, { control }={}) {
     if (confirmed !== true) throw new Error('请先确认是否删除这份素材。');
     this.deletions??=new Set();
     if(this.deletions.has(id))throw new Error('这份素材正在删除，请稍候。');
     this.deletions.add(id);
     let started=false, preparationBlocked=false, cacheBlocked=false;
+    const wait=operation=>control?control.wait(operation):operation;
     try {
+      control?.check();
       assertDeletable(this,id);
-      if(this.preparation){preparationBlocked=true;await this.preparation.cancelSession(id);}
-      if(this.renderCache){cacheBlocked=true;this.renderCache.blockSession(id);await this.renderCache.cancelSession(id);}
+      if(this.preparation){preparationBlocked=true;await wait(this.preparation.cancelSession(id));}
+      if(this.renderCache){cacheBlocked=true;this.renderCache.blockSession(id);await wait(this.renderCache.cancelSession(id));}
       if(this.storage?.currentSession===id||this.sources(id).some(source=>sourceReaderCount(this,source.id)))throw new Error('素材仍在读取或整理，请等待结束后再删除。');
-      const plan=await prepareDeletion(this,id);
+      const plan=await wait(prepareDeletion(this,id,{control}));
       this.transaction(()=>{
+        control?.check();
         assertDeletable(this,id);
         if(JSON.stringify(this.sources(id))!==plan.sourcesSnapshot)throw new Error('素材信息刚发生变化，请稍后重试删除。');
         if(JSON.stringify(this.all('SELECT chunks.* FROM chunks JOIN sources ON sources.id=chunks.source WHERE sources.session=? ORDER BY chunks.source,chunks.seq',id))!==plan.chunksSnapshot||this.get('SELECT archive FROM sessions WHERE id=?',id).archive!==plan.archive)throw new Error('素材文件清单刚发生变化，请稍后重试删除。');
@@ -82,15 +85,17 @@ export class Store {
         this.run("UPDATE sessions SET deleted_at=CASE WHEN deleted_at='' THEN ? ELSE deleted_at END,purge_started_at=?,purge_error='' WHERE id=?",now,now,id);
       });
       started=true;
-      const result=await removeDeletionFiles(this,id,plan);
+      const result=await removeDeletionFiles(this,id,plan,{control});
       if(this.renderCache){
-        const cache=await this.renderCache.removeSession(id);
+        control?.check();
+        const cache=await this.renderCache.removeSession(id,{control});
         result.freedBytes+=cache.freedBytes;result.deletedFiles+=cache.deletedFiles;
         result.preserved.push(...cache.preserved.map(entry=>({...entry,cache:true})));
         if(cache.preserved.length)result.message+=' 部分预处理缓存身份异常或仍有未知文件，已保留。';
       }
       if(this.temporaryWorkspaces){
-        const temporary=await this.temporaryWorkspaces.removeSession(id);
+        control?.check();
+        const temporary=await this.temporaryWorkspaces.removeSession(id,{control});
         result.freedBytes+=temporary.freedBytes;result.deletedFiles+=temporary.deletedFiles;
       }
       // Keep the durable source manifest until all internal work files are
@@ -102,6 +107,7 @@ export class Store {
       }
       this.transaction(()=>{
         for(const source of this.sources(id)) {
+          control?.check();
           // A tiny path receipt prevents delayed webhooks/recovery scans from
           // resurrecting deleted files without retaining session/source rows.
           this.run('INSERT OR IGNORE INTO deleted_source_paths VALUES(?)',sourcePathKey(source.path));
@@ -121,7 +127,8 @@ export class Store {
         this.run('DELETE FROM sources WHERE session=?',id);
         this.run('DELETE FROM sessions WHERE id=?',id);
       });
-      await this.preparation?.forgetSession(id);
+      // cancelSession already stopped this producer before physical deletion.
+      await this.preparation?.forgetSession(id,{alreadyStopped:true});
       return {ok:true,...result};
     } catch(error) {
       if(started||this.get('SELECT purge_started_at FROM sessions WHERE id=?',id)?.purge_started_at)this.run('UPDATE sessions SET purge_error=? WHERE id=?',error.message,id);

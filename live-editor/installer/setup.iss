@@ -19,9 +19,9 @@
 AppId={#SetupAppId}
 AppName=菜播·录包机
 AppVersion={#AppVersion}
-AppPublisher=菜播·录包机开源项目
+AppPublisher=糊涂小菜包
 AppPublisherURL=https://github.com/kk12091209/Caibaoliverecorder
-AppSupportURL=https://github.com/kk12091209/Caibaoliverecorder/issues
+AppSupportURL=https://space.bilibili.com/3546729402076115
 AppUpdatesURL=https://github.com/kk12091209/Caibaoliverecorder/releases
 DefaultDirName={localappdata}\Programs\菜播·录包机
 DefaultGroupName=菜播·录包机

@@ -3,10 +3,36 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+// HTTP Fetch/WebView2 blocks these even on loopback. Keep the OS allocation,
+// but retry before publishing an inaccessible address.
+// https://fetch.spec.whatwg.org/#port-blocking
+const blockedPorts=new Set([
+  0,1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,87,95,
+  101,102,103,104,109,110,111,113,115,117,119,123,135,137,139,143,161,179,
+  389,427,465,512,513,514,515,526,530,531,532,540,548,554,556,563,587,601,
+  636,989,990,993,995,1719,1720,1723,2049,3659,4045,4190,5060,5061,6000,
+  6566,6665,6666,6667,6668,6669,6679,6697,10080,
+]);
+export const browserAccessiblePort=port=>Number.isInteger(port)&&port>0&&port<65536&&!blockedPorts.has(port);
+export async function listenLocal(server,port=0){
+  if(port!==0&&!browserAccessiblePort(port))throw new Error('本机服务地址不可访问，请使用自动分配或有效端口。');
+  for(let attempt=0;attempt<32;attempt++){
+    await new Promise((resolve,reject)=>{
+      const ready=()=>{server.off('error',failed);resolve();};
+      const failed=error=>{server.off('listening',ready);reject(error);};
+      server.once('error',failed);server.once('listening',ready);
+      server.listen(port,'127.0.0.1');
+    });
+    const allocated=server.address().port;
+    if(browserAccessiblePort(allocated))return allocated;
+    await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  }
+  throw new Error('暂时无法自动分配可访问的本机地址，请重试。');
+}
 export async function availableLocalPort(){
   const listener=net.createServer();
-  await new Promise((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});
-  const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));return port;
+  try{return await listenLocal(listener);}
+  finally{if(listener.listening)await new Promise(resolve=>listener.close(resolve));}
 }
 export async function findOwnedCore({executable,directory}){
   if(process.platform!=='win32')return null;

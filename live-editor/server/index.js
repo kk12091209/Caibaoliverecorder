@@ -10,6 +10,7 @@ import { Media } from './media.js';
 import { BackgroundPreparation } from './background-preparation.js';
 import { JobDeletion } from './job-deletion.js';
 import { DeletionMaintenance } from './deletion-maintenance.js';
+import { SessionDeletion } from './session-deletion.js';
 import { WaveformService } from './waveform.js';
 import { DensityService } from './density.js';
 import { Recorder, resolveRoom } from './recorder.js';
@@ -17,6 +18,8 @@ import { directories, writableDirectory, openDirectory } from './directories.js'
 import { exportedJobFile } from './output-names.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
+import { DesktopExit } from './desktop-exit.js';
+import { listenLocal } from './local-endpoint.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -38,7 +41,8 @@ async function createManagedApp(options,runtime) {
   store.density=density;
   const recorder=new Recorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port});
   await media.recoverPendingSaves();
-  const clients=new Set(),deletingSessions=new Set(); let closing=false,app,closePromise;
+  const clients=new Set(); let closing=false,app,closePromise;
+  const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000});
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     busyReason:()=>{
@@ -53,6 +57,8 @@ async function createManagedApp(options,runtime) {
   });
   media.preparation=preparation;store.preparation=preparation;store.renderCache=media.renderCache;
   store.temporaryWorkspaces=media.temporaryWorkspaces;
+  const closeAction=()=>{const saved=store.setting('window-close-action');return ['exit','background'].includes(saved)?saved:'ask';};
+  function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
   function activity(){
     const recording=recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
     const processing=media.hasForegroundWork({includeInteractive:false})||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
@@ -60,16 +66,13 @@ async function createManagedApp(options,runtime) {
     const organising=ingestor.busy||storage.busy||deletingSessions.size>0||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1");
     const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
     const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy;
-    return {busy,background:busy||monitoring,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
+    const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
+    return {busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
   }
-  async function deleteMaterial(id) {
-    if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
-    deletingSessions.add(id);storage.blockSession(id);
-    try {await waveform.cancelSession(id);await media.cancelPreviews(id);await storage.waitForSession(id);return await store.deleteSession(id,true);}
-    finally {density.drop(id);waveform.allowSession(id);storage.allowSession(id);media.allowSession(id);deletingSessions.delete(id);}
-  }
+  const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
+  const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
-  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.online,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store)};}
+  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.online,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction()};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -82,6 +85,7 @@ async function createManagedApp(options,runtime) {
     if(start>end||start>=stat.size){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}
     const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.mkv':'video/x-matroska','.flv':'video/x-flv','.xml':'application/xml; charset=utf-8','.json':'application/json','.ass':'text/plain; charset=utf-8'};
     const headers={'Content-Type':mime[path.extname(file)]||'application/octet-stream','Content-Length':end-start+1,'Accept-Ranges':'bytes','X-Content-Type-Options':'nosniff'};
+    if(['.html','.js','.css'].includes(path.extname(file)))headers['Cache-Control']='no-store';
     if(status===206)headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`;
     res.writeHead(status,headers);if(req.method==='HEAD')return res.end();
     const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
@@ -98,10 +102,12 @@ async function createManagedApp(options,runtime) {
           const input=await body(req);
           if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
           else if(input.action==='detach')runtime.clients.delete(input.client);
+          else if(input.action==='setCloseAction'){validateCloseAction(input.closeAction);store.setting('window-close-action',input.closeAction);}
+          else if(input.action==='quit'){const decision=await desktopExit.request(input.confirmed??false);return json(res,{...runtime.status(activity()),...decision,closeAction:closeAction()});}
           else if(['exit','restart'].includes(input.action))runtime.request(input.action);
           else throw new Error('无效的桌面操作。');
         }else if(req.method!=='GET')return json(res,{error:'请求方式无效。'},405);
-        return json(res,runtime.status(activity()));
+        return json(res,{...runtime.status(activity()),closeAction:closeAction()});
       }
       if(runtime.stopping&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
       if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
@@ -140,19 +146,13 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(Object.keys(input).some(key=>key!=='exportDirectory'))throw new Error('不支持的设置项。');
+        if(Object.keys(input).some(key=>!['exportDirectory','closeAction'].includes(key)))throw new Error('不支持的设置项。');
+        if('closeAction' in input)validateCloseAction(input.closeAction);
         if('exportDirectory' in input)store.setting('export-directory',await writableDirectory(input.exportDirectory));
-        return json(res,{ok:true,paths:directories(store)});
+        if('closeAction' in input)store.setting('window-close-action',input.closeAction);
+        return json(res,{ok:true,paths:directories(store),closeAction:closeAction()});
       }
       if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
-      if(p==='/api/sessions/import'&&req.method==='POST'){
-        const input=await body(req),file=path.resolve(String(input.path||''));if(!/\.flv$/i.test(file))throw new Error('请导入原始 FLV 文件。');
-        const stat=await fs.stat(file);if(!stat.isFile())throw new Error('所选路径不是文件。');
-        if(store.wasSourceDeleted(file))throw new Error('这份原始素材已经删除。');
-        const existing=store.get('SELECT session FROM sources WHERE path=?',file);if(existing){const session=store.session(existing.session);if(!session)throw new Error('这份素材已删除。');return json(res,session);}
-        const session=store.createSession({title:input.title||path.basename(file,'.flv'),status:input.follow?'recording':'importing',room:0});
-        store.addSource(session.id,file,0,new Date().toISOString(),!input.follow);void ingestor.tick();return json(res,session);
-      }
       if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){
         const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
         const sources=store.sources(session.id).map(s=>({id:s.id,start:s.start,wall:s.wall,duration:s.duration,closed:s.closed,error:s.error,path:s.path,metadata:store.setting('metadata:'+s.id)}));
@@ -174,7 +174,10 @@ async function createManagedApp(options,runtime) {
         if(session.status!=='finished'||store.get('SELECT id FROM sources WHERE session=? AND closed<2',id))throw new Error('这份素材仍在录制或整理中，请结束后再删除。');
         if(session.archive_status==='running'||store.get("SELECT id FROM jobs WHERE session=? AND status IN ('queued','running','finalizing','saving','cancelling')",id))throw new Error('这份素材正在导出或保存，请完成后再删除。');
         if(store.get("SELECT id FROM jobs WHERE session=? AND status='save_failed'",id))throw new Error('这份素材还有编码完成但尚未保存的导出，请先重试保存。');
-        return json(res,await deleteMaterial(id));
+        const controller=new AbortController(),disconnected=()=>{if(!res.writableFinished)controller.abort();};
+        res.once('close',disconnected);
+        try{return json(res,await deleteMaterial(id,{signal:controller.signal}));}
+        finally{res.removeListener('close',disconnected);}
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/messages$/.exec(p))&&req.method==='GET'){
         if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
@@ -196,10 +199,6 @@ async function createManagedApp(options,runtime) {
         const abort=new AbortController();res.on('close',()=>abort.abort());await media.preview(match[1],start,res,abort.signal);return;
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/export$/.exec(p))&&req.method==='POST')return json(res,await media.enqueue(match[1],await body(req)));
-      if((match=/^\/api\/sessions\/([\w-]+)\/finish$/.exec(p))&&req.method==='POST'){
-        await body(req);const session=store.session(match[1]);if(!session||session.room!==0)throw new Error('只有本地跟踪素材可使用此操作。');
-        store.run("UPDATE sessions SET status='finishing' WHERE id=?",session.id);store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);return json(res,{ok:true});
-      }
       if((match=/^\/api\/jobs\/([\w-]+)\/retry-save$/.exec(p))&&req.method==='POST')return json(res,await media.retrySave(match[1],await body(req)));
       if((match=/^\/api\/jobs\/([\w-]+)\/cancel$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.cancelExport(match[1]));}
       if((match=/^\/api\/jobs\/([\w-]+)\/delete-preview$/.exec(p))&&req.method==='GET')return json(res,await jobDeletion.preview(match[1]));
@@ -212,11 +211,12 @@ async function createManagedApp(options,runtime) {
       return await sendFile(req,res,target);
     }catch(e){if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
   });
-  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
+  try{port=await listenLocal(server,port);}
   catch(error){media.close();recorder.close();store.close();throw error;}
   port=server.address().port;recorder.editorPort=port;
-  try{await runtime.publish(port);}catch(error){await new Promise(resolve=>server.close(resolve));media.close();recorder.close();store.close();throw error;}
-  ingestor.start();if(options.preparation!==false)preparation.start();
+  try{await media.recoverInterruptedExports();await runtime.publish(port);}
+  catch(error){media.close();recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
+  ingestor.start();void media.work();if(options.preparation!==false)preparation.start();
   let nextTemporarySweep=0;
   const maintain=()=>{
     if(closing)return;
@@ -242,9 +242,9 @@ async function createManagedApp(options,runtime) {
     for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
   },1000);
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,runtime,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
     closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();recorder.close();
-    const deletionsClosed=deletionMaintenance.close();
+    const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
     for(const client of clients)client.end();

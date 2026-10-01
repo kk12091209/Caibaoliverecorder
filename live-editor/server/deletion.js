@@ -92,21 +92,25 @@ async function protections(store, id, cache) {
   throw new Error('素材文件引用正在变化，请稍后重试删除。');
 }
 
-export async function prepareDeletion(store, id) {
+export async function prepareDeletion(store, id, { control }={}) {
+  control?.check();
   const session = assertDeletable(store, id), sources = store.sources(id);
   const chunks = store.all('SELECT chunks.* FROM chunks JOIN sources ON sources.id=chunks.source WHERE sources.session=? ORDER BY chunks.source,chunks.seq', id);
   const roots = { originals: path.join(store.root, 'originals'), chunks: path.join(store.root, 'chunks'), archives: path.join(store.root, 'archives') };
   const files = new Map(), directories = new Map(), preserved = new Map(), external = new Set();
   const preserve = (file, reason) => preserved.set(key(file), { path: file, reason });
   async function add(file, root) {
+    control?.check();
     file = absolute(file);
     if (files.has(key(file))) return;
     const stat = await checked(root, file);
+    control?.progress();
     // Missing files are already gone. Never delete replacements created after
     // this preflight; retries build a fresh, independently checked manifest.
     if (stat) files.set(key(file), { file, root, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeNs: stat.mtimeNs });
   }
   for (const source of sources) {
+    control?.check();
     const original = absolute(source.path);
     if (inside(roots.originals, original)) {
       await add(original, roots.originals);
@@ -125,7 +129,7 @@ export async function prepareDeletion(store, id) {
     if (folderStat) {
       directories.set(key(folder), { file: folder, root: roots.chunks, dev: folderStat.dev, ino: folderStat.ino });
       const names=(await fs.readdir(folder)).filter(name=>/^\d{8,}\.flvpart(?:\.tmp)?$/.test(name));
-      await deletionWork(names,name=>add(path.join(folder,name),folder));
+      await deletionWork(names,name=>add(path.join(folder,name),folder),8,{control});
     }
     for (const chunk of chunks.filter(chunk => chunk.source === source.id)) await add(chunk.path, folder);
   }
@@ -135,6 +139,7 @@ export async function prepareDeletion(store, id) {
     else preserve(archive, '非本项目自动归档文件');
   }
   const protectionCache = {}, protectedPaths = await protections(store, id, protectionCache);
+  control?.progress();
   const retainedPaths=new Map(preserved);
   for(const entry of preserved.values()) {
     try{retainedPaths.set(key(await fs.realpath(entry.path)),entry);}
@@ -148,7 +153,8 @@ export async function prepareDeletion(store, id) {
     sourcesSnapshot: JSON.stringify(sources), chunksSnapshot: JSON.stringify(chunks), archive: session.archive };
 }
 
-export async function removeDeletionFiles(store, id, plan) {
+export async function removeDeletionFiles(store, id, plan, { control }={}) {
+  control?.check();
   let deletedFiles = 0, freedBytes = 0, pending = false;
   // Keep originals/companions ordered: a locked original must fail before its
   // XML or any transient chunks are removed. Only the large chunk set runs in
@@ -159,24 +165,29 @@ export async function removeDeletionFiles(store, id, plan) {
     if(!inside(chunkRoot,entry.file)){await remove(entry);continue;}
     const inode=String(entry.dev)+':'+String(entry.ino);if(!groups.has(inode))groups.set(inode,[]);groups.get(inode).push(entry);
   }
-  await deletionWork([...groups.values()],async entries=>{for(const entry of entries)await remove(entry);});
+  await deletionWork([...groups.values()],async entries=>{for(const entry of entries)await remove(entry);},8,{control});
   async function remove(entry){
+    control?.check();
     // Recheck sharing after async preflight and whenever this connection has
     // changed. A new import/export reference must never be silently deleted.
     const stat=await checked(entry.root,entry.file);
     const protectedPaths=await protections(store,id,plan.protectionCache);
+    control?.progress();
     if (protectedPaths.has(key(entry.file))) { plan.preserved.set(key(entry.file), { path: entry.file, reason: protectedPaths.get(key(entry.file)) }); return; }
     if (!stat) return;
     if (stat.dev !== entry.dev || stat.ino !== entry.ino || stat.size !== entry.size || stat.mtimeNs !== entry.mtimeNs) throw new Error('素材文件在删除前发生变化，已停止清理，请检查后重试。');
     try { await fs.unlink(entry.file); }
     catch (error) { if (error.code === 'ENOENT') return; throw new Error(`未能删除素材文件，可稍后重试：${entry.file}（${error.code || error.message}）`, { cause: error }); }
     deletedFiles++;
+    control?.progress();
     // Count the last hard link only; old archives can share original FLV data.
     if (stat.nlink <= 1n) freedBytes += Number(stat.size);
   }
   for (const entry of plan.directories) {
+    control?.check();
     const stat = await checked(entry.root, entry.file, true); if (!stat) continue;
     if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error('内部片段目录在删除前发生变化，已停止清理。');
+    control?.check();
     try { await fs.rmdir(entry.file); }
     catch (error) {
       if (error.code === 'ENOENT') continue;
@@ -187,6 +198,7 @@ export async function removeDeletionFiles(store, id, plan) {
       }
       throw error;
     }
+    control?.progress();
   }
   const externalFilesPreserved = plan.external.size;
   return { deletedFiles, freedBytes, pending, externalFilesPreserved, preserved: [...plan.preserved.values()],

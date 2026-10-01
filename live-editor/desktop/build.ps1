@@ -9,6 +9,10 @@ $buildArguments = @('build', (Join-Path $PSScriptRoot 'RecorderDesktop.csproj'),
 if ($NoRestore) { $buildArguments += '--no-restore' }
 & $DotNet @buildArguments
 if ($LASTEXITCODE -ne 0) { throw '桌面程序构建失败。' }
+$desktopRelease = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot 'RecorderDesktop.csproj') -Raw -Encoding UTF8)
+$desktopExpectedVersion = [string]($desktopRelease.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+$desktopMetadata = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $buildDirectory '录播机.exe'))
+if ($desktopMetadata.ProductVersion -ne $desktopExpectedVersion -or $desktopMetadata.FileVersion -ne ($desktopExpectedVersion + '.0') -or $desktopMetadata.ProductName -ne '菜播·录包机') { throw '桌面程序版本信息与发布源码不一致。' }
 $packageDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $componentDirectory = Join-Path $packageDirectory '程序组件'
 $bridgeDirectory = Join-Path $componentDirectory 'runtime\desktop'

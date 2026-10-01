@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatVideoTime, markPreviewPosition } from '../src/video-time.js';
+import { displayedSpan, formatVideoTime, markPreviewPosition } from '../src/video-time.js';
 
 test('30帧与24帧逐帧累加到整秒时，毫秒进位不会输出1000或把切点变成0.1秒', () => {
   for (const fps of [30, 24]) {
@@ -26,12 +26,17 @@ test('普通毫秒精度保持，亚毫秒统一取最近整毫秒', () => {
   assert.equal(formatVideoTime(.0005, true), '00:00:00.001');
 });
 
-test('不显示毫秒时仍向下取整，负值及无效时间显示零', () => {
-  assert.equal(formatVideoTime(.9999), '00:00:00');
-  assert.equal(formatVideoTime(59.9999), '00:00:59');
-  assert.equal(formatVideoTime(3599.9999), '00:59:59');
-  assert.equal(formatVideoTime(360000.999), '100:00:00');
-  for (const value of [-1, undefined, NaN, Infinity, 'invalid']) assert.equal(formatVideoTime(value, true), '00:00:00.000');
+test('不显示毫秒时四舍五入到秒，时长与起止点的显示一致', () => {
+  assert.equal(formatVideoTime(.4), '00:00:00');
+  assert.equal(formatVideoTime(.5), '00:00:01');
+  assert.equal(formatVideoTime(7.4), '00:00:07');
+  assert.equal(formatVideoTime(12.6), '00:00:13');
+  assert.equal(displayedSpan(7.4, 12.6), 6);
+  assert.equal(formatVideoTime(displayedSpan(7.4, 12.6)), '00:00:06');
+  assert.equal(formatVideoTime(59.5), '00:01:00');
+  assert.equal(formatVideoTime(3599.5), '01:00:00');
+  assert.equal(formatVideoTime(360000.4), '100:00:00');
+  for (const value of [-1, undefined, NaN, Infinity, 'invalid']) assert.equal(formatVideoTime(value), '00:00:00');
   assert.equal(formatVideoTime('1.234', true), '00:00:01.234');
 });
 

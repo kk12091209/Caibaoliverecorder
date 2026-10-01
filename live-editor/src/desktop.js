@@ -7,6 +7,11 @@ if (isDesktop) window.chrome.webview.addEventListener('message', event => {
   pending.delete(message.id); clearTimeout(request.timer);
   if (message.error) request.reject(new Error(message.error)); else request.resolve(message.value);
 });
+const authorPage = 'https://space.bilibili.com/3546729402076115';
+export function openAuthorPage() {
+  if (isDesktop) { window.chrome.webview.postMessage({ action: 'openExternal', url: authorPage }); return; }
+  window.open(authorPage, '_blank', 'noopener');
+}
 export function pickExportFolder(initial) {
   if (!isDesktop) return Promise.resolve(null);
   return new Promise((resolve, reject) => {

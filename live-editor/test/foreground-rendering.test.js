@@ -145,7 +145,6 @@ function exportFixture({ encoder = hardware, duration = 65, mode = 'danmaku', re
     assertSessionAvailable() {},
     store: { sources: () => [source], session: () => ({ status: 'finished' }), get: () => ({ time: 0 }), run() {} },
     probeSource: async () => ({}),
-    exportSourceInfo: async () => ({}),
     renderCache: { hasReady: async () => { calls.ready++; return ready; } },
     renderer: { exportJob: async (_job, selected) => { calls.renderer++; assert.equal(selected, encoder); if (renderError) throw renderError; return 'renderer.mp4'; } },
     encodeJob: async (_job, selected) => { calls.legacy.push(selected); return 'legacy.mp4'; },

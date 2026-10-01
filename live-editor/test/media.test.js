@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Store, validateRanges } from '../server/store.js';
-import { Ingestor, tags, sourceStream, seekBase } from '../server/ingest.js';
+import { Ingestor, sourceStream, seekBase } from '../server/ingest.js';
 import { Media, assText } from '../server/media.js';
 import { Recorder, roomNumber } from '../server/recorder.js';
 import { createApp } from '../server/index.js';
@@ -270,14 +270,20 @@ test('编辑服务漏收事件后从原始目录找回录制，不依赖 webhook
   const sources=store.all('SELECT * FROM sources');assert.equal(sources.length,1);assert.equal(sources[0].closed,1);assert.equal(store.session(sources[0].session).title,'恢复录像');store.close();
 });
 
-test('本机 HTTP 接口支持导入、播放数据与来源限制',async()=>{
+test('本机 HTTP 接口支持直播素材播放、导出与来源限制',async()=>{
   const app=await createApp({automaticClean:false,preparation:false,port:17968,data:path.join(root,'http'),noRecorder:true,ffmpeg,ffprobe});
   try{
-    const origin='http://127.0.0.1:17968';let response=await fetch(origin+'/api/sessions/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fixture})});assert.equal(response.status,200);const session=await response.json();
+    const origin='http://127.0.0.1:17968',recorded=path.join(app.recorder.directory,'http-recording.flv');
+    await fs.mkdir(app.recorder.directory,{recursive:true});await fs.copyFile(fixture,recorded);await fs.copyFile(fixture.replace('.flv','.xml'),recorded.replace('.flv','.xml'));
+    const eventData={RoomId:42,RelativePath:path.basename(recorded),FileOpenTime:new Date().toISOString(),Title:'HTTP 测试直播录像'};
+    await app.recorder.event({EventId:'http-opening',EventType:'FileOpening',EventData:eventData});
+    await app.recorder.event({EventId:'http-closed',EventType:'FileClosed',EventData:eventData});
+    await app.recorder.event({EventId:'http-ended',EventType:'StreamEnded',EventData:eventData});
+    const session=app.store.sessions()[0];let response;
     for(let n=0;n<8;n++){await app.ingestor.tick();await new Promise(r=>setTimeout(r,100));}
     response=await fetch(origin+`/api/sessions/${session.id}/preview?start=4.25`);assert.equal(response.status,200);const output=Buffer.from(await response.arrayBuffer());assert.ok(output.length>10000);assert.ok(output.toString('ascii',4,8)==='ftyp');const preview=path.join(root,'preview.mp4');await fs.writeFile(preview,output);assert.equal(probe(preview).streams.length,2);
     response=await fetch(origin+'/api/state',{headers:{Origin:'https://untrusted.example'}});assert.equal(response.status,403);
-    response=await fetch(origin+'/api/sessions/import',{method:'POST',headers:{'Content-Type':'text/plain'},body:'{}'});assert.equal(response.status,415);
+    response=await fetch(origin+'/api/settings',{method:'POST',headers:{'Content-Type':'text/plain'},body:'{}'});assert.equal(response.status,415);
     const custom=path.join(root,'HTTP 导出目录');
     response=await fetch(origin+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exportDirectory:custom})});assert.equal(response.status,200);
     assert.equal(app.store.setting('export-directory'),custom);assert.equal((await (await fetch(origin+'/api/state')).json()).paths.exports,custom);

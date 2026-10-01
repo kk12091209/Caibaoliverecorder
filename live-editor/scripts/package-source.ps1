@@ -29,7 +29,7 @@ $editorAssetPaths = @(
     'live-editor/desktop/assets/app-original.png',
     'live-editor/src/assets/app-icon.png'
 )
-$textExtensions = @('.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
+$textExtensions = @('.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.conf','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
 $textNames = @('LICENSE','NOTICE','COPYING','AUTHORS','Dockerfile','.editorconfig','.gitattributes','.gitignore','.gitmodules','.nojekyll','.dockerignore','.npmrc','.prettierrc','.browserslistrc')
 function Git-Read([string]$root, [string[]]$arguments) {
     $previousEncoding = [Console]::OutputEncoding
@@ -56,6 +56,13 @@ function Add-Source([string]$source, [string]$relative, [string]$origin) {
     # This known upstream submodule contains public test fixture sources. Keep
     # its license/readme, while the media-extension rule still omits FLV files.
     $policyPath = if ($relative.StartsWith('test/data/')) { 'test/fixtures/' + $relative.Substring(10) } else { $relative }
+    # These tracked C# directories contain recorder source, not generated
+    # runtime components or user logs. Keep the exception narrow and textual.
+    if ($origin -eq 'tracked-upstream' -and $extension -eq '.cs' -and
+        ($relative.StartsWith('BililiveRecorder.Core/Scripting/Runtime/') -or
+         $relative.StartsWith('BililiveRecorder.Web/Models/Rest/Logs/'))) {
+        $policyPath = $relative.Replace('/Runtime/', '/SourceRuntime/').Replace('/Logs/', '/LogModels/')
+    }
     if ((!$syntheticFixture -and $policyPath -match $forbidden) -or (!$allowedAsset -and $extension -notin $textExtensions -and $name -notin $textNames -and $name -notlike 'Dockerfile.*')) {
         $excluded.Add([ordered]@{path=$relative;reason='Private/runtime/build/binary path excluded by source allowlist'})
         return
@@ -131,6 +138,7 @@ foreach ($relative in @('docs/live-editor/源码基线.txt')) {
     $source = Join-Path $ProjectRoot $relative
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $relative 'project-documentation' }
 }
+Add-Source (Join-Path $ProjectRoot '.github/workflows/editor.yml') '.github/workflows/editor.yml' 'project-ci'
 foreach ($name in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','启动录播机.cmd','项目说明.md')) {
     $source = Join-Path $ProjectRoot $name
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $name 'project-entrypoint' }

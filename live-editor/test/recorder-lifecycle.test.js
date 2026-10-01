@@ -183,3 +183,53 @@ test('启动时自动恢复完整退出前启用的监控房间',async t=>{
   await recorder.start();assert.ok(calls.some(call=>new URL(call.url).pathname==='/api/room/42/start'));
   assert.equal(settings.get('recorder-resume-rooms'),null);
 });
+
+test('确认退出停止录制及监控，只记住启用房间，下次启动恢复一次',async t=>{
+  const {recorder,state,settings,store,calls,executable}=await fixture(t,{port:0,healthMs:10000});
+  const writes=[];store.run=(...args)=>writes.push(args);
+  state.rooms=[{roomId:42,recording:true,recordingEnabled:true,autoRecord:true},
+    {roomId:43,recording:false,recordingEnabled:true,autoRecord:true},
+    {roomId:44,recording:false,recordingEnabled:false,autoRecord:true}];
+  let stopped=0;
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44002,isAlive:()=>true,
+    stopProcess:async endpoint=>{assert.equal(endpoint.directory,recorder.directory);assert.equal(endpoint.executable,executable);stopped++;state.available=false;return true;}});
+  assert.equal(await recorder.start(),true);
+  state.fetchOverride=async(url,options)=>{
+    const route=new URL(url).pathname,match=/^\/api\/room\/(\d+)\/stop$/.exec(route);
+    if(match){const room=state.rooms.find(room=>room.roomId===Number(match[1]));room.recording=false;room.recordingEnabled=false;}
+    return response(route==='/api/room'?state.rooms:null);
+  };
+  const rooms=await recorder.roomsForExit();recorder.rememberExitRooms(rooms);await recorder.stopForExit(rooms);
+  assert.deepEqual(settings.get('recorder-resume-rooms'),[42,43]);assert.equal(stopped,1);assert.equal(recorder.quitting,true);
+  assert.equal(recorder.online,false);assert.equal(recorder.monitoring,false);assert.equal(recorder.timer,null);
+  assert.ok(writes.some(([sql])=>sql.includes('UPDATE sources SET closed=1')));assert.ok(writes.some(([sql])=>sql.includes("status='finishing'")));
+  assert.ok(calls.some(call=>call.url.endsWith('/room/42/stop')));assert.ok(calls.some(call=>call.url.endsWith('/room/43/stop')));
+  assert.equal(calls.some(call=>call.url.endsWith('/room/44/stop')),false);
+  recorder.close();state.available=true;
+  const next=new Recorder(store,{executable,port:44002,lifecycle:recorder.lifecycle});t.after(()=>next.close());
+  assert.equal(await next.start(),true);assert.equal(settings.get('recorder-resume-rooms'),null);
+  const count=calls.filter(call=>/\/room\/(42|43)\/start$/.test(call.url)).length;assert.equal(count,2);
+  await next.connect();assert.equal(calls.filter(call=>/\/room\/(42|43)\/start$/.test(call.url)).length,count);
+});
+
+test('停止请求失败仍停止经身份验证的自有核心，保留原片供恢复',async t=>{
+  const {recorder,state,settings,executable}=await fixture(t,{port:0,healthMs:10000});
+  let stopped=0;
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44003,isAlive:()=>true,
+    stopProcess:async endpoint=>{assert.equal(endpoint.directory,recorder.directory);assert.equal(endpoint.executable,executable);stopped++;return true;}});
+  state.rooms=[{roomId:42,recording:true,recordingEnabled:true}];await recorder.start();
+  const rooms=await recorder.roomsForExit();recorder.rememberExitRooms(rooms);
+  state.fetchOverride=async(url)=>new URL(url).pathname.endsWith('/stop')?new Response('',{status:500}):response(state.rooms);
+  await recorder.stopForExit(rooms);assert.equal(stopped,1);assert.equal(settings.get('recorder-endpoint'),null);
+  assert.deepEqual(settings.get('recorder-resume-rooms'),[42]);assert.match(recorder.error,/500/);
+});
+
+test('无法验证或停止核心时保留恢复记录，不清掉端点或标记原片封闭',async t=>{
+  const {recorder,state,settings,store}=await fixture(t,{port:0,healthMs:10000});const writes=[];store.run=(...args)=>writes.push(args);
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44004,isAlive:()=>true,stopProcess:async()=>false});
+  state.rooms=[{roomId:42,recording:false,recordingEnabled:true}];await recorder.start();
+  const endpoint=settings.get('recorder-endpoint'),rooms=await recorder.roomsForExit();recorder.rememberExitRooms(rooms);
+  await assert.rejects(recorder.stopForExit(rooms),/未能退出/);
+  assert.deepEqual(settings.get('recorder-endpoint'),endpoint);assert.deepEqual(settings.get('recorder-resume-rooms'),[42]);
+  assert.equal(writes.some(([sql])=>sql.includes('UPDATE sources SET closed=1')),false);
+});

@@ -70,7 +70,7 @@ export class Recorder {
   }
   async connect() {
     this.assertOpen();
-    if(!this.executable)throw new Error('未配置录制核心，仍可导入本地 FLV 录像。');
+    if(!this.executable)throw new Error('未配置录制核心，请检查程序组件是否完整。');
     await fs.mkdir(this.directory,{recursive:true});
     this.assertOpen();
     const config=path.join(this.directory,'config.json');
@@ -120,7 +120,7 @@ export class Recorder {
   }
   async launchCore(){
       try{await fs.access(this.executable);}catch{
-        throw new Error('找不到录制核心。请完整解压发布包并保留 runtime/recorder，或通过 RECORDER_PATH 指定录制核心。仍可导入本地 FLV 录像。');
+        throw new Error('找不到录制核心。请完整解压发布包并保留 runtime/recorder，或通过 RECORDER_PATH 指定录制核心。');
       }
       this.assertOpen();this.childFailure=null;
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
@@ -235,6 +235,42 @@ export class Recorder {
     this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",room);
     this.store.run('UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room=?)',room);
     await this.poll();
+  }
+  async roomsForExit(){
+    if(!this.executable)return this.rooms;
+    if(this.starting)await this.starting;
+    if(!this.online&&!this.childRunning&&(!this.ownedEndpoint||!this.lifecycle.isAlive(this.ownedEndpoint.pid)))return this.rooms;
+    return await this.api('room');
+  }
+  rememberExitRooms(rooms){
+    const resume=rooms.filter(room=>room.recording||room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
+    this.store.setting('recorder-resume-rooms',resume);
+  }
+  async stopForExit(rooms){
+    this.quitting=true;this.monitoring=false;clearTimeout(this.timer);this.timer=null;
+    let stopError;
+    if(this.executable){
+      try{
+        const ids=rooms.filter(room=>room.recording||room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true)).map(room=>room.roomId);
+        await Promise.all(ids.map(id=>this.stopRoom(id)));
+        const deadline=this.lifecycle.now()+5000;
+        while((await this.api('room')).some(room=>room.recording)){
+          if(this.lifecycle.now()>=deadline)throw new Error('录制收尾超时。');
+          await this.pause(50);
+        }
+      }catch(error){stopError=error;}
+      // The user confirmed stopping tasks. If the core cannot finish normally,
+      // stop only our verified core, keeping the recorded FLV/XML for recovery.
+      const endpoint=this.ownedEndpoint??(this.process?.pid?{pid:this.process.pid,port:this.port,executable:this.executable,directory:this.directory}:await this.lifecycle.findOwned({executable:this.executable,directory:this.directory}));
+      if(endpoint){
+        if(!await this.lifecycle.stopProcess(endpoint))throw new Error('录制核心未能退出。');
+        this.store.setting('recorder-endpoint',null);this.ownedEndpoint=null;this.childRunning=false;
+      }else if(this.childRunning)throw new Error('无法确认录制核心，已保留录像。');
+    }
+    this.store.run("UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room>0 AND status IN ('recording','waiting','finishing'))");
+    this.store.run("UPDATE sessions SET status='finishing' WHERE room>0 AND status IN ('recording','waiting')");
+    this.online=false;
+    if(stopError)this.error=stopError.message;
   }
   async stopIdle(){
     if(!this.executable)return true;

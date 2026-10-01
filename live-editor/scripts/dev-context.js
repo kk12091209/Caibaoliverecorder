@@ -24,7 +24,3 @@ export function developmentContext(env=process.env,source=appRoot) {
 export function developmentTool(context,kind,env=process.env) {
   return resolveRuntimeTool(context.runtimeRoot,kind,{env:{...env,EDITOR_PROJECT_ROOT:''}});
 }
-export function verifyDevelopmentService(state,context) {
-  if(!state?.dataPath||!samePath(state.dataPath,context.data))
-    throw new Error('目标服务不是当前独立开发数据目录，已停止导入。请先运行 npm run dev，并让 DEV_* 设置保持一致。');
-}

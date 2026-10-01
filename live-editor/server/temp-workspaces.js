@@ -142,7 +142,8 @@ export class TemporaryWorkspaces {
   alive(pid) {
     try { return this.processAlive(pid) !== false; } catch { return true; }
   }
-  async remove(directory, expected, ownActive = false) {
+  async remove(directory, expected, ownActive = false, { control }={}) {
+    control?.check();
     const marker = readMarker(this.root, directory);
     if (!marker || marker.token !== expected.token || marker.ownerPid !== expected.ownerPid || marker.retained || marker.pendingSpawns || (!ownActive && this.alive(marker.ownerPid)) || marker.childPids.some(pid => this.alive(pid))) return false;
     const files = [];
@@ -162,9 +163,11 @@ export class TemporaryWorkspaces {
       if(entry.marker&&(await fs.readdir(directory)).some(name=>name!==MARKER))return false;
       const current = await fs.lstat(entry.file, { bigint: true });
       if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1n || current.dev !== entry.stat.dev || current.ino !== entry.stat.ino || current.size !== entry.stat.size || current.mtimeNs !== entry.stat.mtimeNs) return false;
+      control?.check();
       await fs.unlink(entry.file);
+      control?.progress();
     }
-    ownedDirectory(this.root, directory); await fs.rmdir(directory); return true;
+    ownedDirectory(this.root, directory); control?.check(); await fs.rmdir(directory); control?.progress(); return true;
   }
   async finish(directory) {
     const state = this.active.get(key(directory)); if (!state) return false;
@@ -181,17 +184,18 @@ export class TemporaryWorkspaces {
     if (this.cleaning) return this.cleaning;
     this.cleaning = this.cleanup().finally(() => { this.cleaning = null; }); return this.cleaning;
   }
-  async removeSession(sessionId) {
+  async removeSession(sessionId, { control }={}) {
     const result={freedBytes:0,deletedFiles:0};
-    if(this.cleaning)await this.cleaning;
+    if(this.cleaning){if(control)await control.wait(this.cleaning);else await this.cleaning;}
     if(!checkDirectory(this.root,true))return result;
     for(const name of await fs.readdir(this.root)) {
+      control?.check();
       if(!NAME.test(name))continue;
       const directory=path.join(this.root,name);
       let marker;try{marker=readMarker(this.root,directory);}catch{continue;}
       if(marker?.sessionId!==sessionId)continue;
       const state=this.active.get(key(directory));
-      if(state?.finishing){await state.finishing;if(!this.active.has(key(directory)))continue;}
+      if(state?.finishing){if(control)await control.wait(state.finishing);else await state.finishing;if(!this.active.has(key(directory)))continue;}
       if(marker.retained||marker.pendingSpawns||marker.childPids.some(pid=>this.alive(pid))||(state?!state.completed:this.alive(marker.ownerPid)))throw new Error('这份素材的临时工作区仍在处理或等待保存，请稍后重试删除。');
       let bytes=0,count=0;
       for(const file of await fs.readdir(directory)) {
@@ -199,7 +203,7 @@ export class TemporaryWorkspaces {
         if(!allowedFile(directory,file)||!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw new Error('素材临时工作区中有无法确认的文件，已保留，请检查后重试删除。');
         bytes+=stat.size;count++;
       }
-      if(!await this.remove(directory,marker,!!state))throw new Error('素材临时工作区仍被占用或所有权发生变化，请稍后重试删除。');
+      if(!await this.remove(directory,marker,!!state,{control}))throw new Error('素材临时工作区仍被占用或所有权发生变化，请稍后重试删除。');
       this.active.delete(key(directory));result.freedBytes+=bytes;result.deletedFiles+=count;
     }
     return result;

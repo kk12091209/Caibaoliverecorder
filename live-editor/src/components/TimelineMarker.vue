@@ -44,7 +44,7 @@ onBeforeUnmount(()=>{if(drag){drag=null;emit('end');}});
 </script>
 
 <template>
-  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+'标记'" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatVideoTime(time,true)" :aria-disabled="disabled" :title="label+' '+formatVideoTime(time,true)+'；拖动调整，Shift 小幅拖动，方向键逐帧微调'" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
+  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+'标记'" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatVideoTime(time)" :aria-disabled="disabled" :title="label+' '+formatVideoTime(time)+'；拖动调整，Shift 小幅拖动，方向键逐帧微调'" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
     <span :style="{'--label-shift':`max(0px, calc(80px - ${percent}cqw))`}">{{ kind==='start'?'I':'O' }} {{ label }}</span>
   </div>
 </template>

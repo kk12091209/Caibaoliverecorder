@@ -6,7 +6,7 @@ import path from 'node:path';
 import net from 'node:net';
 import {createApp} from '../server/index.js';
 
-test('设置仅保存导出目录；移除登录、恢复、旧下载接口，保留失败清理及重试',async t=>{
+test('设置拒绝已移除的登录与恢复功能；旧下载接口停用，保留失败清理及重试',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-settings-cleanup-'));
   const socket=net.createServer();await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));
   const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));

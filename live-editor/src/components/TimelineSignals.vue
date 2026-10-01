@@ -29,15 +29,15 @@ function draw() {
       const bin=bins[i],x=start+i*span/bins.length,bw=Math.max(1,span/bins.length-1);
       if(bin.state==='ready'||bin.state==='silent') {
         const peak=Math.max(.65,Math.sqrt(bin.peak)*(h/2-4)),rms=Math.max(.5,Math.sqrt(bin.rms)*(h/2-4));
-        context.fillStyle='rgba(124,200,193,.48)';context.fillRect(x,h/2-peak,bw,peak*2);
-        context.fillStyle='rgba(163,233,215,.8)';context.fillRect(x,h/2-rms,bw,rms*2);
+        context.fillStyle='rgba(255,183,196,.95)';context.fillRect(x,h/2-peak,bw,peak*2);
+        context.fillStyle='rgba(255,125,146,.95)';context.fillRect(x,h/2-rms,bw,rms*2);
       }
-      if(bin.state==='pending'||bin.pending){context.fillStyle='rgba(120,144,160,.28)';context.fillRect(x,h-3,bw,2);}
-      if(bin.state==='unavailable'){context.fillStyle='rgba(226,161,113,.25)';context.fillRect(x,h/2-.5,bw,1);}
+      if(bin.state==='pending'||bin.pending){context.fillStyle='rgba(255,125,146,.28)';context.fillRect(x,h-3,bw,2);}
+      if(bin.state==='unavailable'){context.fillStyle='rgba(218,79,62,.35)';context.fillRect(x,h/2-.5,bw,1);}
     }
   } else {
     const bins=aggregateDensity(props.density?.bins,Math.max(1,Math.min(w,span)/3)),max=Math.max(1,...bins),scale=Math.log1p(max);
-    context.fillStyle='rgba(143,178,230,.8)';
+    context.fillStyle='rgba(255,125,146,.9)';
     for(let i=0;i<bins.length;i++){const height=Math.log1p(bins[i])/scale*25;if(height>0)context.fillRect(start+i*span/bins.length,h-3-height,Math.max(1,span/bins.length-1),height);}
   }
   context.restore();

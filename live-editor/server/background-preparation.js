@@ -253,8 +253,8 @@ export class BackgroundPreparation {
       this.wake();
     }
   }
-  async forgetSession(id) {
-    await this.interrupt('source', id);
+  async forgetSession(id, { alreadyStopped=false }={}) {
+    if(!alreadyStopped)await this.interrupt('source', id);
     this.store.run('DELETE FROM preparation_jobs WHERE session=?', id);
     this.store.run('DELETE FROM preparation_seen WHERE session=?', id);
   }

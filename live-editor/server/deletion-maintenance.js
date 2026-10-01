@@ -1,3 +1,4 @@
+import { DELETION_FAILED } from './deletion-control.js';
 // Only resume deletions the user already confirmed. Never sweep unreferenced
 // originals/chunks: missing database rows are not proof that footage is trash.
 export class DeletionMaintenance {
@@ -14,7 +15,7 @@ export class DeletionMaintenance {
     return this.running;
   }
   async sweep() {
-    const pending = this.store.all("SELECT id FROM sessions WHERE deleted_at<>'' AND purge_started_at<>'' ORDER BY purge_started_at");
+    const pending = this.store.all("SELECT id FROM sessions WHERE deleted_at<>'' AND purge_started_at<>'' AND purge_error<>? ORDER BY purge_started_at",DELETION_FAILED);
     for (const { id } of pending) {
       if (this.closed || this.busy()) return;
       try { await this.remove(id); }

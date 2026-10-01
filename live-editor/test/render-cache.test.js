@@ -29,10 +29,6 @@ async function fixture(name, options = {}) {
 async function build(cache, key, options = {}) {
   return track(await cache.build(key, file => fs.writeFile(file, minimalMp4), { estimatedBytes: minimalMp4.length, ...options }));
 }
-async function quietMiss(cache, key) {
-  try { assert.equal(await cache.acquire(key), null); }
-  catch (error) { if (!cancelled(error)) throw error; }
-}
 
 check('已完成 MP4 才能命中，身份和字节保持一致，新的 RenderCache 实例可直接复用', async () => {
   const f = await fixture('restart'), key = spec();

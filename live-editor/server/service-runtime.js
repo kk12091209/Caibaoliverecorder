@@ -58,13 +58,13 @@ export class ServiceRuntime {
     for(const [key,value] of this.clients)if(this.now()-value.seen>this.clientTimeoutMs||!this.isAlive(value.pid))this.clients.delete(key);
     return this.clients.size;
   }
-  request(mode){if(!['exit','restart'].includes(mode))throw new Error('无效的后台操作。');this.pending=mode;}
+  request(mode){if(!['exit','restart','quit'].includes(mode))throw new Error('无效的后台操作。');if(this.pending!=='quit')this.pending=mode;}
   shouldStop(activity){
     if(this.closed||this.stopping||activity.busy)return false;
     if(this.pending)return true;
     return this.managed&&this.now()-this.started>=this.startupGraceMs&&this.liveClients()===0;
   }
-  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,...activity};}
+  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,...activity};}
   async release(){
     if(this.closed)return;this.closed=true;
     try{
