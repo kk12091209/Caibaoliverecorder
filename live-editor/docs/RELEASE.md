@@ -80,7 +80,7 @@ v0.1.3 起采用完整卸载。安装只接受专用文件夹，拒绝磁盘根�
 
 ## 从 Mac 发起 Windows 云端构建
 
-在 GitHub Actions 手动运行 `Windows release package` 工作流，选择要发布的源码分支。工作流在 Windows runner 上运行 `build-windows-ci.ps1`，重新构建前端、Windows 桌面壳和录制核心，执行共用回归、真实核心生命周期、安装/升级/卸载以及 ZIP/7z 校验，成功后生成 `windows-版本` 附件。工作流只生成构建附件，不自动创建 Release。
+在 GitHub Actions 手动运行 `Windows release package` 工作流，选择要发布的源码分支。工作流在 Windows runner 上运行 `build-windows-ci.ps1`，重新构建前端、Windows 桌面壳和录制核心，执行共用回归、真实核心生命周期、安装/升级/卸载以及 ZIP/7z 校验，成功后生成 `windows-版本` 附件。默认只生成构建附件；勾选 `publish_draft` 时，校验成功后由云端直接上传到新的草稿 Release。已有同版本 Release 会导致创建失败，不覆盖现有附件；草稿需核对后再公开发布。
 
 本流程的 Node 24.12.0 与 FFmpeg 8.1.2 沿用已发布 v0.1.3 的相同二进制，先核对整个旧 ZIP 的固定 SHA-256，再校验逐文件清单；只复制 Node 和 FFmpeg 及对应许可，不复用旧界面、桌面壳、录制核心或用户数据。媒体配置与依赖源码来源随包保留在 `程序组件/licenses/ffmpeg`。需要修改媒体构建时，使用前述 `build-ffmpeg.ps1` 重新生成组件并核对版本与哈希。
 

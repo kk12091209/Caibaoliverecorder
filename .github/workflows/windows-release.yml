@@ -1,6 +1,11 @@
 name: Windows release package
 on:
   workflow_dispatch:
+    inputs:
+      publish_draft:
+        description: Upload verified files to a new draft GitHub Release
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -10,6 +15,8 @@ jobs:
   package:
     runs-on: windows-latest
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       DOTNET_NOLOGO: 1
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -58,3 +65,47 @@ jobs:
             .tools/release-qa/**/*.log
           if-no-files-found: ignore
           retention-days: 14
+  publish-draft:
+    if: ${{ inputs.publish_draft }}
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-${{ needs.package.outputs.version }}
+          path: release-files
+      - name: Verify artifacts and upload a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYVERIFY'
+          from pathlib import Path
+          import hashlib, json, os, re
+          root = Path('release-files')
+          data = json.loads((root/'windows-build.json').read_text(encoding='utf-8-sig'))
+          assert data['sourceRevision'] == os.environ['GITHUB_SHA']
+          assert data['version'] == os.environ['RELEASE_VERSION']
+          for name in ('nodeTests', 'coreTests', 'coreLifecycle', 'portableZip', 'portable7z', 'installerUpgradeUninstall'):
+              assert data[name] == 'passed', name
+          listed = set()
+          for line in (root/'SHA256SUMS.txt').read_text().splitlines():
+              digest, name = line.split('  ', 1)
+              assert re.fullmatch(r'[A-Za-z0-9._-]+', name) and name not in listed
+              listed.add(name)
+              with (root/name).open('rb') as stream:
+                  assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest, name
+          assert listed == {p.name for p in root.iterdir()} - {'SHA256SUMS.txt'}
+          print('Verified source revision, successful checks and all release hashes.')
+          PYVERIFY
+          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows 更新 · 逐段独立导出" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
+          gh release upload "v$RELEASE_VERSION" release-files/*
