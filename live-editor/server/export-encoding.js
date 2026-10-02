@@ -53,8 +53,11 @@ export function preparedEncoderArguments(encoder) {
     ...(encoder.id==='libx264'?['-sc_threshold','0']:[]),'-pix_fmt','yuv420p','-video_track_timescale','60000'];
 }
 
-export async function detectExportEncoder(run) {
-  for(const candidate of hardwareEncoders) {
+export async function detectExportEncoder(run,{platform=process.platform}={}) {
+  const candidates=platform==='darwin'
+    ?[{id:'h264_videotoolbox',label:'Apple 硬件加速',args:['-allow_sw','0','-q:v','65']}]
+    :hardwareEncoders;
+  for(const candidate of candidates) {
     const encoder={...candidate,hardware:true},controller=new AbortController();
     const timeout=setTimeout(()=>controller.abort(),8000);
     try {

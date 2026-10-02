@@ -29,6 +29,15 @@ test('share redirect validation rejects arbitrary hosts before requesting them',
  const room=await resolveDouyinLink('https://v.douyin.com/abc/',{request:async()=>new Response(null,{status:302,headers:{location:'https://live.douyin.com/12345'}})});assert.equal(room.webRid,'12345');
  await assert.rejects(resolveDouyinLink('https://v.douyin.com/abc/',{request:async()=>new Response('recommendation https://live.douyin.com/999')}),/未找到/);
 });
+test('official home-page room links use the explicit room parameter without following recommendations',async()=>{
+ const options={request:async()=>{assert.fail('an explicit room must not fetch the recommendation page');}};
+ for(const id of ['999333432170','171705310987']){
+  const room=await resolveDouyinLink('https://live.douyin.com/?anchor_id=103147951639&live_web_rid='+id+'&page_type=live_main_page',options);
+  assert.equal(room.key,'douyin:'+id);assert.equal(room.url,'https://live.douyin.com/'+id);
+ }
+ for(const value of ['', 'abc', '1&live_web_rid=2', '123456789012345678901'])await assert.rejects(resolveDouyinLink('https://live.douyin.com/?live_web_rid='+value,options),/编号无效/);
+ await assert.rejects(resolveDouyinLink('https://live.douyin.com.evil.test/?live_web_rid=1',options),/链接/);
+});
 test('highest compatible origin is preferred, audio-only and explicitly HEVC URLs are not selected',()=>{
  const data={data:{md:{main:{flv:cdn('low'),sdk_params:'{"VCodec":"h264","vbitrate":800000}'}},origin:{main:{flv:'http://pull-test.douyincdn.com/origin.flv',sdk_params:'{"VCodec":"h264","vbitrate":20000000}'}},ao:{main:{flv:cdn('audio')}}}};
  data.data.uhd={main:{flv:cdn('hevc'),sdk_params:'{"VCodec":"h265"}'}};

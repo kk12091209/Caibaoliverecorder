@@ -183,20 +183,30 @@ export class Media {
     const ranges=validateRanges(requested.filter(r=>r.selected!==false),session.duration);
     if(['includeDanmaku','burn','danmakuFps'].some(key=>key in input))throw new Error('不支持的导出选项，请使用纯净版、弹幕版或双文件模式。');
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
-    const job={id:randomUUID(),session:id,ranges,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,mode,scope};
+    // Reserve the entire selection before publishing any task. A failed batch
+    // must not leave an invisible subset exporting in the background.
+    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     try {
-    job.outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
-    this.assertSessionAvailable(id);
-    job.output=await this.reserveOutput(job,session,sources);
-    Object.assign(job.output,{namingVersion:2,sidecars:false});
-    if(mode!=='clean')job.output.danmakuFile=clipFile(job.output.file,'danmaku');
-    this.assertSessionAvailable(id);
-    if(!this.store.session(id))throw new Error('素材不存在，无法导出。');
-    this.store.run('INSERT INTO jobs(id,session,created,status,data,file,mode) VALUES(?,?,?,?,?,?,?)',job.id,id,new Date().toISOString(),'queued',JSON.stringify(job),mode==='danmaku'?clipFile(job.output.file,'danmaku'):job.output.file,job.mode);
-    void this.work(); return job;
+      const outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
+      for(const job of jobs){
+        job.outputRoot=outputRoot;
+        this.assertSessionAvailable(id);
+        job.output=await this.reserveOutput(job,session,sources);
+        Object.assign(job.output,{namingVersion:2,sidecars:false});
+        if(mode!=='clean')job.output.danmakuFile=clipFile(job.output.file,'danmaku');
+      }
+      this.assertSessionAvailable(id);
+      if(!this.store.session(id))throw new Error('素材不存在，无法导出。');
+      const created=new Date().toISOString();
+      this.store.transaction(()=>{
+        for(const job of jobs)this.store.run('INSERT INTO jobs(id,session,created,status,data,file,mode) VALUES(?,?,?,?,?,?,?)',job.id,id,created,'queued',JSON.stringify(job),mode==='danmaku'?clipFile(job.output.file,'danmaku'):job.output.file,job.mode);
+      });
+      void this.work(); return jobs.length===1?jobs[0]:{jobs};
     }catch(error){
-      if(job.output?.reservation)await fs.rmdir(job.output.reservation).catch(()=>{});
-      else if(job.output?.dir)await fs.rmdir(job.output.dir).catch(()=>{});
+      for(const job of jobs){
+        if(job.output?.reservation)await fs.rmdir(job.output.reservation).catch(()=>{});
+        else if(job.output?.dir)await fs.rmdir(job.output.dir).catch(()=>{});
+      }
       throw error;
     }
   }
@@ -210,7 +220,7 @@ export class Media {
   }
   async work() {
     if(this.processing) return; this.processing=true;
-    try { let job; while(!this.closed&&(job=this.store.get("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1"))) {
+    try { let job; while(!this.closed&&(job=this.store.get("SELECT * FROM jobs WHERE status='queued' ORDER BY created,rowid LIMIT 1"))) {
       this.store.run("UPDATE jobs SET status='running',progress=.01 WHERE id=?",job.id);
       let details;
       try { details=JSON.parse(job.data);await this.exportJob(details); }

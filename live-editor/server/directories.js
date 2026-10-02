@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 
 export function directories(store) {
   const configured=store.setting('export-directory');
-  const exports=configured||path.join(store.projectRoot||path.dirname(store.root),'导出视频默认路径');
+  const exports=configured||store.defaultExportRoot||path.join(store.projectRoot||path.dirname(store.root),'导出视频默认路径');
   return {exports,full:path.join(exports,'完整素材'),clips:path.join(exports,'导出片段'),originals:path.join(store.root,'originals')};
 }
 export function exportScopeDirectory(root,scope='clips') { return path.join(root,scope==='full'?'完整素材':'导出片段'); }
@@ -37,9 +37,9 @@ export function directoryToOpen(store, input) {
 export async function openDirectory(store, input) {
   const directory=directoryToOpen(store,input);
   await fs.mkdir(directory, { recursive: true });
-  if (process.platform !== 'win32') throw new Error('打开文件夹功能仅支持 Windows。');
+  if (!['win32','darwin'].includes(process.platform)) throw new Error('请在文件管理器中打开显示的保存路径。');
   await new Promise((resolve, reject) => {
-    const child = spawn('explorer.exe', [directory], { windowsHide: false, detached: true, stdio: 'ignore' });
+    const child = spawn(process.platform==='darwin'?'/usr/bin/open':'explorer.exe', process.platform==='darwin'?['-a','Finder',directory]:[directory], { windowsHide: false, detached: true, stdio: 'ignore' });
     child.once('error', reject); child.once('spawn', () => { child.unref(); resolve(); });
   });
   return directory;

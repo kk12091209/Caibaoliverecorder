@@ -41,3 +41,36 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+  macos-test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test shared editor and macOS core lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ffmpeg
+          source live-editor/scripts/dev-env.sh
+          export FFMPEG_PATH="$(brew --prefix)/bin/ffmpeg"
+          export FFPROBE_PATH="$(brew --prefix)/bin/ffprobe"
+          RID=osx-x64
+          if [[ $(uname -m) == arm64 ]]; then RID=osx-arm64; fi
+          dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r "$RID" -p:RuntimeIdentifiers="$RID" --self-contained true -o .tools/runtime/recorder
+          cd live-editor
+          npm ci
+          node --test --test-concurrency=2 test/*.test.js scripts/dev.test.js
+          CAIBO_CORE_SMOKE=1 node --test test/local-endpoint.test.js
+          npm run build
+          cd ..
+          dotnet test test/BililiveRecorder.Core.UnitTests/BililiveRecorder.Core.UnitTests.csproj -c Release -f net8.0
+          TMPDIR=/private/tmp xcrun swiftc -swift-version 5 -O -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o .tools/CaiboDesktop

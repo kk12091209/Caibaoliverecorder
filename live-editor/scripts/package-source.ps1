@@ -29,7 +29,7 @@ $editorAssetPaths = @(
     'live-editor/desktop/assets/app-original.png',
     'live-editor/src/assets/app-icon.png'
 )
-$textExtensions = @('.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.conf','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
+$textExtensions = @('.swift','.plist','.py','.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.conf','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
 $textNames = @('LICENSE','NOTICE','COPYING','AUTHORS','Dockerfile','.editorconfig','.gitattributes','.gitignore','.gitmodules','.nojekyll','.dockerignore','.npmrc','.prettierrc','.browserslistrc')
 function Git-Read([string]$root, [string[]]$arguments) {
     $previousEncoding = [Console]::OutputEncoding
@@ -102,6 +102,9 @@ Add-Tracked $ProjectRoot ''
 # Recorder additions may not yet be tracked by Git. Keep this list exact so the
 # binary's corresponding source is complete without scanning private/build trees.
 $recorderSourceAdditions = @(
+    'BililiveRecorder.Core/Danmaku/BoundedDanmakuBuffer.cs',
+    'BililiveRecorder.Core/Danmaku/StickerPlaceholder.cs',
+    'test/BililiveRecorder.Core.UnitTests/Danmaku/BoundedDanmakuBufferTests.cs',
     'BililiveRecorder.Core/Danmaku/LotteryDanmakuTracker.cs',
     'test/BililiveRecorder.Core.UnitTests/Danmaku/LotteryDanmakuTrackerTests.cs'
 )
@@ -113,7 +116,7 @@ foreach ($relative in $recorderSourceAdditions) {
 # Replace any previously tracked editor files with this selected current source
 # tree, and include current untracked modules without admitting user data.
 foreach ($key in @($files.Keys)) { if ($key.StartsWith('live-editor/')) { $files.Remove($key) | Out-Null } }
-foreach ($folder in @('src','server','test','scripts','docs','installer')) {
+foreach ($folder in @('src','server','test','scripts','docs','installer','desktop-macos')) {
     $directory = Join-Path $AppRoot $folder
     if (!(Test-Path -LiteralPath $directory -PathType Container)) { continue }
     foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse -Force) {
@@ -122,7 +125,7 @@ foreach ($folder in @('src','server','test','scripts','docs','installer')) {
     }
 }
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'desktop') -File -Force) {
-    if ($file.Extension -in @('.cs','.csproj','.config','.manifest','.ps1')) { Add-Source $file.FullName ('live-editor/desktop/'+$file.Name) 'current-editor' }
+    if ($file.Extension -in @('.swift','.plist','.py','.cs','.csproj','.config','.manifest','.ps1')) { Add-Source $file.FullName ('live-editor/desktop/'+$file.Name) 'current-editor' }
 }
 # Include nested desktop assets explicitly rather than walking its build/cache folders.
 foreach ($assetPath in $editorAssetPaths) {
@@ -139,6 +142,7 @@ foreach ($relative in @('docs/live-editor/源码基线.txt')) {
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $relative 'project-documentation' }
 }
 Add-Source (Join-Path $ProjectRoot '.github/workflows/editor.yml') '.github/workflows/editor.yml' 'project-ci'
+Add-Source (Join-Path $ProjectRoot 'script/build_and_run.sh') 'script/build_and_run.sh' 'project-entrypoint'
 foreach ($name in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','启动录播机.cmd','项目说明.md')) {
     $source = Join-Path $ProjectRoot $name
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source $name 'project-entrypoint' }

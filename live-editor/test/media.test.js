@@ -112,7 +112,9 @@ test('第二份合并失败不会发布半成品，项目临时文件清理且�
   const {store,session,media}=await setup('failed-merge');media.work=async()=>{};media.exportAcceleration='software';
   const systemTemp=t.mock.method(os,'tmpdir',()=> 'C:\\must-not-use-system-temp');
   const dm=store.messages(session.id),edit=store.saveEdit(session.id,{revision:0,ranges:[{start:1,end:2},{start:3,end:4}],excluded:[dm[0].id],undo:[dm[0].id]});
-  const job=await media.enqueue(session.id,{mode:'dual'}),note=path.join(job.output.dir,'用户文件.txt');await fs.writeFile(note,'保留');
+  const {jobs}=await media.enqueue(session.id,{mode:'dual'}),job=jobs[0];
+  // Persisted pre-upgrade jobs may still contain merged ranges.
+  job.ranges=edit.ranges;const note=path.join(job.output.dir,'用户文件.txt');await fs.writeFile(note,'保留');
   const trace=traceExportWork(media),run=media.process.bind(media);
   media.process=async(args,options)=>{if(args.at(-1)==='final-danmaku.mp4')throw new Error('Simulated final merge failure');return run(args,options);};
   await assert.rejects(media.exportJob(job),/Simulated final merge failure/);

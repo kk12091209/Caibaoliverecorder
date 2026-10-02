@@ -34,6 +34,11 @@ export async function resolveDouyinLink(input, { request = fetch, signal } = {})
   for (let attempt = 0; attempt < 6; attempt++) {
     const match = url.hostname === 'live.douyin.com' && /^\/(\d{1,20})\/?$/.exec(url.pathname);
     if (match) return { platform: 'douyin', webRid: match[1], key: 'douyin:' + match[1], url: 'https://live.douyin.com/' + match[1] };
+    if(url.hostname==='live.douyin.com'&&url.pathname==='/'&&url.searchParams.has('live_web_rid')){
+      const values=url.searchParams.getAll('live_web_rid');
+      if(values.length!==1||!/^\d{1,20}$/.test(values[0]))throw new Error('抖音房间编号无效。');
+      return {platform:'douyin',webRid:values[0],key:'douyin:'+values[0],url:'https://live.douyin.com/'+values[0]};
+    }
     const response = await request(url, { redirect: 'manual', signal: signal || AbortSignal.timeout(12000), headers: { 'User-Agent': DOUYIN_USER_AGENT } });
     const next = response.headers.get('location');
     if (next) { await response.body?.cancel(); url = safeDouyinLink(new URL(next, url)); continue; }

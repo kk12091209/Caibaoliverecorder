@@ -84,7 +84,9 @@ test('硬件编码中途失败会用软件重做所有片段，清理失败尝�
   };
   try {
     media.work=async()=>{};
-    const job=await media.enqueue(session.id,{ranges:[{start:.1,end:1.6},{start:2.1,end:3.6}],mode:'clean'}),file=await media.exportJob(job);
+    // Old persisted jobs can still contain several merged ranges.
+    const {jobs}=await media.enqueue(session.id,{ranges:[{start:.1,end:1.6},{start:2.1,end:3.6}],mode:'clean'});
+    const job={...jobs[0],ranges:[{start:.1,end:1.6},{start:2.1,end:3.6}]},file=await media.exportJob(job);
     assert.deepEqual(calls,['hardware','hardware','software','software']);
     const info=inspect(file);assert.ok(Math.abs(Number(info.format.duration)-3)<.12);assert.equal(info.streams.length,2);
     const manifest=JSON.parse(store.get('SELECT data FROM jobs WHERE id=?',job.id).data);
@@ -98,7 +100,7 @@ test('硬件编码中途失败会用软件重做所有片段，清理失败尝�
 
 test('检测硬编使用实际双输出编码，驱动不可用时降级且关闭后不再启动任务',async()=>{
   const probes=[];
-  const encoder=await detectExportEncoder(async(args)=>{probes.push(args);throw new Error('No compatible GPU');});
+  const encoder=await detectExportEncoder(async(args)=>{probes.push(args);throw new Error('No compatible GPU');},{platform:'win32'});
   assert.equal(encoder.id,'libx264');assert.equal(probes.length,3);
   for(const args of probes){assert.equal(args.filter(v=>v==='-frames:v').length,2);assert.ok(args.includes('lavfi'));}
   const {store,session,media}=await setup('closed');media.close();
