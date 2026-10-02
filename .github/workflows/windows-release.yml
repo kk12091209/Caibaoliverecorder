@@ -1,0 +1,60 @@
+name: Windows release package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      DOTNET_NOLOGO: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_ROLL_FORWARD: Major
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.425
+      - name: Read application version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content live-editor/package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Build, test and package Windows application
+        shell: pwsh
+        run: ./live-editor/scripts/build-windows-ci.ps1
+      - name: Upload verified release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ steps.version.outputs.version }}
+          path: |
+            .tools/windows-release/*.zip
+            .tools/windows-release/*.7z
+            .tools/windows-release/*-setup.exe
+            .tools/windows-release/*.json
+            .tools/windows-release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ steps.version.outputs.version }}-validation
+          path: |
+            .tools/windows-release-qa/**/verification.json
+            .tools/release-qa/**/verification.json
+            .tools/release-qa/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14

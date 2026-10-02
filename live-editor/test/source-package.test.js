@@ -37,4 +37,30 @@ test('source package retains recorder Runtime/Logs source and current CI while e
     assert.ok(!policyPath.startsWith('live-editor/runtime/'));
   }
   assert.ok((await fs.stat(output)).size>0);
+  // Imported historical source metadata must not collide with the new manifest.
+  // Verify the actual ZIP, since the sidecar alone cannot detect duplicate names
+  // or entries whose content was silently substituted while writing the archive.
+  const verifyArchive = `
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip=[IO.Compression.ZipFile]::OpenRead($env:CAIBO_SOURCE_ZIP)
+try {
+  $names=@($zip.Entries | ForEach-Object { $_.FullName })
+  if ($names.Count -ne @($names | Select-Object -Unique).Count) { throw 'Duplicate source ZIP entries.' }
+  $manifest=Get-Content -LiteralPath $env:CAIBO_SOURCE_MANIFEST -Raw -Encoding UTF8 | ConvertFrom-Json
+  foreach ($file in $manifest.files) {
+    $entry=$zip.GetEntry($file.path)
+    if (!$entry) { throw ('Missing ZIP source: '+$file.path) }
+    $stream=$entry.Open(); $sha=[Security.Cryptography.SHA256]::Create()
+    try { $actual=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose(); $stream.Dispose() }
+    if ($actual -ne $file.sha256 -or $entry.Length -ne $file.bytes) { throw ('Source ZIP hash mismatch: '+$file.path) }
+  }
+} finally { $zip.Dispose() }
+`;
+  execFileSync(powershell,['-NoProfile','-NonInteractive','-Command',verifyArchive],{
+    windowsHide:true,encoding:'utf8',timeout:60000,
+    env:{...process.env,CAIBO_SOURCE_ZIP:output,CAIBO_SOURCE_MANIFEST:path.join(tempRoot,'source.manifest.json'),
+      PSModulePath:path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','Modules')}
+  });
 });

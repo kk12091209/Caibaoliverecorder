@@ -9,6 +9,7 @@ if out.exists():
 def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args])
 revision = git(root, 'rev-parse', 'HEAD').decode().strip()
+version = json.loads(git(root, 'show', revision + ':live-editor/package.json'))['version']
 manifest = {'revision': revision, 'repository': 'https://github.com/kk12091209/Caibaoliverecorder', 'submodules': [], 'files': []}
 out.parent.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(out, 'x', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -48,7 +49,7 @@ with zipfile.ZipFile(out, 'x', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
             manifest['submodules'].append({'path': prefix + path, 'revision': sha, 'url': url})
             collect(sub, sha, prefix + path + '/')
     collect(root, revision)
-    add('SOURCE-README.txt', f'''Caibo 0.1.4 corresponding application source at {revision}.
+    add('SOURCE-README.txt', f'''Caibo {version} corresponding application source at {revision}.
 Includes committed source and exact submodule contents; no local recordings,
 credentials, caches, SDKs or development runtime downloads are included.
 The upstream repository contains public test fixtures and a legacy WPF helper.

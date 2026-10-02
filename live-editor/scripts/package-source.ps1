@@ -79,7 +79,11 @@ function Add-Tracked([string]$root, [string]$prefix) {
     $paths = (Git-Read $root @('ls-files','-z')).Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
     foreach ($relative in $paths) {
         $source = Join-Path $root $relative
-        if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source ($prefix+$relative) 'tracked-upstream' }
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            $archivePath = $prefix + $relative
+            if (!$prefix -and $relative -in @('SOURCE-MANIFEST.json','SOURCE-README.md')) { $archivePath = 'upstream-source-metadata/' + $relative }
+            Add-Source $source $archivePath 'tracked-upstream'
+        }
     }
     foreach ($line in (Git-Read $root @('ls-files','--stage')) -split "`n") {
         if ($line -notmatch '^160000\s+([a-f0-9]+)\s+\d+\t(.+)$') { continue }
