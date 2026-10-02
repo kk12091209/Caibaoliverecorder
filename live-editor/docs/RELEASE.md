@@ -40,7 +40,7 @@
   -AppRoot '<最新 live-editor 源码目录>' `
   -DesktopRoot '<desktop/package 目录>' `
   -RuntimeRoot '<包含 node 与 recorder 的 runtime 目录>' `
-  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.3'
+  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.1.5'
 ```
 
 输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。默认输出 ZIP、安装包、体积/哈希报告及未压缩工作目录，额外传入 `-Include7z` 才生成 7z。`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256。安装版额外加入安装器许可、卸载程序与卸载快捷方式。安装器脚本与中文翻译许可位于 `installer`。
@@ -77,3 +77,11 @@ v0.1.3 起采用完整卸载。安装只接受专用文件夹，拒绝磁盘根�
 - 7-Zip 26.03：https://github.com/ip7z/7zip/releases/tag/26.03
 - .NET 运行时：https://github.com/dotnet/runtime
 - WebView2：https://developer.microsoft.com/microsoft-edge/webview2/
+
+## 从 Mac 发起 Windows 云端构建
+
+在 GitHub Actions 手动运行 `Windows release package` 工作流，选择要发布的源码分支。工作流在 Windows runner 上运行 `build-windows-ci.ps1`，重新构建前端、Windows 桌面壳和录制核心，执行共用回归、真实核心生命周期、安装/升级/卸载以及 ZIP/7z 校验，成功后生成 `windows-版本` 附件。工作流只生成构建附件，不自动创建 Release。
+
+本流程的 Node 24.12.0 与 FFmpeg 8.1.2 沿用已发布 v0.1.3 的相同二进制，先核对整个旧 ZIP 的固定 SHA-256，再校验逐文件清单；只复制 Node 和 FFmpeg 及对应许可，不复用旧界面、桌面壳、录制核心或用户数据。媒体配置与依赖源码来源随包保留在 `程序组件/licenses/ffmpeg`。需要修改媒体构建时，使用前述 `build-ffmpeg.ps1` 重新生成组件并核对版本与哈希。
+
+发布附件含中文安装包、ZIP、7z、安装体积报告、完整对应源码及清单、`windows-build.json` 与 `SHA256SUMS.txt`。`windows-build.json` 记录确切源码提交和检查结果；发布标签必须指向该提交。云端安装与软件编码测试不等同于用户显卡硬件加速、WebView2 窗口和真实直播的完整实机验收。
