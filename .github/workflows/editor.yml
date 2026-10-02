@@ -59,10 +59,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ffmpeg
+          # Homebrew's minimal FFmpeg omits libass. Exercise the same pinned
+          # arm64 binaries shipped to users, including actual subtitle rendering.
+          [[ $(uname -m) == arm64 ]] || { echo 'This job requires an arm64 Mac runner'; exit 1; }
           source live-editor/scripts/dev-env.sh
-          export FFMPEG_PATH="$(brew --prefix)/bin/ffmpeg"
-          export FFPROBE_PATH="$(brew --prefix)/bin/ffprobe"
+          node live-editor/scripts/fetch-tool.mjs 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip' .tools/downloads/ffmpeg.zip c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924
+          node live-editor/scripts/fetch-tool.mjs 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip' .tools/downloads/ffprobe.zip fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6
+          mkdir -p .tools/runtime/ffmpeg
+          unzip -q .tools/downloads/ffmpeg.zip -d .tools/runtime/ffmpeg
+          unzip -q .tools/downloads/ffprobe.zip -d .tools/runtime/ffmpeg
+          chmod +x "$FFMPEG_PATH" "$FFPROBE_PATH"
+          "$FFMPEG_PATH" -hide_banner -filters | grep ' ass '
           RID=osx-x64
           if [[ $(uname -m) == arm64 ]]; then RID=osx-arm64; fi
           dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r "$RID" -p:RuntimeIdentifiers="$RID" --self-contained true -o .tools/runtime/recorder

@@ -11,6 +11,8 @@ for name,url in files.items():
  if not file.exists():
   with urllib.request.urlopen(url,timeout=60) as r:file.write_bytes(r.read())
  shutil.copy2(file,out/name)
+shutil.copy2(root/'live-editor/desktop-macos/FFmpeg-SOURCES.md',out/'FFmpeg-SOURCES.md')
+shutil.copytree(root/'live-editor/desktop-macos/ffmpeg-licenses',out/'ffmpeg-dependencies')
 nuget=root/'.tools/nuget';records=[];target=out/'nuget';target.mkdir()
 deps=json.loads((root/'.tools/runtime/recorder/BililiveRecorder.Cli.deps.json').read_text())
 for name,details in deps['libraries'].items():
