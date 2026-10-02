@@ -238,7 +238,7 @@ internal sealed class MainWindow : Form
         finally { checking = false; }
     }
 
-    private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    private async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         if (!IsLocal(e.Source) || choosingFolder) return;
         string? id = null;
@@ -253,7 +253,17 @@ internal sealed class MainWindow : Form
                 if (IsAuthorPage(url)) OpenAuthorPage(url!);
                 return;
             }
-            if (id is null || id.Length > 100 || actionName != "pickExportFolder") return;
+            if (id is null || id.Length > 100) return;
+            if (actionName == "openUpdateInstaller")
+            {
+                choosingFolder = true;
+                var installer = await backend.UpdatePackageAsync();
+                if (IsDisposed || backend.ExitRequested || !IsLocal(web.Source?.AbsoluteUri ?? "")) throw new IOException("窗口状态已变化，请重试。");
+                Process.Start(new ProcessStartInfo { FileName = installer, Arguments = "/DIR=\"" + root + "\"", UseShellExecute = true });
+                web.CoreWebView2.PostWebMessageAsJson(Json.Serialize(new { id, value = "安装向导已打开，请按提示更新到原目录；录像与设置保留。" }));
+                return;
+            }
+            if (actionName != "pickExportFolder") return;
             var initial = request.TryGetValue("initial", out var value) ? value as string : null;
             using var dialog = new FolderBrowserDialog { Description = "选择导出视频的保存文件夹", ShowNewFolderButton = true };
             if (initial is not null && initial.Length >= 3 && char.IsLetter(initial[0]) && initial[1] == ':' && (initial[2] == '\\' || initial[2] == '/') && Directory.Exists(initial)) dialog.SelectedPath = initial;
@@ -261,7 +271,7 @@ internal sealed class MainWindow : Form
             var selected = dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedPath : null;
             web.CoreWebView2.PostWebMessageAsJson(Json.Serialize(new { id, value = selected }));
         }
-        catch (Exception error) { if (id is not null) web.CoreWebView2.PostWebMessageAsJson(Json.Serialize(new { id, error = error.Message })); }
+        catch (Exception error) { if (id is not null && !IsDisposed && web.CoreWebView2 is not null) web.CoreWebView2.PostWebMessageAsJson(Json.Serialize(new { id, error = error.Message })); }
         finally { choosingFolder = false; }
     }
 }

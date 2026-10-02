@@ -57,9 +57,10 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
               value.instance.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else { return false }
         endpoint = value; return true
     }
-    func call(_ action: [String: Any]? = nil) async -> [String: Any]? {
+    func call(_ action: [String: Any]? = nil, timeout: TimeInterval = 5) async -> [String: Any]? {
         guard let endpoint, let url = URL(string: endpoint.origin + "/internal/desktop") else { return nil }
         var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
         request.setValue(endpoint.token, forHTTPHeaderField: "X-Caibo-Instance")
         if let action {
             request.httpMethod = "POST"

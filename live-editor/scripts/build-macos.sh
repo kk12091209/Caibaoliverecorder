@@ -73,7 +73,7 @@ import sys,hashlib,json
 from pathlib import Path
 app=Path(sys.argv[1]);out=Path(sys.argv[2])
 files=[{'path':str(p.relative_to(app)),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(app.rglob('*')) if p.is_file()]
-(out/'manifest.json').write_text(json.dumps({'architecture':'arm64','minimumMacOS':'14.0','signing':'ad-hoc' if sys.argv[3]=='-' else 'Developer ID','notarized':False,'files':files},ensure_ascii=False,indent=2)+'\n')
+(out/'manifest.json').write_text(json.dumps({'version':json.loads((app/'Contents/Resources/live-editor/package.json').read_text())['version'],'buildRevision':json.loads((app/'Contents/Resources/live-editor/package.json').read_text())['buildRevision'],'architecture':'arm64','minimumMacOS':'14.0','signing':'ad-hoc' if sys.argv[3]=='-' else 'Developer ID','notarized':False,'files':files},ensure_ascii=False,indent=2)+'\n')
 PY
 cp live-editor/desktop-macos/使用说明.txt "$OUTPUT/使用说明.txt"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUTPUT/Caibo-$VERSION-macos-arm64.zip"

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import DanmakuOverlay from './components/DanmakuOverlay.vue';
+import UpdateSettings from './components/UpdateSettings.vue';
 import TimelineSignals from './components/TimelineSignals.vue';
 import TimelineNavigator from './components/TimelineNavigator.vue';
 import TimelineMarker from './components/TimelineMarker.vue';
@@ -410,6 +411,8 @@ async function loadOverlay(){
   try{const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&overlay=1`);if(request===overlayRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(overlayFeed.value,result))overlayFeed.value=result;overlayWindow=window;}}
   catch{}finally{if(request===overlayRequest)overlayBusy=false;}
 }
+async function openUpdateSettings(){openSettings();await nextTick();document.querySelector('.update-settings')?.scrollIntoView({block:'center'});}
+async function deferUpdate(){try{state.value.updates=await api('updates/defer',{});}catch(e){tell(e.message);}}
 function openSettings(){const current=state.value.paths?.exports||'';savedExportDirectory.value=current;exportDirectory.value=current;closeActionError.value='';chatRateError.value='';chatRateDraft.value=null;modal.value='settings';}
 async function setChatRate(value){if(chatRateBusy.value)return;chatRateBusy.value=true;chatRateDraft.value=Number(value);chatRateError.value='';try{const result=await api('settings',{danmakuPerSecond:Number(value)});state.value={...state.value,danmakuPerSecond:result.danmakuPerSecond};await refresh();invalidateMessages();invalidateSignals(true);await Promise.all([loadMessages(true),loadOverlay()]);}catch(e){chatRateError.value=e.message;}finally{chatRateDraft.value=null;chatRateBusy.value=false;}}
 async function setCloseAction(value){if(closeActionBusy.value)return;closeActionBusy.value=true;closeActionDraft.value=value;closeActionError.value='';try{const result=await api('settings',{closeAction:value});state.value={...state.value,closeAction:result.closeAction};await refresh();}catch(e){closeActionError.value=e.message;}finally{closeActionDraft.value=null;closeActionBusy.value=false;}}
@@ -435,6 +438,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
       <div class="brand"><img class="brand-icon" :src="appIcon" alt="" width="30" height="30"/><strong>菜播·录包机</strong></div>
       <div class="top-actions"><button class="button subtle panel-toggle" aria-label="切换素材栏" @keydown.stop :aria-expanded="libraryVisible" aria-controls="library-panel" title="展开或收起直播间与素材栏" @click="libraryPreference=!libraryVisible"><Film :size="16"/><span>素材</span></button><button class="button subtle panel-toggle" aria-label="切换弹幕栏" @keydown.stop :aria-expanded="danmakuVisible" aria-controls="danmaku-panel" title="展开或收起弹幕列表" @click="danmakuPreference=!danmakuVisible"><Radio :size="16"/><span>弹幕</span></button><span class="core-status" :title="state.recorder.error"><i :class="{online:state.recorder.online}"/>{{ state.recorder.online?'录制服务就绪':'录制服务未连接' }}</span><button class="button subtle" @click="openSettings"><Settings :size="16"/><span>设置</span></button></div>
     </header>
+    <aside v-if="state.updates?.candidate&&state.updates.enabled!==false&&!state.updates.deferred&&!modal" class="update-reminder" aria-label="更新提醒"><div><strong>发现软件更新</strong><p>{{ state.updates.candidate.version }} · 修订 {{ state.updates.candidate.revision }}，可在空闲时安装。</p></div><div class="update-reminder-actions"><button class="button primary small" @click="openUpdateSettings">查看更新</button><button class="button subtle small" @click="deferUpdate">稍后提醒</button></div></aside>
     <div class="workspace" :class="{'library-collapsed':!libraryVisible,'danmaku-collapsed':!danmakuVisible}">
       <aside id="library-panel" v-show="libraryVisible" class="library">
         <button v-if="pendingCleanup.length" class="button subtle" @click="openCleanup">素材清理进度 · 查看</button>
@@ -554,7 +558,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         <p v-if="roomChoiceError" class="inline-warning" role="alert">{{ roomChoiceError }}</p>
         <div class="confirm-actions"><button class="button" :disabled="modalBusy" @click="closeModal">取消</button><button class="button primary" :disabled="modalBusy||!roomChoicePlatform" @click="confirmRoomChoice"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>确认添加</button></div>
       </template>
-      <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2>
+      <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2><UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
         <section class="chat-settings" aria-label="弹幕设置"><div class="chat-rate-heading"><label for="chat-rate-limit">每秒弹幕上限</label><output for="chat-rate-limit">{{ chatRateValue }} 条</output></div><input id="chat-rate-limit" type="range" min="1" max="50" step="1" :value="chatRateValue" :style="{'--chat-rate-fill':(chatRateValue-1)/49*100+'%'}" :disabled="chatRateBusy||modalBusy" @input="chatRateDraft=Number($event.target.value)" @change="setChatRate($event.target.value)"/><p class="muted">每个直播间独立计算 · 自动保存</p><p class="muted">30 字及以上过滤；10 秒内同文达到 5 条，只留一条。</p><p v-if="chatRateError" class="inline-warning" role="alert">{{ chatRateError }}</p></section>
         <fieldset v-if="isDesktop" class="export-versions" aria-label="关闭窗口时"><legend>关闭窗口时</legend><label v-for="choice in [{value:'ask',label:'每次询问'},{value:'exit',label:'退出'},{value:'background',label:'后台运行'}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
         <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>

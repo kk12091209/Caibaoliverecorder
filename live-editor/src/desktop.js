@@ -25,3 +25,11 @@ export function pickExportFolder(initial) {
     post({ id, action: 'pickExportFolder', initial });
   });
 }
+
+export function openUpdateInstaller() {
+  if (!isDesktop) return Promise.reject(new Error('请在桌面应用中打开安装包。'));
+  return new Promise((resolve, reject) => {
+    const id=String(++counter),timer=setTimeout(()=>{pending.delete(id);reject(new Error('安装包验证超时，请重试。'));},90000);
+    pending.set(id,{resolve,reject,timer});post({id,action:'openUpdateInstaller'});
+  });
+}

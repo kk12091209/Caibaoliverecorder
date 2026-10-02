@@ -84,6 +84,22 @@ internal sealed class BackendService : IDisposable
         }
         catch (Exception error) when (error is HttpRequestException || error is TaskCanceledException || error is IOException || error is ArgumentException || error is KeyNotFoundException || error is FormatException || error is InvalidOperationException) { return null; }
     }
+    internal async Task<string> UpdatePackageAsync()
+    {
+        if (Origin == "" || token == "") throw new IOException("后台尚未连接。");
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(60) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Origin + "/internal/desktop");
+        request.Headers.Add("X-Caibo-Instance", token);
+        request.Content = new StringContent(json.Serialize(new { action = "prepareUpdate" }), Encoding.UTF8, "application/json");
+        using var response = await client.SendAsync(request);
+        var value = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
+        if (!response.IsSuccessStatusCode) throw new IOException(Text(value, "error"));
+        if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data)) throw new IOException("后台连接已变化，请重试。");
+        var file = Path.GetFullPath(Text(value, "updatePath"));
+        if (!SamePath(Path.GetDirectoryName(file)!, Path.Combine(data, "updates")) || !file.EndsWith("-win-x64-setup.exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(file)) throw new IOException("更新包路径无效。");
+        if ((File.GetAttributes(Path.GetDirectoryName(file)!) & FileAttributes.ReparsePoint) != 0 || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("更新包路径异常。");
+        return file;
+    }
     internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", client, pid = Process.GetCurrentProcess().Id });
     internal async Task SaveCloseActionAsync(string closeAction)
     {

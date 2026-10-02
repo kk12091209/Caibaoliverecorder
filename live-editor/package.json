@@ -1,6 +1,7 @@
 {
   "name": "bili-live-editor",
   "version": "0.1.6",
+  "buildRevision": 2,
   "private": true,
   "type": "module",
   "engines": { "node": ">=24" },

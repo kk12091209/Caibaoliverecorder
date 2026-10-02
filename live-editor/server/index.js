@@ -20,6 +20,7 @@ import { exportedJobFile } from './output-names.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
+import { Updates } from './updates.js';
 import { listenLocal } from './local-endpoint.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -71,10 +72,13 @@ async function createManagedApp(options,runtime) {
     const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
     return {busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
   }
+  const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
+  const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
+  await updates.recover();
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
-  function snapshot(){return {sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -102,7 +106,8 @@ async function createManagedApp(options,runtime) {
         if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);
         if(req.method==='POST'){
           const input=await body(req);
-          if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
+          if(input.action==='prepareUpdate'){const updatePath=await updates.installPath();return json(res,{...runtime.status(activity()),updatePath});}
+          else if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
           else if(input.action==='detach')runtime.clients.delete(input.client);
           else if(input.action==='setCloseAction'){validateCloseAction(input.closeAction);store.setting('window-close-action',input.closeAction);}
           else if(input.action==='quit'){const decision=await desktopExit.request(input.confirmed??false);return json(res,{...runtime.status(activity()),...decision,closeAction:closeAction()});}
@@ -112,6 +117,12 @@ async function createManagedApp(options,runtime) {
         return json(res,{...runtime.status(activity()),closeAction:closeAction()});
       }
       if(runtime.stopping&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
+      if(p==='/api/updates/check'&&req.method==='POST'){await body(req);return json(res,await updates.check());}
+      if(p==='/api/updates/download'&&req.method==='POST'){const input=await body(req);return json(res,updates.download(input.key),202);}
+      if(p==='/api/updates/clear'&&req.method==='POST'){await body(req);return json(res,await updates.clearCache());}
+      if(p==='/api/updates/cancel'&&req.method==='POST'){await body(req);return json(res,updates.cancel());}
+      if(p==='/api/updates/defer'&&req.method==='POST'){await body(req);return json(res,updates.defer());}
+      if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
       if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
       if(p==='/api/events'&&req.method==='GET'){
         res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write(`data: ${JSON.stringify(snapshot())}\n\n`);clients.add(res);res.on('close',()=>clients.delete(res));return;
@@ -237,6 +248,7 @@ async function createManagedApp(options,runtime) {
     })().catch(error=>{runtime.stopping=false;runtime.lastError=error.message;});
   },options.runtimePollMs??1000);
   maintain();
+  if(options.updatesAutoCheck??runtime.managed)updates.start();
   const timer=setInterval(async()=>{
     if(closing)return;
     for(const s of store.all("SELECT * FROM sessions WHERE status IN ('importing','finishing')")){
@@ -245,8 +257,8 @@ async function createManagedApp(options,runtime) {
     for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
   },1000);
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
+  app={updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
