@@ -107,5 +107,5 @@ jobs:
           assert listed == {p.name for p in root.iterdir()} - {'SHA256SUMS.txt'}
           print('Verified source revision, successful checks and all release hashes.')
           PYVERIFY
-          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows 更新 · 逐段独立导出" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
+          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
           gh release upload "v$RELEASE_VERSION" release-files/*
