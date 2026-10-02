@@ -45,7 +45,7 @@ export const isKeyframe=tag=>tag[0]===9&&tag.length>16&&tag[12]===1&&tag[11]>>4=
 const leases=new WeakMap();
 export function acquireReader(store,sourceId) {
   const source=store.get('SELECT session FROM sources WHERE id=?',sourceId);
-  if(!source||store.deletions?.has(source.session))throw new Error('素材正在删除，无法继续读取。');
+  if(!source||store.deletions?.has(source.session)||!store.session(source.session))throw new Error('素材正在删除，无法继续读取。');
   let map=leases.get(store);if(!map)leases.set(store,map=new Map());
   const storage=store.get('SELECT * FROM source_storage WHERE source=?',sourceId),mode=storage?.mode==='direct'?'direct':'chunks';
   const key=sourceId+':'+mode;map.set(key,(map.get(key)||0)+1);let released=false;

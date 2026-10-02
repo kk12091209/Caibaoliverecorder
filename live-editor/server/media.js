@@ -1,3 +1,4 @@
+import { stopChild } from './child-stop.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -72,11 +73,11 @@ export class Media {
   // the default broad check, so their readers/processes remain protected.
   interactiveChildren = new Set();
   hasForegroundWork({includeInteractive=true}={}){return this.processing||this.enqueues.size>0||(includeInteractive&&this.previews.size>0)||[...this.probes].some(probe=>!probe.background)||this.saves.size>0||this.savePreparations.size>0||[...this.children].some(child=>!this.backgroundChildren.has(child)&&(includeInteractive||!this.interactiveChildren.has(child)));}
-  assertSessionAvailable(id) {if(this.closed)throw new Error('视频服务已关闭。');if(this.blockedSessions.has(id)||this.store.deletions?.has(id))throw new Error('素材正在删除，请稍后再试。');}
+  assertSessionAvailable(id) {if(this.closed)throw new Error('视频服务已关闭。');if(this.blockedSessions.has(id)||this.store.deletions?.has(id))throw new Error('素材正在删除，请稍后再试。');if(!this.store.session(id))throw new Error('找不到录像，素材不存在或已删除。');}
   async cancelPreviews(id) {
     this.blockedSessions.set(id,(this.blockedSessions.get(id)||0)+1);
     const active=[...this.previews.values()].filter(item=>item.sessionId===id);
-    for(const item of active)item.controller.abort();
+    for(const item of [...active,...this.probes].filter(item=>item.sessionId===id))item.controller?.abort();
     await Promise.allSettled([...active,...[...this.enqueues,...this.probes].filter(item=>item.sessionId===id)].map(item=>item.done));
   }
   allowSession(id) {const count=this.blockedSessions.get(id)||0;if(count>1)this.blockedSessions.set(id,count-1);else this.blockedSessions.delete(id);}
@@ -89,7 +90,7 @@ export class Media {
       child=spawn(executable,args,options);
       this.temporaryWorkspaces.spawned(ticket,child.pid);
     } catch(error) {
-      if(child){child.once('error',()=>{});child.once('close',()=>this.temporaryWorkspaces.childExited(ticket,child.pid));child.kill();}
+      if(child){child.once('error',()=>{});child.once('close',()=>this.temporaryWorkspaces.childExited(ticket,child.pid));stopChild(child);}
       else if(ticket)try{this.temporaryWorkspaces.spawned(ticket,null);}catch{}
       throw error;
     }
@@ -106,9 +107,11 @@ export class Media {
     try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     child.stderr.on('data', b => { log = (log+b).slice(-16000); progress?.(log); });
     const done = new Promise((resolve, reject) => { let spawnError;child.once('error', error=>{spawnError=error;}); child.once('close', code => { this.children.delete(child);this.backgroundChildren.delete(child);this.interactiveChildren.delete(child); if (signal?.aborted) resolve(); else if(spawnError)reject(spawnError);else if(code===0)resolve();else reject(new Error(`视频处理失败 (${code})：${log.slice(-1200)}`)); }); });
-    const abort = () => child.kill(); signal?.addEventListener('abort', abort, { once: true });
-    const inputDone = input ? pipeline(Readable.from(input,{objectMode:false,highWaterMark:256*1024}), child.stdin).catch(e => { if (!['EPIPE','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE'].includes(e.code) && !signal?.aborted) { child.kill(); throw e; } }) : (child.stdin.end(), Promise.resolve());
-    const outputDone = output ? pipeline(child.stdout, output).catch(e => { child.kill(); if (!signal?.aborted) throw e; }) : Promise.resolve();
+    const inputStream = input ? Readable.from(input,{objectMode:false,highWaterMark:256*1024}) : null;
+    const abort = () => { inputStream?.destroy(); stopChild(child); }; signal?.addEventListener('abort', abort, { once: true });
+    if(signal?.aborted)abort();
+    const inputDone = inputStream ? pipeline(inputStream, child.stdin).catch(e => { if (!['EPIPE','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE'].includes(e.code) && !signal?.aborted) { stopChild(child); throw e; } }) : (child.stdin.end(), Promise.resolve());
+    const outputDone = output ? pipeline(child.stdout, output).catch(e => { stopChild(child); if (!signal?.aborted) throw e; }) : Promise.resolve();
     // A failed pipe can reject before FFmpeg closes. Do not hand its workspace
     // back to the scheduler or cleanup until every pipe and the child settles.
     return Promise.allSettled([done,inputDone,outputDone]).then(results=>{
@@ -122,15 +125,17 @@ export class Media {
       if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));
       const child = this.spawnTracked(this.ffprobe, ['-v','error','-analyzeduration','1000000','-probesize','1000000','-show_data_hash','sha256','-show_entries','stream=codec_type,codec_name,width,height,r_frame_rate,pix_fmt,sample_aspect_ratio,profile,level,time_base,extradata_hash,nb_frames,duration','-of','json', file], {windowsHide:true},path.dirname(file));
       let output='',log='',timedOut=false;this.children.add(child);if(background)this.backgroundChildren.add(child);
-      const abort=()=>child.kill();signal?.addEventListener('abort',abort,{once:true});
+      const abort=()=>stopChild(child);signal?.addEventListener('abort',abort,{once:true});
       child.stdout.on('data', b => output+=b);child.stderr.on('data',b=>log=(log+b).slice(-2000));
-      const timeout=setTimeout(()=>{timedOut=true;child.kill();},15000);
+      const timeout=setTimeout(()=>{timedOut=true;stopChild(child);},15000);
       child.once('error',e=>{clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);reject(new Error(`无法启动视频信息读取工具：${e.message}`));});
       child.once('close', code => { clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));if(timedOut)return reject(new Error('读取视频信息超时，请检查素材文件是否可正常访问。'));if(code)return reject(new Error(`读取视频信息失败：${log.trim()||'工具退出码 '+code}`));try {resolve(videoMetadata(JSON.parse(output).streams));}catch(e){reject(e);} });
     });
   }
   async probeSource(source,time=source.start,options={}) {
-    const operation={sessionId:source.session,background:options.background,done:this.probeSourceInternal(source,time,options)};this.probes.add(operation);
+    const controller=new AbortController();
+    options={...options,signal:options.signal?AbortSignal.any([options.signal,controller.signal]):controller.signal};
+    const operation={sessionId:source.session,controller,background:options.background,done:this.probeSourceInternal(source,time,options)};this.probes.add(operation);
     try{return await operation.done;}finally{this.probes.delete(operation);}
   }
   async probeSourceInternal(source,time,options={}) {
@@ -546,5 +551,5 @@ export class Media {
       await this.temporaryWorkspaces.finish(workDir);
     }
   }
-  close(){this.closed=true;for(const active of this.previews.values())active.controller.abort();for(const child of this.children)child.kill();}
+  close(){this.closed=true;for(const active of this.previews.values())active.controller.abort();for(const child of this.children)stopChild(child);}
 }

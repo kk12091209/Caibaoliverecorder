@@ -66,19 +66,25 @@ export class Store {
   session(id) { return this.get("SELECT * FROM sessions WHERE id=? AND deleted_at=''", id); }
   sessions() { return this.all("SELECT * FROM sessions WHERE deleted_at='' ORDER BY created DESC LIMIT 200"); }
   pendingCleanup() { return this.all("SELECT id,title,created,status,duration,purge_started_at,purge_error FROM sessions WHERE deleted_at!='' AND purge_started_at!='' AND purged_at='' ORDER BY purge_started_at DESC"); }
-  async deleteSession(id, confirmed, { control }={}) {
+  confirmDeletion(id) {
+    assertDeletable(this, id);
+    const now = new Date().toISOString();
+    this.run("UPDATE sessions SET deleted_at=CASE WHEN deleted_at='' THEN ? ELSE deleted_at END,purge_started_at=CASE WHEN purge_started_at='' THEN ? ELSE purge_started_at END,purge_error='' WHERE id=?", now, now, id);
+  }
+  async deleteSession(id, confirmed, { control, resourcesStopped = false }={}) {
     if (confirmed !== true) throw new Error('请先确认是否删除这份素材。');
     this.deletions??=new Set();
     if(this.deletions.has(id))throw new Error('这份素材正在删除，请稍候。');
     this.deletions.add(id);
     let started=false, preparationBlocked=false, cacheBlocked=false;
-    const wait=operation=>control?control.wait(operation):operation;
+    const wait=operation=>control?control.drain(operation):operation;
     try {
       control?.check();
       assertDeletable(this,id);
-      if(this.preparation){preparationBlocked=true;await wait(this.preparation.cancelSession(id));}
-      if(this.renderCache){cacheBlocked=true;this.renderCache.blockSession(id);await wait(this.renderCache.cancelSession(id));}
+      if(this.preparation&&!resourcesStopped){preparationBlocked=true;await wait(this.preparation.cancelSession(id));}
+      if(this.renderCache&&!resourcesStopped){cacheBlocked=true;this.renderCache.blockSession(id);await wait(this.renderCache.cancelSession(id));}
       if(this.storage?.currentSession===id||this.sources(id).some(source=>sourceReaderCount(this,source.id)))throw new Error('素材仍在读取或整理，请等待结束后再删除。');
+      control?.stage('checking', '正在核对素材文件');
       const plan=await wait(prepareDeletion(this,id,{control}));
       this.transaction(()=>{
         control?.check();
@@ -91,16 +97,17 @@ export class Store {
         this.run("UPDATE sessions SET deleted_at=CASE WHEN deleted_at='' THEN ? ELSE deleted_at END,purge_started_at=?,purge_error='' WHERE id=?",now,now,id);
       });
       started=true;
+      control?.stage('files', '正在清理原片与分片');
       const result=await removeDeletionFiles(this,id,plan,{control});
       if(this.renderCache){
-        control?.check();
+        control?.stage('cache', '正在清理预处理缓存');
         const cache=await this.renderCache.removeSession(id,{control});
         result.freedBytes+=cache.freedBytes;result.deletedFiles+=cache.deletedFiles;
         result.preserved.push(...cache.preserved.map(entry=>({...entry,cache:true})));
         if(cache.preserved.length)result.message+=' 部分预处理缓存身份异常或仍有未知文件，已保留。';
       }
       if(this.temporaryWorkspaces){
-        control?.check();
+        control?.stage('temporary', '正在清理临时文件');
         const temporary=await this.temporaryWorkspaces.removeSession(id,{control});
         result.freedBytes+=temporary.freedBytes;result.deletedFiles+=temporary.deletedFiles;
       }
@@ -111,6 +118,7 @@ export class Store {
         this.run('UPDATE sessions SET purge_error=? WHERE id=?',reason,id);
         return {...result,ok:false,pending:true,message:'素材清理未完成，空闲时会自动重试；可在设置中查看。'};
       }
+      control?.stage('records', '正在清理编辑记录');
       this.transaction(()=>{
         for(const source of this.sources(id)) {
           control?.check();

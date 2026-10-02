@@ -44,7 +44,7 @@ async function createManagedApp(options,runtime) {
   const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
   await media.recoverPendingSaves();
   const clients=new Set(); let closing=false,app,closePromise;
-  const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000});
+  const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     busyReason:()=>{
@@ -169,6 +169,7 @@ async function createManagedApp(options,runtime) {
       if((match=/^\/api\/sessions\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST'){
         const input=await body(req),id=match[1];
         if(input.confirmed!==true)throw new Error('请先确认是否永久删除这份素材。');
+        if(input.background===true)return json(res,deletingSessions.start(id).accepted,202);
         if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
         const session=store.get('SELECT * FROM sessions WHERE id=?',id);
         if(!session||session.purged_at)throw new Error('素材不存在或已经彻底删除。');
@@ -244,7 +245,7 @@ async function createManagedApp(options,runtime) {
     for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
   },1000);
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+  app={store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
     closing=true;clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();

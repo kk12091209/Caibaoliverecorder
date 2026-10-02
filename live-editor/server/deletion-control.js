@@ -31,5 +31,11 @@ export class DeletionControl {
     try { return await Promise.race([promise, cancelled]); }
     finally { this.signal.removeEventListener('abort', abort); }
   }
+  stage(phase, detail = '') {
+    this.check(); this.phase = phase; this.detail = detail; this.completed = 0; this.total = 0; this.progress();
+  }
+  count(completed, total) { this.completed = completed; this.total = total; this.progress(); }
+  // Unlike a response timeout, resource cleanup must settle before releasing ownership.
+  async drain(operation) { const value = await operation; this.progress(); return value; }
   close() { clearTimeout(this.timer); this.external?.removeEventListener('abort', this.abort); }
 }

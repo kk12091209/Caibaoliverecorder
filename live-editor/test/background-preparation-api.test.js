@@ -247,7 +247,7 @@ test('删除素材先取消并等待后台处理退出，等待期间原片仍�
     // Give asynchronous path validation and unlink work enough event-loop
     // turns to expose a cancel-without-await regression while the producer stays held.
     await delay(80);
-    assert.equal(returned, false); assert.ok(app.store.session('deleted'));
+    assert.equal(returned, false); assert.equal(app.store.session('deleted'),undefined);assert.ok(app.store.pendingCleanup().some(item=>item.id==='deleted'));
     assert.deepEqual(await fs.readFile(fixture.original), FLV_HEADER);
   } finally { held.release.resolve(); }
   const deleted = await response;

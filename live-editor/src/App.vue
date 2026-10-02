@@ -44,7 +44,10 @@ const libraryVisible=computed(()=>libraryPreference.value??!narrowLayout.value);
 const danmakuVisible=computed(()=>danmakuPreference.value??!compactLayout.value);
 function updatePanelBreakpoint(){narrowLayout.value=panelBreakpoint.matches;compactLayout.value=compactBreakpoint.matches;}
 const exportScope=ref('clips'),exportTarget=ref(null),exportRanges=ref([]),exportExcluded=ref(0);
-const pendingCleanup=computed(()=>state.value.pendingCleanup||[]);
+const pendingCleanup=computed(()=>(state.value.pendingCleanup||[]).map(item=>({...item,task:state.value.deletions?.find(task=>task.id===item.id)})));
+const requestedDeletions=new Map();
+async function openCleanup(){openSettings();await nextTick();document.querySelector('.cleanup-settings')?.scrollIntoView({block:'center'});}
+function cleanupLabel(item){const task=item.task;if(!task)return item.purge_error?'等待重试':'等待清理';const count=task.total?`（${task.completed}/${task.total}）`:'';return ({resources:'正在释放占用',checking:'正在核对文件',files:'正在清理文件',cache:'正在清理缓存',temporary:'正在清理临时文件',records:'正在清理记录',waiting:'等待占用释放，随后自动重试'})[task.phase]+count;}
 const draftStart=computed(()=>markerTime('start',startMarked.value));
 const draftEnd=computed(()=>markerTime('end',endMarked.value));
 const draftDuration=computed(()=>draftStart.value!==null&&draftEnd.value!==null&&draftEnd.value>draftStart.value?draftEnd.value-draftStart.value:null);
@@ -228,7 +231,14 @@ function dragMark(which,time){
 function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
 function clearDraftMarks(){startMarked.value=false;endMarked.value=false;}
 function resetSelection(){previewTransport?.dispose();selectionGeneration++;generation++;selected.value=null;detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();previewUrl.value='';loading.value=false;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];overlayFeed.value=[];position.value=0;startMarked.value=false;endMarked.value=false;}
-function applyState(value){state.value=value;if(selected.value&&!value.sessions.some(s=>s.id===selected.value))resetSelection();}
+function applyState(value){
+  state.value=value;if(selected.value&&!value.sessions.some(s=>s.id===selected.value))resetSelection();
+  for(const [id,title] of requestedDeletions){
+    if(!value.sessions.some(s=>s.id===id)&&!value.pendingCleanup?.some(s=>s.id===id)&&!value.deletions?.some(s=>s.id===id)){
+      requestedDeletions.delete(id);tell(`「${title}」已清理完成，已导出的成片保留。`,'success');
+    }
+  }
+}
 function closeContext(){sessionMenu.value=null;jobMenu.value=null;}
 async function showContext(event,session){closeContext();const rect=event.currentTarget.getBoundingClientRect();sessionMenu.value={session,x:Math.max(8,Math.min(event.clientX||rect.left+30,window.innerWidth-248)),y:Math.max(8,event.clientY||rect.bottom)};await nextTick();const menu=document.querySelector('.session-context');if(menu&&sessionMenu.value)sessionMenu.value.y=Math.max(8,Math.min(sessionMenu.value.y,window.innerHeight-menu.offsetHeight-8));menu?.querySelector('button:not(:disabled)')?.focus();}
 const cancellingJobIds=ref([]);
@@ -295,19 +305,15 @@ async function confirmJobRemoval(){
 }
 function requestDelete(session){closeContext();materialDeleteError.value='';confirmTarget.value={id:session.id,title:session.title,created:session.created,duration:session.duration};modal.value='delete-session';}
 async function deleteRecording(id){
-  const controller=new AbortController();let timeout;
-  const arm=()=>{clearTimeout(timeout);timeout=setTimeout(()=>controller.abort(),60000);};
-  const unwatch=watch(()=>state.value.deletions?.find(item=>item.id===id)?.updated,updated=>{if(updated)arm();});
-  arm();
-  try{return await api('sessions/'+id+'/delete',{confirmed:true},{signal:controller.signal});}
-  finally{clearTimeout(timeout);unwatch();}
+  // Only wait for acceptance; a disconnected page never cancels confirmed cleanup.
+  return api('sessions/'+id+'/delete',{confirmed:true,background:true},{signal:AbortSignal.timeout(15000)});
 }
 function requestRemove(room){confirmTarget.value={...room};modal.value='remove-room';}
 async function confirmRemoval(){if(!['remove-room','delete-session'].includes(modal.value)||!confirmTarget.value||modalBusy.value||deleteBlock.value)return;modalBusy.value=true;const kind=modal.value,target=confirmTarget.value;try{
   if(kind==='remove-room'){await api('rooms/'+target.roomId+'/remove',{confirmed:true});tell('已移除监控房间，已录制素材保留。','success');}
-  else if(kind==='delete-session'){materialDeleteError.value='';const result=await deleteRecording(target.id);if(selected.value===target.id)resetSelection();const preserved=Array.isArray(result.externalFilesPreserved)?result.externalFilesPreserved.length>0:!!result.externalFilesPreserved;tell((result.pending?'素材清理未完成':'素材已删除')+(Number.isFinite(result.freedBytes)?'，释放 '+formatBytes(result.freedBytes):'')+'。'+(preserved?'程序目录外的原文件已保留。':'')+(result.pending?'部分内部文件仍占用空间，空闲时自动重试；可到设置中的「清理未完成」查看原因。':''),result.pending?'error':'success');}
+  else if(kind==='delete-session'){materialDeleteError.value='';await deleteRecording(target.id);requestedDeletions.set(target.id,target.title);if(selected.value===target.id)resetSelection();tell('已开始后台清理，可继续操作其他素材。','success');}
   modal.value='';void refresh();
-}catch(e){if(kind==='delete-session'){materialDeleteError.value='删除失败，请重试。';tell(materialDeleteError.value);void refresh();}else tell(e.message);}finally{modalBusy.value=false;}}
+}catch(e){if(kind==='delete-session'){materialDeleteError.value=e.name==='TimeoutError'?'请求确认超时，可查看清理进度或重试；已受理的清理会继续。':e.message;tell(materialDeleteError.value);void refresh();}else tell(e.message);}finally{modalBusy.value=false;}}
 function statusText(s){return ({recording:'录制中',waiting:'等待重连',finishing:'整理中',finished:'已完成',importing:'整理中'})[s]||s;}
 function tell(text,kind='error'){notice.value=text;noticeKind.value=kind;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>notice.value='',8000);}
 async function refresh(){if(refreshBusy)return;refreshBusy=true;try{
@@ -431,7 +437,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
     </header>
     <div class="workspace" :class="{'library-collapsed':!libraryVisible,'danmaku-collapsed':!danmakuVisible}">
       <aside id="library-panel" v-show="libraryVisible" class="library">
-        <button v-if="pendingCleanup.length" class="button subtle" @click="openSettings">有素材尚未清理完成 · 查看</button>
+        <button v-if="pendingCleanup.length" class="button subtle" @click="openCleanup">素材清理进度 · 查看</button>
         <section class="room-section"><h2><Radio :size="17"/>直播间</h2>
           <form class="room-form" @submit.prevent="addRoom"><input v-model="roomUrl" aria-label="直播间链接或房间号" placeholder="直播链接或房间号" :disabled="addingRoom"/><button class="button primary small" type="submit" :disabled="addingRoom||!state.recorder.online"><LoaderCircle v-if="addingRoom" class="spin" :size="15"/><span v-else>添加</span></button></form>
           <p v-if="!state.recorder.online" class="room-offline" role="status">{{ state.recorder.error || '正在连接录制服务…' }}<span>连接恢复后会自动启用添加按钮，可先填写直播间链接。</span></p>
@@ -554,7 +560,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>
         <div class="directory-settings"><label class="field-label">默认导出根目录<div class="path-picker"><input v-model="exportDirectory" aria-label="默认导出文件夹" placeholder="填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>选择</button></div></label><p class="muted">按北京时间分类：完整视频保存为「完整素材 / 日期 / 起止时间.mp4」；选段保存为「导出片段 / 日期 / 起止时间 / 视频.mp4」。修改路径或重新选择后自动保存。</p><div class="export-destinations"><span>完整素材</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>导出片段</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>打开文件目录</button></div></div>
         <div class="setting-info"><span>完整原始录像与弹幕</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">打开原始素材文件夹</button></div>
-        <section v-if="pendingCleanup.length" class="cleanup-settings" aria-label="清理未完成"><strong>清理未完成（{{ pendingCleanup.length }}）</strong><p class="muted">部分文件尚未清理完成，可点击重试清理。</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p v-if="item.purge_error" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy" @click="requestDelete(item)">重试清理</button></div></section>
+        <section v-if="pendingCleanup.length" class="cleanup-settings" aria-label="素材清理进度"><strong>素材清理进度（{{ pendingCleanup.length }}）</strong><p class="muted">清理在后台继续；占用释放后会自动重试，不影响操作其他素材。</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p role="status">{{ cleanupLabel(item) }}</p><small v-if="item.task?.detail">{{ item.task.detail }}</small><p v-if="item.purge_error&&!item.task" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy||!!item.task" @click="requestDelete(item)">{{ item.task?'清理中':'重试清理' }}</button></div></section>
       </template>
       <template v-else-if="modal==='retry-save'"><h2><FolderOpen :size="23"/>更换保存位置</h2><p class="export-target">{{ retrySaveTarget?.description }}</p><p>已完成编码，将已有的 MP4 保存到新位置，无需重新导出。保留原来的版本、日期和时间命名。</p><form @submit.prevent="retryJobSave(retrySaveJob,true)"><label class="field-label">本次保存根目录<div class="path-picker"><input v-model="retrySaveDirectory" class="retry-save-directory" aria-label="重试保存文件夹" placeholder="填写完整的文件夹路径" :disabled="modalBusy" required/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseRetryFolder"><FolderOpen :size="16"/>选择</button></div></label><div class="export-destinations"><span>保存到「{{ retrySaveCategory }}」</span><code>{{ categoryPath(retrySaveDirectory,retrySaveCategory) }}</code></div><p class="muted">只更改本次任务的保存位置，默认导出目录保持不变。</p><p v-if="retrySaveError" class="inline-warning" role="alert">{{ retrySaveError }}</p><p v-else-if="retrySaveBlock" class="inline-warning">{{ retrySaveBlock }}</p><div class="confirm-actions"><button type="button" class="button" :disabled="modalBusy" @click="closeModal">取消</button><button class="button primary" :disabled="modalBusy||!!retrySaveBlock||!retrySaveDirectory.trim()"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>保存到此位置</button></div></form></template>
       <template v-else><h2><Download :size="23"/>{{ modalTitle }}</h2><p class="export-target">{{ exportTarget?.title }}</p><p v-if="exportScope==='full'">将导出这份素材的完整录像，生成{{ versionDescription }}，总时长约 {{ format(exportDuration) }}。不会改动已添加的剪辑选段。</p><p v-else>已选择 {{ exportRanges.length }} 个选段，将创建 {{ exportRanges.length }} 个独立任务，按列表顺序逐个导出。每个选段生成{{ versionDescription }}，总时长约 {{ format(exportDuration) }}。整场录制与原始素材继续保留。</p><label class="field-label">本次导出根目录<div class="path-picker"><input v-model="exportDirectory" aria-label="本次导出文件夹" placeholder="填写完整的文件夹路径"/><button v-if="isDesktop" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>选择</button></div></label><div class="export-destinations"><span>本次保存到「{{ exportCategory }}」</span><code>{{ categoryPath(exportDirectory,exportCategory) }}</code></div><p v-if="exportScope==='full'" class="muted">按素材开始日期建立文件夹，视频直接保存在日期目录中，例如 20260928 / 202609282130-2140.mp4。完成后无需再下载。</p><p v-else class="muted">按素材日期和起止时间建立文件夹，例如 20260928 / 202609282130-2140 / 202609282130-2140.mp4。完成后无需再下载。</p><fieldset class="export-versions"><legend>导出版本</legend>

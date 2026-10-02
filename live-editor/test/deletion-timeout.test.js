@@ -12,7 +12,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 async function until(check){for(let n=0;n<200;n++){if(check())return;await delay(10);}assert.fail('deletion did not settle');}
 async function application(t){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-delete-timeout-'));
-  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,deletionIdleMs:150,ffmpeg:'not-launched',ffprobe:'not-launched'});
+  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,deletionIdleMs:150,deletionRetryMs:20,ffmpeg:'not-launched',ffprobe:'not-launched'});
   app.ingestor.stop();
   t.after(async()=>{await app.close();assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('caibo-delete-timeout-'));await fs.rm(root,{recursive:true,force:true});});
   return app;
@@ -49,42 +49,68 @@ test('取消后不再安排下一批，已开始的操作结束前不释放删�
   }finally{hold.resolve();await task.catch(()=>{});control.close();}
 });
 
-test('等待资源卡住返回删除失败，释放操作锁后能重试且原片未提前删除',async t=>{
-  const app=await application(t),f=await material(app),hold=deferred(),previous=app.waveform.cancelSession.bind(app.waveform);
-  app.waveform.cancelSession=()=>hold.promise;
+test('确认后立即受理并阻止新读取，资源卡住时界面可继续操作，释放后自动恢复',async t=>{
+  const app=await application(t),f=await material(app),other=await material(app),hold=deferred();
+  const previous=app.waveform.cancelSession.bind(app.waveform);
+  const seen=[];
+  app.waveform.cancelSession=id=>{seen.push('waveform');return id===f.session.id?hold.promise:previous(id);};
+  const cancel=app.media.cancelPreviews.bind(app.media);
+  app.media.cancelPreviews=id=>{seen.push('preview');return cancel(id);};
   try{
-    const response=await remove(app,f.session.id);assert.equal(response.status,408);assert.equal((await response.json()).error,DELETION_FAILED);
-    await until(()=>app.snapshot().deletions.length===0);assert.ok(app.store.session(f.session.id));assert.equal(app.store.deletions?.size||0,0);
-    assert.equal((await fs.stat(f.original)).size,8);assert.equal(app.activity().busy,false);
-    app.waveform.cancelSession=previous;assert.equal((await remove(app,f.session.id)).status,200);
-  }finally{app.waveform.cancelSession=previous;hold.resolve();}
+    const response=await fetch(app.runtime.origin+`/api/sessions/${f.session.id}/delete`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmed:true,background:true})});
+    assert.equal(response.status,202);assert.equal((await response.json()).accepted,true);
+    assert.deepEqual(seen.slice(0,2),['waveform','preview']);
+    assert.equal(app.store.session(f.session.id),undefined);
+    assert.ok(app.store.pendingCleanup().find(row=>row.id===f.session.id));
+    await assert.rejects(app.media.probeSource(f.source),/删除/);
+    await assert.rejects(app.media.enqueue(f.session.id,{}),/删除/);
+    await delay(180);assert.equal(app.snapshot().deletions.find(row=>row.id===f.session.id).phase,'waiting');
+    assert.ok(await fs.stat(f.original));
+    assert.equal((await remove(app,other.session.id)).status,200);
+    hold.resolve();await until(()=>!app.store.get('SELECT id FROM sessions WHERE id=?',f.session.id));
+    await assert.rejects(fs.stat(f.original),{code:'ENOENT'});
+  }finally{hold.resolve();app.waveform.cancelSession=previous;}
 });
 
-test('客户端断开也停止等待，旧请求恢复后不会继续删除原片',async t=>{
-  const app=await application(t),f=await material(app),hold=deferred(),entered=deferred(),previous=app.waveform.cancelSession.bind(app.waveform);
-  app.waveform.cancelSession=()=>{entered.resolve();return hold.promise;};
-  const controller=new AbortController();
+test('断开或重复提交不取消已确认任务，不启动重叠删除',async t=>{
+  const app=await application(t),f=await material(app),hold=deferred();
+  const previous=app.waveform.cancelSession.bind(app.waveform);let calls=0;
+  app.waveform.cancelSession=()=>{calls++;return hold.promise;};
   try{
-    const request=remove(app,f.session.id,{signal:controller.signal});const observed=request.catch(error=>error);await entered.promise;controller.abort();assert.equal((await observed).name,'AbortError');
-    await until(()=>app.snapshot().deletions.length===0);hold.resolve();await delay(20);assert.ok(await fs.stat(f.original));
-    app.waveform.cancelSession=previous;assert.equal((await remove(app,f.session.id)).status,200);
-  }finally{controller.abort();hold.resolve();app.waveform.cancelSession=previous;}
+    const task=app.deletingSessions.start(f.session.id);
+    assert.equal(app.deletingSessions.start(f.session.id),task);
+    assert.equal(calls,1);
+    await delay(180);assert.equal(app.deletingSessions.has(f.session.id),true);
+    assert.ok(await fs.stat(f.original));hold.resolve();
+    await until(()=>!app.store.get('SELECT id FROM sessions WHERE id=?',f.session.id));
+    assert.equal(app.store.pendingCleanup().length,0);
+  }finally{hold.resolve();app.waveform.cancelSession=previous;}
 });
 
-test('文件操作卡住停止后续批次，保留清单和成片，结束后手动重试清理剩余文件',async t=>{
+test('文件操作超时仍持锁，旧 unlink 结束后自动重试，成片及其他素材不受影响',async t=>{
   const app=await application(t),f=await material(app,{chunks:20}),other=await material(app),hold=deferred(),unlink=fs.unlink;
-  let started=0;
+  let started=0,active=0,peak=0;
   const exported=path.join(app.root,'exports','clean.mp4');await fs.mkdir(path.dirname(exported),{recursive:true});await fs.writeFile(exported,'completed export');
   app.store.run('INSERT INTO jobs(id,session,status,mode,file,data) VALUES(?,?,?,?,?,?)','saved',f.session.id,'done','clean',exported,'{}');
-  fs.unlink=async file=>{if(path.dirname(String(file))===f.folder){started++;await hold.promise;}return unlink(file);};
+  fs.unlink=async file=>{if(path.dirname(String(file))===f.folder){started++;active++;peak=Math.max(peak,active);await hold.promise;try{return await unlink(file);}finally{active--;}}return unlink(file);};
   try{
-    const response=await remove(app,f.session.id);assert.equal(response.status,408);assert.equal((await response.json()).error,DELETION_FAILED);
-    assert.equal(started,8);assert.equal(app.store.deletions.has(f.session.id),true);assert.ok(app.store.pendingCleanup().find(row=>row.id===f.session.id));
-    assert.equal((await remove(app,f.session.id)).status,400);assert.equal((await remove(app,other.session.id)).status,200);
-    assert.ok(await fs.stat(exported));hold.resolve();await until(()=>!app.store.deletions.has(f.session.id));
-    assert.equal(started,8);assert.equal(app.store.pendingCleanup().find(row=>row.id===f.session.id).purge_error,DELETION_FAILED);
-    app.deletionMaintenance.next=0;await app.deletionMaintenance.tick();assert.ok(app.store.pendingCleanup().find(row=>row.id===f.session.id));
-    fs.unlink=unlink;assert.equal((await remove(app,f.session.id)).status,200);assert.equal(app.store.get('SELECT id FROM sessions WHERE id=?',f.session.id),undefined);
-    await assert.rejects(fs.stat(f.folder),{code:'ENOENT'});assert.ok(await fs.stat(exported));assert.equal(app.store.get('SELECT session FROM jobs WHERE id=?','saved').session,null);
+    const response=await remove(app,f.session.id);assert.equal(response.status,408);
+    assert.equal(started,8);assert.equal(app.store.deletions.has(f.session.id),true);
+    assert.equal((await remove(app,f.session.id)).status,400);
+    assert.equal((await remove(app,other.session.id)).status,200);
+    assert.ok(await fs.stat(exported));hold.resolve();
+    await until(()=>!app.store.get('SELECT id FROM sessions WHERE id=?',f.session.id));
+    assert.equal(started,20);assert.equal(peak,8);assert.equal(active,0);
+    await assert.rejects(fs.stat(f.folder),{code:'ENOENT'});assert.ok(await fs.stat(exported));
+    assert.equal(app.store.get('SELECT session FROM jobs WHERE id=?','saved').session,null);
   }finally{hold.resolve();fs.unlink=unlink;await until(()=>app.snapshot().deletions.length===0);}
+});
+
+test('历史超时失败记录在同一进程自动维护重试，无需退出重开',async t=>{
+  const app=await application(t),f=await material(app);
+  app.store.confirmDeletion(f.session.id);
+  app.store.run('UPDATE sessions SET purge_error=? WHERE id=?',DELETION_FAILED,f.session.id);
+  app.deletionMaintenance.next=0;await app.deletionMaintenance.tick();
+  assert.equal(app.store.get('SELECT id FROM sessions WHERE id=?',f.session.id),undefined);
+  await assert.rejects(fs.stat(f.original),{code:'ENOENT'});
 });

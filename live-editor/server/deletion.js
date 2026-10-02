@@ -97,18 +97,20 @@ export async function prepareDeletion(store, id, { control }={}) {
   const session = assertDeletable(store, id), sources = store.sources(id);
   const chunks = store.all('SELECT chunks.* FROM chunks JOIN sources ON sources.id=chunks.source WHERE sources.session=? ORDER BY chunks.source,chunks.seq', id);
   const roots = { originals: path.join(store.root, 'originals'), chunks: path.join(store.root, 'chunks'), archives: path.join(store.root, 'archives') };
-  const files = new Map(), directories = new Map(), preserved = new Map(), external = new Set();
+  const seen = new Set(), files = new Map(), directories = new Map(), preserved = new Map(), external = new Set();
   const preserve = (file, reason) => preserved.set(key(file), { path: file, reason });
   async function add(file, root) {
     control?.check();
     file = absolute(file);
-    if (files.has(key(file))) return;
+    if (seen.has(key(file))) return;
+    seen.add(key(file));
     const stat = await checked(root, file);
     control?.progress();
     // Missing files are already gone. Never delete replacements created after
     // this preflight; retries build a fresh, independently checked manifest.
     if (stat) files.set(key(file), { file, root, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeNs: stat.mtimeNs });
   }
+  let checkedSources=0; control?.count(0,sources.length);
   for (const source of sources) {
     control?.check();
     const original = absolute(source.path);
@@ -126,12 +128,26 @@ export async function prepareDeletion(store, id, { control }={}) {
     if (!source.id || /[\\/\x00-\x1f]/.test(source.id) || ['.','..'].includes(source.id)) throw new Error('内部素材编号无效，未执行删除。');
     const folder = path.join(roots.chunks, source.id);
     const folderStat = await checked(roots.chunks, folder, true);
+    let existingNames = new Set();
     if (folderStat) {
       directories.set(key(folder), { file: folder, root: roots.chunks, dev: folderStat.dev, ino: folderStat.ino });
-      const names=(await fs.readdir(folder)).filter(name=>/^\d{8,}\.flvpart(?:\.tmp)?$/.test(name));
+      existingNames = new Set(await fs.readdir(folder));
+      const names=[...existingNames].filter(name=>/^\d{8,}\.flvpart(?:\.tmp)?$/.test(name));
       await deletionWork(names,name=>add(path.join(folder,name),folder),8,{control});
     }
-    for (const chunk of chunks.filter(chunk => chunk.source === source.id)) await add(chunk.path, folder);
+    // Validate every indexed path even when its folder is gone. An absent
+    // directory needs one check, not a complete ancestor walk per old chunk.
+    const indexed = chunks.filter(chunk => chunk.source === source.id);
+    const names = existingNames;
+    const remaining = [];
+    for (const chunk of indexed) {
+      const file = absolute(chunk.path);
+      if (!inside(folder, file)) throw new Error('素材路径超出本项目允许清理的目录，未执行删除。');
+      if (!folderStat || (key(path.dirname(file)) === key(folder) && !names.has(path.basename(file)))) continue;
+      remaining.push(file);
+    }
+    await deletionWork(remaining, file => add(file, folder), 8, {control});
+    control?.count(++checkedSources,sources.length);
   }
   if (session.archive) {
     const archive = absolute(session.archive);
@@ -161,12 +177,14 @@ export async function removeDeletionFiles(store, id, plan, { control }={}) {
   // parallel, after these critical files have succeeded.
   const chunkRoot=path.join(store.root,'chunks');
   const groups=new Map();
+  let completed=0; control?.count(0,plan.files.length);
   for(const entry of plan.files){
     if(!inside(chunkRoot,entry.file)){await remove(entry);continue;}
     const inode=String(entry.dev)+':'+String(entry.ino);if(!groups.has(inode))groups.set(inode,[]);groups.get(inode).push(entry);
   }
   await deletionWork([...groups.values()],async entries=>{for(const entry of entries)await remove(entry);},8,{control});
   async function remove(entry){
+    try {
     control?.check();
     // Recheck sharing after async preflight and whenever this connection has
     // changed. A new import/export reference must never be silently deleted.
@@ -182,6 +200,7 @@ export async function removeDeletionFiles(store, id, plan, { control }={}) {
     control?.progress();
     // Count the last hard link only; old archives can share original FLV data.
     if (stat.nlink <= 1n) freedBytes += Number(stat.size);
+    } finally { if (!control?.signal.aborted) control?.count(++completed,plan.files.length); }
   }
   for (const entry of plan.directories) {
     control?.check();

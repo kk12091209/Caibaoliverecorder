@@ -1,3 +1,4 @@
+import { stopChild } from './child-stop.js';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import os from 'node:os';
@@ -165,14 +166,14 @@ export class WaveformService {
     const done = new Promise(resolve => child.once('close', code => { this.media.children.delete(child); this.media.interactiveChildren.delete(child); resolve(code); }));
     const input = Readable.from(sourceStream(this.store, source.id, from, to, { signal }));
     const output = new WaveformMetadata(frame => onFrame({ ...frame, time: base + frame.time }));
-    const abort = () => { input.destroy(); child.kill(); };
+    const abort = () => { input.destroy(); stopChild(child); };
     signal.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => { timedOut = true; abort(); }, 30000); timeout.unref?.();
     if (signal.aborted) abort();
     try {
       // Unlike Promise.all, settling every pipe waits for sourceStream.finally
       // and its reader lease even when FFmpeg exits or an input read fails early.
-      const results = await Promise.allSettled([done, pipeline(input, child.stdin).catch(e => { child.kill(); throw e; }), pipeline(child.stdout, output).catch(e => { child.kill(); throw e; })]);
+      const results = await Promise.allSettled([done, pipeline(input, child.stdin).catch(e => { stopChild(child); throw e; }), pipeline(child.stdout, output).catch(e => { stopChild(child); throw e; })]);
       if (signal.aborted) return;
       if (timedOut) throw new Error('音频波形分析超时，稍后重试。');
       if (spawnError) throw spawnError;
