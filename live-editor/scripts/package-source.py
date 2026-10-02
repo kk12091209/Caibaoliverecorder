@@ -25,10 +25,15 @@ with zipfile.ZipFile(out, 'x', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
         data = git(repo, 'archive', '--format=tar', rev)
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for member in tar:
+                # A previous source ZIP was imported into the repository. Keep
+                # its old metadata under an explicit historical name.
+                name = member.name
+                if not prefix and name in ('SOURCE-MANIFEST.json', 'SOURCE-README.md'):
+                    name = 'upstream-source-metadata/' + name
                 if member.isfile():
-                    add(prefix + member.name, tar.extractfile(member).read(), 0o100000 | member.mode)
+                    add(prefix + name, tar.extractfile(member).read(), 0o100000 | member.mode)
                 elif member.issym():
-                    add(prefix + member.name, member.linkname.encode(), 0o120777)
+                    add(prefix + name, member.linkname.encode(), 0o120777)
         for item in git(repo, 'ls-tree', '-r', '-z', rev).split(b'\0'):
             if not item: continue
             metadata, path = item.split(b'\t', 1)
