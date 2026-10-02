@@ -85,7 +85,8 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         while Date() < deadline {
             if Darwin.kill(expected.pid, 0) != 0 && errno == ESRCH { return }
             if let status = await call(), let error = status["quitError"] as? String, !error.isEmpty {
-                throw problem("退出未完成：\(error)。请再次选择退出重试。")
+                let detail = error.trimmingCharacters(in: CharacterSet(charactersIn: "。.!！ "))
+                throw problem("退出未完成：\(detail)。请再次选择退出重试。")
             }
             try await Task.sleep(nanoseconds: 250_000_000)
         }

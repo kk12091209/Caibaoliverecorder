@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {promisify} from 'node:util';
-import {setTimeout as delay} from 'node:timers/promises';
+import {stopMacCore} from './mac-core-stop.js';
 const execFileAsync=promisify(execFile);
 
 // Darwin ps prints argv separated by spaces. Match the complete launch shape,
@@ -78,14 +78,19 @@ export async function findOwnedCore({executable,directory}){
 export async function stopOwnedCore({pid,executable,directory}){
   if(!Number.isInteger(pid)||pid<=0)return false;
   if(process.platform==='darwin'){
-    try{process.kill(pid,0);}catch(error){return error.code==='ESRCH';}
-    if(!await macOwnedCore(pid,{executable,directory}))return false;
-    try{process.kill(pid,'SIGTERM');}catch(error){return error.code==='ESRCH';}
-    for(let attempt=0;attempt<100;attempt++){
-      try{process.kill(pid,0);}catch(error){return error.code==='ESRCH';}
-      await delay(50);
-    }
-    return false;
+    return stopMacCore(pid,{
+      isAlive:target=>{try{process.kill(target,0);return true;}catch(error){return error.code!=='ESRCH';}},
+      signal:(target,name)=>process.kill(target,name),
+      inspect:async target=>{
+        if(!await macOwnedCore(target,{executable,directory}))return null;
+        try{
+          // Include launch time and the full original command (including the
+          // private credential) in the in-memory comparison, never in logs.
+          const {stdout}=await execFileAsync('/bin/ps',['-ww','-p',String(target),'-o','lstart=,command='],{timeout:5000});
+          return stdout.trim()||null;
+        }catch{return null;}
+      }
+    });
   }
   if(process.platform==='win32'){
     const script=`$ErrorActionPreference='Stop'; $core=Get-CimInstance Win32_Process -Filter ('ProcessId = '+$env:CAIBO_STOP_PID); if(!$core){exit 0}; if($core.ExecutablePath -ne $env:CAIBO_STOP_EXE -or !$core.CommandLine.Trim().TrimEnd([char]34).EndsWith($env:CAIBO_STOP_DIRECTORY,[StringComparison]::OrdinalIgnoreCase)){exit 2}; $process=[Diagnostics.Process]::GetProcessById([int]$env:CAIBO_STOP_PID); $process.Kill(); if(!$process.WaitForExit(5000)){exit 3}`;

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { Store } from '../server/store.js';
 import { Updates, newerRelease, validateUpdate, githubFetch, UPDATE_REPOSITORY, packageName } from '../server/updates.js';
 import { createApp } from '../server/index.js';
+import packageInfo from '../package.json' with {type:'json'};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const current={version:'0.1.6',revision:2};
 function publication(platform='win32-x64',revision=3){
@@ -122,13 +123,13 @@ test('已安装相同修订不提醒，历史下载缓存仍可手动清理',asy
   const f=await fixture(t,{current:{...current,revision:3}});await f.updates.check();assert.equal(f.updates.status,'current');assert.equal(f.updates.candidate,null);
 });
 test('安装路径仅通过授权桌面通道提供；Web 更新接口不接受路径或任意 URL',async t=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication();
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',packageInfo.buildRevision+1);
   const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('update-manifest.json')?p.manifestBytes:p.bytes)}});
   app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
   const post=(route,body={},headers={})=>fetch(app.runtime.origin+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   assert.equal((await post('/internal/desktop',{action:'prepareUpdate'})).status,403);
   await post('/api/updates/check');const state=await(await fetch(app.runtime.origin+'/api/state')).json();
-  assert.equal(state.updates.current.version,'0.1.6');assert.equal(state.updates.current.revision,2);
+  assert.equal(state.updates.current.version,packageInfo.version);assert.equal(state.updates.current.revision,packageInfo.buildRevision);
   assert.equal((await post('/api/updates/download',{key:'wrong',url:'http://localhost/test'})).status,400);
   assert.equal((await post('/api/updates/download',{key:state.updates.candidate.key})).status,202);await app.updates.downloadTask;
   const response=await post('/internal/desktop',{action:'prepareUpdate'},{'X-Caibo-Instance':app.runtime.token});assert.equal(response.status,200);
