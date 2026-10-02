@@ -23,8 +23,12 @@ cp -R live-editor/server live-editor/dist "$RESOURCES/live-editor/"
 cp live-editor/package.json "$RESOURCES/live-editor/"
 cp .tools/runtime/node-v24.12.0-darwin-arm64/bin/node "$RESOURCES/runtime/node/"
 cp .tools/runtime/ffmpeg/ffmpeg .tools/runtime/ffmpeg/ffprobe "$RESOURCES/runtime/ffmpeg/"
-cp -R .tools/runtime/recorder "$RESOURCES/runtime/"
-find "$RESOURCES/runtime/recorder" -name '*.pdb' -type f -delete
+python3 - "$ROOT/.tools/runtime/recorder" "$RESOURCES/runtime/recorder" <<'PY'
+import shutil,sys
+# Local CLI runs can create logs beside cached binaries. Never publish those
+# files or debug symbols; the installed Mac app writes logs under user data.
+shutil.copytree(sys.argv[1],sys.argv[2],ignore=shutil.ignore_patterns('logs','*.pdb'))
+PY
 cp LICENSE THIRD_PARTY_NOTICES.md "$RESOURCES/licenses/"
 cp .tools/runtime/node-v24.12.0-darwin-arm64/LICENSE "$RESOURCES/licenses/Node-LICENSE.txt"
 cp live-editor/package-lock.json "$RESOURCES/licenses/editor-dependencies.json"

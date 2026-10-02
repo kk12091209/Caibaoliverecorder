@@ -56,6 +56,18 @@ test('预处理单独运行不弹任务确认；受理后立刻返回，后台�
   assert.equal(closed,1);
 });
 
+test('录制核心退出失败时保留服务并报告错误，重试成功才关闭后台',async t=>{
+  const f=await fixture(t),app=await f.open();let attempts=0;
+  app.recorder.stopForExit=async()=>{if(++attempts===1)throw new Error('录制核心未能退出。');};
+  assert.equal((await quit(app,true)).body.quitAccepted,true);
+  await assert.rejects(app.desktopExit.completion,/录制核心未能退出/);
+  assert.equal(app.runtime.closed,false);
+  const status=await (await fetch(app.runtime.origin+'/internal/desktop',{headers:{'X-Caibo-Instance':app.runtime.token}})).json();
+  assert.equal(status.quitError,'录制核心未能退出。');assert.equal(status.stopping,true);
+  assert.equal((await quit(app,true)).body.quitAccepted,true);
+  await app.desktopExit.completion;assert.equal(app.runtime.closed,true);assert.equal(app.runtime.quitError,'');assert.equal(attempts,2);
+});
+
 for(const [mode,scope] of [['clean','full'],['danmaku','clips'],['dual','full']])test(`确认退出暂停 ${scope}/${mode} 及排队任务，启动自动恢复且成片不重复`,async t=>{
   const f=await fixture(t);let app=await f.open();
   const fixtureData=await saveRetryFixture(app.store,app.media,{mode,scope});

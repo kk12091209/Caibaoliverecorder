@@ -60,6 +60,12 @@ Mac 默认内部数据：`~/Library/Application Support/Caibo/data`；
 Mac 核心识别需核对真实进程路径与完整启动参数；停止只给验证过的进程发
 SIGTERM，并等待退出。硬件导出实测 VideoToolbox 双输出，失败回退 libx264。
 关闭窗口可后台运行，菜单栏/Dock 可恢复；Cmd+Q 走任务确认和恢复流程。
+确认退出后，窗口等待后台进程结束才终止。录制核心停止失败时保留管理端点，
+显示错误并允许再次退出，不再把“已受理”当作“已退出”。
+WebKit 通过 MediaSource 加载实时 fragmented MP4，避免原生播放器的字节范围
+探测被无限长度流拒绝；Windows WebView2 保留原来的直接流播放。
+CLI 日志通过 BILILIVERECORDER_LOG_FILE_PATH 写入内部数据的 logs 目录，
+应用包保持只读；打包排除本地运行生成的 logs，启动退出后应再次校验签名。
 录制或视频处理时阻止空闲系统休眠，不能保证合盖、手动休眠后的直播连续性。
 
 ## 发布前检查

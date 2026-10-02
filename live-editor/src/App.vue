@@ -12,6 +12,7 @@ import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecord
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
 import { isDesktop, openAuthorPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
+import { previewStream } from './preview-stream.js';
 import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
 
 const state=ref({sessions:[],rooms:[],jobs:[],recorder:{online:false,error:''},dataPath:'',paths:{},preparation:{enabled:true,items:[]}} );
@@ -19,6 +20,7 @@ const selected=ref(null),detail=ref(null),edit=ref({revision:0,ranges:[],exclude
 const roomUrl=ref(''),addingRoom=ref(false),notice=ref(''),noticeKind=ref('error'),saving=ref(false),connected=ref(false);
 const roomChoice=shallowRef(null),roomChoicePlatform=ref(''),roomChoiceError=ref('');
 const video=ref(null),previewUrl=ref(''),position=ref(0),previewBase=ref(0),isPlaying=ref(false),loading=ref(false),previewEnded=ref(false),scrubbing=ref(false);
+let previewTransport;
 const previewVolume=ref(1),previewMuted=ref(false);
 try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
 let previewVolumeHold=previewVolume.value>0?previewVolume.value:1;
@@ -225,7 +227,7 @@ function dragMark(which,time){
 }
 function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
 function clearDraftMarks(){startMarked.value=false;endMarked.value=false;}
-function resetSelection(){selectionGeneration++;generation++;selected.value=null;detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();previewUrl.value='';loading.value=false;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];overlayFeed.value=[];position.value=0;startMarked.value=false;endMarked.value=false;}
+function resetSelection(){previewTransport?.dispose();selectionGeneration++;generation++;selected.value=null;detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();previewUrl.value='';loading.value=false;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];overlayFeed.value=[];position.value=0;startMarked.value=false;endMarked.value=false;}
 function applyState(value){state.value=value;if(selected.value&&!value.sessions.some(s=>s.id===selected.value))resetSelection();}
 function closeContext(){sessionMenu.value=null;jobMenu.value=null;}
 async function showContext(event,session){closeContext();const rect=event.currentTarget.getBoundingClientRect();sessionMenu.value={session,x:Math.max(8,Math.min(event.clientX||rect.left+30,window.innerWidth-248)),y:Math.max(8,event.clientY||rect.bottom)};await nextTick();const menu=document.querySelector('.session-context');if(menu&&sessionMenu.value)sessionMenu.value.y=Math.max(8,Math.min(sessionMenu.value.y,window.innerHeight-menu.offsetHeight-8));menu?.querySelector('button:not(:disabled)')?.focus();}
@@ -315,7 +317,7 @@ async function refresh(){if(refreshBusy)return;refreshBusy=true;try{
 async function choose(id){
   const version=++selectionGeneration;
   detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();
-  overlayWindow=null;closeContext();startMarked.value=false;endMarked.value=false;generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};startExact.value=0;endExact.value=0;startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';messages.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
+  previewTransport?.dispose();overlayWindow=null;closeContext();startMarked.value=false;endMarked.value=false;generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};startExact.value=0;endExact.value=0;startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';messages.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
   try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;startExact.value=0;endExact.value=Math.min(10,result.duration);startText.value=format(0);endText.value=format(endExact.value);if(!canUseRecordingTime.value)positionMode.value='video';syncRecordingTexts();query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
@@ -354,9 +356,11 @@ async function playFrom(time,play=true){
     return;
   }
   previewBase.value=target;position.value=target;loading.value=true;previewEnded.value=false;isPlaying.value=play;void loadOverlay();
-  previewUrl.value=`/api/sessions/${selected.value}/preview?start=${target.toFixed(4)}&v=${version}`;
+  previewTransport?.dispose();
+  previewTransport=previewStream(`/api/sessions/${selected.value}/preview?start=${target.toFixed(4)}&v=${version}`,{onError(error){if(version===generation){loading.value=false;isPlaying.value=false;previewEnded.value=true;tell(error.message);}}});
+  previewUrl.value=previewTransport.url;
   await nextTick();if(version!==generation)return;
-  video.value.load();applyPreviewAudio();
+  video.value.load();applyPreviewAudio();previewTransport.start();
   if(play)await video.value.play().catch(e=>{if(version===generation&&e.name!=='AbortError'){isPlaying.value=false;loading.value=false;tell('预览尚未就绪，请稍后重试。');}});
 }
 function applyPreviewAudio(){const player=video.value;if(!player)return;player.volume=previewVolume.value;player.muted=previewMuted.value||previewVolume.value===0;}
@@ -414,7 +418,7 @@ function onKey(e){if(e.key==='Escape'){const jobId=jobMenu.value?.id;closeContex
 watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(true);});
 watch(timelineWindow,()=>{invalidateSignals();signalsError.value='';queueWindowSignals(!timelineDragging.value);},{flush:'sync'});
 onMounted(async()=>{await refresh();if(disposing)return;eventSource=new EventSource('/api/events');eventSource.onmessage=e=>{applyState(JSON.parse(e.data));connected.value=true;};eventSource.onerror=()=>connected.value=false;timer=setInterval(refresh,2500);messageTimer=setInterval(()=>{void loadMessages(true);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);});
-onBeforeUnmount(()=>{disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();eventSource?.close();clearInterval(timer);clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);});
+onBeforeUnmount(()=>{previewTransport?.dispose();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();eventSource?.close();clearInterval(timer);clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);});
 onMounted(()=>{panelBreakpoint.addEventListener('change',updatePanelBreakpoint);compactBreakpoint.addEventListener('change',updatePanelBreakpoint);});
 onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBreakpoint);compactBreakpoint.removeEventListener('change',updatePanelBreakpoint);});
 </script>

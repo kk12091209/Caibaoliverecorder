@@ -15,16 +15,18 @@ export class DesktopExit {
     if(!confirmed&&(this.activity().requiresExitConfirmation||rooms.some(room=>room.recording)))return {quitAccepted:false,requiresExitConfirmation:true};
     this.recorder.rememberExitRooms(rooms);
     this.media.suspendForExit();
+    this.runtime.quitError='';
     this.runtime.stopping=true;this.runtime.request('quit');this.accepted=true;
     const prepared=this.preparation.close();
     this.completion=new Promise(resolve=>setImmediate(resolve)).then(async()=>{
-      try{await this.recorder.stopForExit(rooms);}
-      catch(error){this.runtime.lastError=error.message;}
-      await prepared;
+      await Promise.all([this.recorder.stopForExit(rooms),prepared]);
       await this.close();
     });
     // Keep errors observable for tests/maintenance without an unhandled rejection.
-    this.completion.catch(error=>{this.runtime.lastError=error.message;});
+    // Keep the authenticated endpoint alive if stopping the core fails. The
+    // desktop must report the failure and allow another quit attempt rather
+    // than disappearing while a recorder keeps running.
+    this.completion.catch(error=>{this.runtime.lastError=error.message;this.runtime.quitError=error.message;this.accepted=false;});
     return {quitAccepted:true,requiresExitConfirmation:false};
   }
 }

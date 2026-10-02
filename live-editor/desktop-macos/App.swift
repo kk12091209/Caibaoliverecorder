@@ -88,7 +88,7 @@ import IOKit.pwr_mgt
         }
     }
     func connect() async {
-        guard !backend.connecting, !terminating else { return }
+        guard !backend.connecting, !backend.exitRequested, !terminating else { return }
         do {
             lastStatus = try await backend.ensure(); ready = true; connectionErrorShown = false
             if let origin = backend.origin, web.url?.host != origin.host || web.url?.port != origin.port { web.load(URLRequest(url: origin)) }
@@ -96,7 +96,7 @@ import IOKit.pwr_mgt
         } catch { window.title = "菜播·录包机 · 后台连接失败"; if window.isVisible && !connectionErrorShown { connectionErrorShown = true; showError(error) } }
     }
     func poll() async {
-        guard !polling, !choosing, !backend.connecting, !terminating else { return }
+        guard !polling, !choosing, !backend.connecting, !backend.exitRequested, !terminating else { return }
         polling = true; defer { polling = false }
         backend.readEndpoint()
         if let status = await backend.heartbeat(), status["stopping"] as? Bool != true {
@@ -155,7 +155,18 @@ import IOKit.pwr_mgt
         guard let result = await backend.call(["action": "quit", "confirmed": confirmed]), result["quitAccepted"] as? Bool == true else {
             showError(problem("任务状态已变化或退出尚未受理，请重试。")); return
         }
-        backend.exitRequested = true; terminating = true; NSApp.terminate(nil)
+        backend.exitRequested = true
+        window.title = "菜播·录包机 · 正在停止任务并退出…"
+        statusItem.button?.toolTip = "正在停止任务并退出…"
+        do {
+            try await backend.waitForExit()
+            terminating = true; NSApp.terminate(nil)
+        } catch {
+            backend.exitRequested = false
+            window.title = "菜播·录包机 · 退出未完成"
+            statusItem.button?.toolTip = "退出未完成，请重试"
+            showWindow(); showError(error)
+        }
     }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()

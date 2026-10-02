@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 struct Endpoint: Decodable {
     let `protocol`: Int
@@ -77,6 +78,18 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
     func heartbeat() async -> [String: Any]? {
         await call(["action": "heartbeat", "client": client, "pid": ProcessInfo.processInfo.processIdentifier])
     }
+    func waitForExit(timeout: TimeInterval = 60) async throws {
+        guard let expected = endpoint else { throw problem("无法确认正在退出的后台，请重试。") }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Darwin.kill(expected.pid, 0) != 0 && errno == ESRCH { return }
+            if let status = await call(), let error = status["quitError"] as? String, !error.isEmpty {
+                throw problem("退出未完成：\(error)。请再次选择退出重试。")
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw problem("后台仍在收尾，暂未完全退出。请稍后再次选择退出；录像文件会保留。")
+    }
     func start() throws {
         let runtime = resources.appendingPathComponent("runtime")
         let node = runtime.appendingPathComponent("node/node")
@@ -88,6 +101,9 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         // The bundled backend always uses bundled tools, never a user's PATH.
         env["EDITOR_DATA"] = data.path; env["EDITOR_PROJECT_ROOT"] = resources.path
         env["EDITOR_EXPORT_ROOT"] = exports.path
+        let logs = data.appendingPathComponent("logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        env["BILILIVERECORDER_LOG_FILE_PATH"] = logs.appendingPathComponent("bilirec.txt").path
         env["EDITOR_PORT"] = "0"; env["RECORDER_PORT"] = "0"; env["EDITOR_DESKTOP_MANAGED"] = "1"
         for (key, file) in tools { env[key] = runtime.appendingPathComponent(file).path }
         for key in ["TMPDIR", "TMP", "TEMP"] { env[key] = data.appendingPathComponent("temp").path }

@@ -64,7 +64,7 @@ export class ServiceRuntime {
     if(this.pending)return true;
     return this.managed&&this.now()-this.started>=this.startupGraceMs&&this.liveClients()===0;
   }
-  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,...activity};}
+  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,quitError:this.quitError||'',...activity};}
   async release(){
     if(this.closed)return;this.closed=true;
     try{
