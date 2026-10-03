@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
 import Darwin
 import IOKit.pwr_mgt
 
@@ -10,6 +11,7 @@ import IOKit.pwr_mgt
     var statusItem: NSStatusItem!
     var timer: Timer?
     var polling = false, choosing = false, terminating = false, ready = false
+    var fontPanelOpen = false
     var lockFD: Int32 = -1
     var sleepAssertion: IOPMAssertionID = 0
     var hasSleepAssertion = false
@@ -96,7 +98,8 @@ import IOKit.pwr_mgt
         } catch { window.title = "菜播·录包机 · 后台连接失败"; if window.isVisible && !connectionErrorShown { connectionErrorShown = true; showError(error) } }
     }
     func poll() async {
-        guard !polling, !choosing, !backend.connecting, !backend.exitRequested, !terminating else { return }
+        // Browsing fonts can take longer than the backend client timeout.
+        guard !polling, (!choosing || fontPanelOpen), !backend.connecting, !backend.exitRequested, !terminating else { return }
         polling = true; defer { polling = false }
         backend.readEndpoint()
         if let status = await backend.heartbeat(), status["stopping"] as? Bool != true {
@@ -180,6 +183,21 @@ import IOKit.pwr_mgt
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if navigationAction.request.url?.absoluteString == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!) }; return nil
+    }
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        guard webView === web, frame.isMainFrame, trusted(frame.request.url), trusted(webView.url), !choosing, !terminating else { completionHandler(nil); return }
+        choosing = true; fontPanelOpen = true
+        let origin = backend.endpoint?.origin
+        let panel = NSOpenPanel()
+        panel.title = "选择弹幕字体文件"; panel.prompt = "导入字体"
+        panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = ["ttf", "otf"].compactMap { UTType(filenameExtension: $0) }
+        panel.beginSheetModal(for: window) { [weak self] result in
+            guard let self else { completionHandler(nil); return }
+            self.fontPanelOpen = false; self.choosing = false
+            guard !self.terminating, self.backend.endpoint?.origin == origin, self.trusted(self.web.url) else { completionHandler(nil); return }
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if (error as NSError).code != NSURLErrorCancelled { window.title = "菜播·录包机 · 正在重连" } }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
