@@ -3,11 +3,38 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn,execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {constants} from 'node:fs';
 import {once} from 'node:events';
 import {setTimeout as delay} from 'node:timers/promises';
 import {stopMacCore} from '../server/mac-core-stop.js';
 import {availableLocalPort,stopOwnedCore} from '../server/local-endpoint.js';
+const execFileAsync=promisify(execFile);
+
+for(const locale of ['unset','C'])test(`Finder 环境识别并退出中文路径核心：${locale}`,{skip:process.platform!=='darwin',timeout:15000},async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-locale-'));
+  const directory=path.join(root,'录像 原件'),executable=path.join(root,'菜播·录包机.app','Contents','录制核心');
+  await fs.mkdir(path.dirname(executable),{recursive:true});await fs.mkdir(directory);
+  await fs.copyFile(await fs.realpath(process.execPath),executable,constants.COPYFILE_FICLONE);
+  await fs.writeFile(path.join(root,'run'),`process.on('SIGINT',()=>process.exit(0));setInterval(()=>{},1000);process.stdout.write('ready');`);
+  const child=spawn(executable,['run','--http-bind',`http://127.0.0.1:${await availableLocalPort()}`,'--http-basic-user','editor','--http-basic-pass','a'.repeat(48),'--enable-file-browser','false',directory],{cwd:root,detached:true,stdio:['ignore','pipe','pipe']});
+  const ended=once(child,'exit');
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await ended;}await fs.rm(root,{recursive:true,force:true});});
+  await once(child.stdout,'data');
+  const env={...process.env};for(const key of Object.keys(env))if(key==='LANG'||key.startsWith('LC_'))delete env[key];
+  if(locale==='C'){env.LANG='C';env.LC_ALL='C';env.LC_CTYPE='C';}
+  const script=`import assert from 'node:assert/strict';
+    import {findOwnedCore,stopOwnedCore} from ${JSON.stringify(new URL('../server/local-endpoint.js',import.meta.url).href)};
+    const owned=JSON.parse(process.argv[1]);
+    assert.equal(await stopOwnedCore({...owned,directory:owned.directory+'-wrong'}),false);
+    process.kill(owned.pid,0);
+    assert.equal((await findOwnedCore(owned))?.pid,owned.pid,'Finder locale must preserve Chinese executable and originals paths');
+    assert.equal(await stopOwnedCore(owned),true);
+    console.log('verified and stopped');`;
+  const {stdout}=await execFileAsync(process.execPath,['--input-type=module','-e',script,JSON.stringify({pid:child.pid,executable,directory})],{env,timeout:12000});
+  assert.match(stdout,/verified and stopped/);assert.deepEqual(await ended,[0,null]);
+});
 
 function fixture(){
   const state={alive:true,identity:'original-process',time:0,signals:[],events:[]};

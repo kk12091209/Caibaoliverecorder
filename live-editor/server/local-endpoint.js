@@ -6,6 +6,13 @@ import {promisify} from 'node:util';
 import {stopMacCore} from './mac-core-stop.js';
 const execFileAsync=promisify(execFile);
 
+// Finder launches without a locale. In the C locale macOS ps escapes Chinese
+// paths as M-... sequences, so exact ownership checks reject our own core.
+// Set UTF-8 only for ps; keep the full executable/argv identity checks intact.
+const macProcessInfo=(args,options={})=>execFileAsync('/bin/ps',['-ww',...args],{
+  timeout:5000,...options,env:{...process.env,LC_ALL:'en_US.UTF-8'}
+});
+
 // Darwin ps prints argv separated by spaces. Match the complete launch shape,
 // executable and final data directory; never infer ownership from a name/PID.
 export function macCorePort(command,{executable,directory}){
@@ -16,9 +23,9 @@ export function macCorePort(command,{executable,directory}){
 }
 async function macOwnedCore(pid,identity){
   try{
-    const {stdout:exe}=await execFileAsync('/bin/ps',['-p',String(pid),'-o','comm='],{timeout:5000});
+    const {stdout:exe}=await macProcessInfo(['-p',String(pid),'-o','comm=']);
     if(exe.trim()!==identity.executable)return null;
-    const {stdout:command}=await execFileAsync('/bin/ps',['-ww','-p',String(pid),'-o','command='],{timeout:5000});
+    const {stdout:command}=await macProcessInfo(['-p',String(pid),'-o','command=']);
     const port=macCorePort(command.trimEnd(),identity);
     return port?{pid,port,...identity}:null;
   }catch{return null;}
@@ -58,7 +65,7 @@ export async function availableLocalPort(){
 export async function findOwnedCore({executable,directory}){
   if(process.platform==='darwin'){
     try{
-      const {stdout}=await execFileAsync('/bin/ps',['-axo','pid=,comm='],{timeout:5000,maxBuffer:4*1024*1024});
+      const {stdout}=await macProcessInfo(['-axo','pid=,comm='],{maxBuffer:4*1024*1024});
       const found=[];
       for(const line of stdout.split('\n')){
         const match=/^\s*(\d+)\s+(.+)$/.exec(line);
@@ -86,7 +93,7 @@ export async function stopOwnedCore({pid,executable,directory}){
         try{
           // Include launch time and the full original command (including the
           // private credential) in the in-memory comparison, never in logs.
-          const {stdout}=await execFileAsync('/bin/ps',['-ww','-p',String(target),'-o','lstart=,command='],{timeout:5000});
+          const {stdout}=await macProcessInfo(['-p',String(target),'-o','lstart=,command=']);
           return stdout.trim()||null;
         }catch{return null;}
       }
