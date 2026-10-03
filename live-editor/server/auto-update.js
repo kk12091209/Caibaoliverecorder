@@ -14,8 +14,13 @@ export class AutoUpdate{
     if(!Number.isInteger(guiPid)||guiPid<=0||!alive(guiPid)||![...this.runtime.clients.values()].some(client=>client.pid===guiPid))throw new Error('桌面连接已变化。');
     const samePath=(a,b)=>process.platform==='win32'?path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase():path.resolve(a)===path.resolve(b);
     const expected=process.platform==='darwin'?path.resolve(this.appRoot,'../../..'):path.resolve(this.projectRoot);
-    if(!target||!samePath(target,expected)||!['darwin','win32'].includes(process.platform))throw new Error('请在正式安装的桌面软件中更新。');
-    if(!samePath(await fs.realpath(target),target))throw new Error('安装位置不能是符号链接。');
+    if(!target||!['darwin','win32'].includes(process.platform))throw new Error('请在正式安装的桌面软件中更新。');
+    if((await fs.lstat(target)).isSymbolicLink())throw new Error('安装位置不能是符号链接。');
+    // Foundation represents /private/tmp as /tmp even after resolving URLs.
+    // Compare filesystem identities and stage beside the canonical directory.
+    const actualTarget=await fs.realpath(target);
+    if(!samePath(actualTarget,await fs.realpath(expected)))throw new Error('请在正式安装的桌面软件中更新。');
+    target=actualTarget;
     const file=await this.updates.installPath();
       if(this.activity().updateBusy)throw new Error('已有任务开始，请等待任务结束后更新。');
       const ticket=randomUUID();root=path.join(this.updates.root,'apply-'+ticket);this.applicationRoot=root;await fs.mkdir(root,{mode:0o700});

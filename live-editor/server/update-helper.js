@@ -25,7 +25,7 @@ export async function update(requestFile){
   const cancelled=async()=>{try{await fs.access(path.join(root,'cancel'));return true;}catch{return false;}};
   let stage,mounted=false,swapped=false,launched=false,backup;
   const target=path.resolve(request.target),platform=process.platform;
-  const relaunch=async()=>platform==='darwin'?run('/usr/bin/open',[...['CAIBO_DATA_ROOT','CAIBO_EXPORT_ROOT','NO_RECORDER'].flatMap(key=>process.env[key]?['--env',key+'='+process.env[key]]:[]),target,'--args','--updated']):new Promise((resolve,reject)=>{const p=spawn(path.join(target,'录播机.exe'),[],{detached:true,stdio:'ignore',windowsHide:false,cwd:target});p.once('error',reject);p.once('spawn',()=>{p.unref();resolve();});});
+  const relaunch=async()=>platform==='darwin'?run('/usr/bin/open',['-n',...['CAIBO_DATA_ROOT','CAIBO_EXPORT_ROOT','NO_RECORDER'].flatMap(key=>process.env[key]?['--env',key+'='+process.env[key]]:[]),target,'--args','--updated']):new Promise((resolve,reject)=>{const p=spawn(path.join(target,'录播机.exe'),[],{detached:true,stdio:'ignore',windowsHide:false,cwd:target});p.once('error',reject);p.once('spawn',()=>{p.unref();resolve();});});
   try{
     if(request.schema!==1||request.platform!==platform||!['darwin','win32'].includes(platform)||!Number.isInteger(request.guiPid)||request.guiPid<=0||!Number.isInteger(request.backendPid)||request.backendPid<=0||!/^[a-f0-9]{64}$/.test(request.sha256)||!/^\d+\.\d+\.\d+$/.test(request.version)||!Number.isInteger(request.revision)||request.revision<1)throw new Error('更新请求无效。');
     if(await digest(request.package)!==request.sha256)throw new Error('更新包校验失败，原版本已保留。');

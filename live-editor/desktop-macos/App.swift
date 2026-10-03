@@ -190,7 +190,7 @@ import IOKit.pwr_mgt
             Task { @MainActor in
                 defer { self.choosing = false }
                 var reply: [String: Any] = ["id": id]
-                let result = await self.backend.call(["action": "applyUpdate", "target": Bundle.main.bundleURL.standardizedFileURL.path, "guiPid": Int(getpid())], timeout: 120)
+                let result = await self.backend.call(["action": "applyUpdate", "target": Bundle.main.bundleURL.resolvingSymlinksInPath().path, "guiPid": Int(getpid())], timeout: 120)
                 if result?["quitAccepted"] as? Bool == true {
                     self.backend.exitRequested = true
                     self.window.title = "菜播·录包机 · 正在更新"

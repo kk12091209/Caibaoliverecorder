@@ -17,3 +17,12 @@ test('并发更新在校验前独占，第一次失败后释放占用',async t=>
   const updater=new AutoUpdate({runtime:{clients:new Map([['client',{pid:process.pid}]])},updates:{installPath:()=>{entered();return pending;},store:{setting(){}}},appRoot:process.platform==='darwin'?path.join(root,'Contents/Resources/live-editor'):root,projectRoot:root,activity:()=>({updateBusy:false})});
   const first=updater.apply({target:root,guiPid:process.pid});await assert.rejects(updater.apply({target:root,guiPid:process.pid}),/正在安装/);await started;const rejected=assert.rejects(first,/validation failure/);reject(new Error('validation failure'));await rejected;assert.equal(updater.applying,false);
 });
+
+test('Mac 允许父目录的系统别名，但拒绝链接应用和其他安装目录',async t=>{
+  if(process.platform!=='darwin'){t.skip('macOS path aliases');return;}
+  const root=await fixture(t),target=path.join(root,'app');await fs.mkdir(target);let validated=0;
+  const updater=new AutoUpdate({runtime:{clients:new Map([['client',{pid:process.pid}]])},updates:{installPath:()=>{validated++;throw new Error('package validation reached');},store:{setting(){}}},appRoot:path.join(await fs.realpath(target),'Contents/Resources/live-editor'),activity:()=>({updateBusy:false})});
+  await assert.rejects(updater.apply({target,guiPid:process.pid}),/package validation reached/);assert.equal(validated,1);
+  const link=path.join(root,'linked.app');await fs.symlink(target,link);await assert.rejects(updater.apply({target:link,guiPid:process.pid}),/符号链接/);
+  await assert.rejects(updater.apply({target:root,guiPid:process.pid}),/正式安装/);assert.equal(validated,1);
+});
