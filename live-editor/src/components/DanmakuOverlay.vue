@@ -3,9 +3,9 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
 
-const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean });
+const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean, font: Object });
 const canvas = ref(null);
-const font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
+let font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
 const clock = new DanmakuClock(), timeline = new DanmakuTimeline();
 const measured = new DanmakuCache(2048), sprites = new DanmakuCache(20 * 1024 * 1024);
 const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') === '1';
@@ -137,6 +137,18 @@ function resize() {
   canvas.value.width = Math.round(width * scale); canvas.value.height = Math.round(height * scale);
   context.setTransform(scale, 0, 0, scale, 0, 0); rebuild(true);
 }
+let fontGeneration=0,customFace;
+async function changeFont(value){
+  const generation=++fontGeneration;let face;
+  try{if(value?.id){face=new FontFace('Caibo_'+value.id,`url("${value.url}")`);await face.load();}}
+  catch{if(generation!==fontGeneration||disposed)return;canvas.value?.dispatchEvent(new CustomEvent('font-error',{bubbles:true}));return;}
+  if(disposed||generation!==fontGeneration)return;
+  if(customFace)document.fonts.delete(customFace);customFace=face;
+  if(face)document.fonts.add(face);
+  font=`500 ${DANMAKU_FONT_SIZE}px ${face?'"'+face.family+'", ':''}"Microsoft YaHei", "Segoe UI", sans-serif`;
+  measured.clear();sprites.clear();rebuild(true);
+}
+watch(() => props.font?.id,()=>changeFont(props.font),{immediate:true});
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());
 watch(() => [props.base, props.enabled, props.loading], () => { cancelVideoFrame(); resetClock(); requestPaint(); queueVideoFrame(); });
@@ -148,7 +160,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', visibilityChanged); bind(props.video); resize();
 });
 onBeforeUnmount(() => {
-  disposed = true; bind(null); cancelAnimationFrame(raf); observer?.disconnect(); sprites.clear(); measured.clear();
+  disposed = true; fontGeneration++;if(customFace)document.fonts.delete(customFace);bind(null); cancelAnimationFrame(raf); observer?.disconnect(); sprites.clear(); measured.clear();
   document.removeEventListener('visibilitychange', visibilityChanged); motionPreference?.removeEventListener('change', requestPaint);
 });
 </script>

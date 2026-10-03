@@ -8,6 +8,7 @@ import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { Ingestor } from './ingest.js';
 import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
+import { MAX_FONT_BYTES } from './danmaku-font.js';
 import { BackgroundPreparation } from './background-preparation.js';
 import { JobDeletion } from './job-deletion.js';
 import { DeletionMaintenance } from './deletion-maintenance.js';
@@ -21,6 +22,7 @@ import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
 import { Updates } from './updates.js';
+import { AutoUpdate } from './auto-update.js';
 import { listenLocal } from './local-endpoint.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -46,10 +48,11 @@ async function createManagedApp(options,runtime) {
   await media.recoverPendingSaves();
   const clients=new Set(); let closing=false,app,closePromise;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
+  let autoUpdate;
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     busyReason:()=>{
-      if(closing)return 'foreground';
+      if(closing||autoUpdate?.applying)return 'foreground';
       if(!options.noRecorder&&recorder.connectionPending)return 'connection';
       if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
       if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
@@ -70,7 +73,7 @@ async function createManagedApp(options,runtime) {
     const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
     const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy||!!recorder.douyin.polling;
     const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
-    return {busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
+    return {updateBusy:recording||processing||organising||!!preparation.active||media.fonts.changing||!!recorder.starting, busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
   }
   const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
   const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
@@ -78,7 +81,8 @@ async function createManagedApp(options,runtime) {
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
-  function snapshot(){return {updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
+  function snapshot(){return {danmakuFont:media.fonts.snapshot(),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -89,7 +93,7 @@ async function createManagedApp(options,runtime) {
     const range=req.headers.range;
     if(range){const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}start=Number(match[1]);end=match[2]?Math.min(end,Number(match[2])):end;status=206;}
     if(start>end||start>=stat.size){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}
-    const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.mkv':'video/x-matroska','.flv':'video/x-flv','.xml':'application/xml; charset=utf-8','.json':'application/json','.ass':'text/plain; charset=utf-8'};
+    const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.mkv':'video/x-matroska','.flv':'video/x-flv','.xml':'application/xml; charset=utf-8','.json':'application/json','.ass':'text/plain; charset=utf-8','.ttf':'font/ttf','.otf':'font/otf'};
     const headers={'Content-Type':mime[path.extname(file)]||'application/octet-stream','Content-Length':end-start+1,'Accept-Ranges':'bytes','X-Content-Type-Options':'nosniff'};
     if(['.html','.js','.css'].includes(path.extname(file)))headers['Cache-Control']='no-store';
     if(status===206)headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`;
@@ -98,6 +102,7 @@ async function createManagedApp(options,runtime) {
   }
   const server=http.createServer(async(req,res)=>{
     try {
+      let match;
       const host=req.headers.host||'';
       if(!new Set([`127.0.0.1:${port}`,`localhost:${port}`]).has(host)){json(res,{error:'无效的本机访问地址。'},403);return;}
       const url=new URL(req.url,`http://${host}`),p=url.pathname;
@@ -106,7 +111,9 @@ async function createManagedApp(options,runtime) {
         if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);
         if(req.method==='POST'){
           const input=await body(req);
-          if(input.action==='prepareUpdate'){const updatePath=await updates.installPath();return json(res,{...runtime.status(activity()),updatePath});}
+          if(input.action==='cancelUpdate'){await autoUpdate.cancel();return json(res,runtime.status(activity()));}
+          else if(input.action==='applyUpdate')return json(res,{...runtime.status(activity()),...await autoUpdate.apply(input)});
+          else if(input.action==='prepareUpdate'){const updatePath=await updates.installPath();return json(res,{...runtime.status(activity()),updatePath});}
           else if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
           else if(input.action==='detach')runtime.clients.delete(input.client);
           else if(input.action==='setCloseAction'){validateCloseAction(input.closeAction);store.setting('window-close-action',input.closeAction);}
@@ -116,13 +123,26 @@ async function createManagedApp(options,runtime) {
         }else if(req.method!=='GET')return json(res,{error:'请求方式无效。'},405);
         return json(res,{...runtime.status(activity()),closeAction:closeAction()});
       }
-      if(runtime.stopping&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
+      if((runtime.stopping||autoUpdate.applying)&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
+      if(p==='/api/updates/apply'&&req.method==='POST'){await body(req);return json(res,updates.requestInstall());}
       if(p==='/api/updates/check'&&req.method==='POST'){await body(req);return json(res,await updates.check());}
-      if(p==='/api/updates/download'&&req.method==='POST'){const input=await body(req);return json(res,updates.download(input.key),202);}
+      if(p==='/api/updates/download'&&req.method==='POST'){const input=await body(req);return json(res,updates.download(input.key,input.autoInstall===true),202);}
       if(p==='/api/updates/clear'&&req.method==='POST'){await body(req);return json(res,await updates.clearCache());}
       if(p==='/api/updates/cancel'&&req.method==='POST'){await body(req);return json(res,updates.cancel());}
       if(p==='/api/updates/defer'&&req.method==='POST'){await body(req);return json(res,updates.defer());}
       if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
+      if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));
+      if(p==='/api/danmaku-font'&&req.method==='POST'){
+        if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
+        media.fonts.changing=true;
+        try{
+          if(req.headers['content-type']==='application/octet-stream'){
+            const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>MAX_FONT_BYTES)throw new Error('字体超过 32 MB。');chunks.push(chunk);}await media.fonts.import(Buffer.concat(chunks));
+          }else{const input=await body(req);if(input.reset!==true)throw new Error('字体设置无效。');media.fonts.reset();}
+          for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
+          return json(res,{font:media.fonts.snapshot()});
+        }finally{media.fonts.changing=false;}
+      }
       if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
       if(p==='/api/events'&&req.method==='GET'){
         res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write(`data: ${JSON.stringify(snapshot())}\n\n`);clients.add(res);res.on('close',()=>clients.delete(res));return;
@@ -134,7 +154,7 @@ async function createManagedApp(options,runtime) {
       if(p==='/api/rooms'&&req.method==='POST'){
         const result=await recorder.addRoom(await body(req));return json(res,result);
       }
-      let match;
+
       if(p==='/api/preparation/settings'&&req.method==='POST'){
         const input=await body(req);if(typeof input.enabled!=='boolean')throw new Error('请选择是否开启录制完成后的自动预处理。');
         await preparation.setEnabled(input.enabled);return json(res,preparation.snapshot());
@@ -233,7 +253,7 @@ async function createManagedApp(options,runtime) {
   ingestor.start();void media.work();if(options.preparation!==false)preparation.start();
   let nextTemporarySweep=0;
   const maintain=()=>{
-    if(closing)return;
+    if(closing||autoUpdate.applying)return;
     void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;});
     if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;});
     if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;});}

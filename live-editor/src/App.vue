@@ -2,6 +2,8 @@
 import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import DanmakuOverlay from './components/DanmakuOverlay.vue';
 import UpdateSettings from './components/UpdateSettings.vue';
+import FontSettings from './components/FontSettings.vue';
+import { applyUpdate } from './desktop.js';
 import TimelineSignals from './components/TimelineSignals.vue';
 import TimelineNavigator from './components/TimelineNavigator.vue';
 import TimelineMarker from './components/TimelineMarker.vue';
@@ -411,6 +413,15 @@ async function loadOverlay(){
   try{const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&overlay=1`);if(request===overlayRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(overlayFeed.value,result))overlayFeed.value=result;overlayWindow=window;}}
   catch{}finally{if(request===overlayRequest)overlayBusy=false;}
 }
+let applyingUpdate=false;
+watch(()=>[state.value.updates?.status,state.value.updates?.autoInstall,state.value.updates?.installBlocked],async()=>{
+  const update=state.value.updates;
+  if(!isDesktop||applyingUpdate||update?.status!=='ready'||!update.autoInstall||update.installBlocked)return;
+  applyingUpdate=true;
+  try{tell('正在准备更新，完成后自动重新打开…');await applyUpdate();}
+  catch(error){tell(error.message);if(!/已有任务|等待当前|有录制任务/.test(error.message))await api('updates/cancel',{}).catch(()=>{});}
+  finally{applyingUpdate=false;}
+});
 async function openUpdateSettings(){openSettings();await nextTick();document.querySelector('.update-settings')?.scrollIntoView({block:'center'});}
 async function deferUpdate(){try{state.value.updates=await api('updates/defer',{});}catch(e){tell(e.message);}}
 function openSettings(){const current=state.value.paths?.exports||'';savedExportDirectory.value=current;exportDirectory.value=current;closeActionError.value='';chatRateError.value='';chatRateDraft.value=null;modal.value='settings';}
@@ -462,11 +473,11 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
       <main class="editor">
         <div class="editor-heading"><div><Film :size="21"/><h1>{{ activeSession?.title||'直播剪辑工作台' }}</h1><span v-if="activeSession?.status==='recording'" class="recording-label"><i class="live-dot online"/>录制中</span></div></div>
         <div v-if="activeSession?.error" class="inline-warning"><AlertCircle :size="16"/><span>{{ activeSession.error }}</span></div>
-        <div class="video-stage">
+        <div class="video-stage" :class="{'preview-playing':isPlaying}">
           <video v-if="previewUrl" ref="video" :src="previewUrl" playsinline preload="auto" @loadeddata="loaded" @canplay="loaded" @timeupdate="updateTime" @play="played" @pause="paused" @waiting="loading=true" @playing="loading=false" @ended="ended" @error="loading=false;tell('预览读取失败，请稍后重新定位。原始素材仍保留。')" @click="togglePlay"/>
           <div v-if="!previewUrl" class="preview-empty"><button class="preview-start" :disabled="!canPreview" @click="togglePlay"><Play v-if="canPreview" :size="42"/><Video v-else :size="42"/></button><strong>{{ canPreview?'播放预览':selected?'等待录制画面':'选择一段录像' }}</strong><span>{{ selected?'录制继续进行，已录内容可随时回看':'添加直播间，开播后自动录制' }}</span></div>
           <div v-if="loading" class="video-loading"><LoaderCircle :size="30" class="spin"/><span>正在读取画面</span></div>
-          <DanmakuOverlay v-if="previewUrl" :video="video" :base="previewBase" :messages="overlayFeed" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
+          <DanmakuOverlay v-if="previewUrl" @font-error="tell('字体未能加载，请在设置中重新导入。')" :font="state.danmakuFont" :video="video" :base="previewBase" :messages="overlayFeed" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
         </div>
         <div class="playback-toolbar"><div class="playback-left"><button class="icon-button" aria-label="上一帧" title="上一帧（左方向键）" :disabled="!canPreview" @click="step(-1)"><StepBack :size="21"/></button><button class="icon-button play" :disabled="!canPreview" :aria-label="isPlaying?'暂停':'播放'" @click="togglePlay"><Pause v-if="isPlaying" :size="25"/><Play v-else :size="25"/></button><button class="icon-button" aria-label="下一帧" title="下一帧（右方向键）" :disabled="!canPreview" @click="step(1)"><StepForward :size="21"/></button><div class="preview-volume" :class="{open:previewVolumeOpen}" @pointerenter="openPreviewVolume" @pointerleave="leavePreviewVolume" @pointerdown="previewVolumeDown"><button type="button" class="icon-button" :disabled="!canPreview" :aria-pressed="previewMuted||previewVolume===0" :aria-label="previewMuted||previewVolume===0?'恢复预览声音':'静音预览'" :title="(previewMuted||previewVolume===0?'预览已静音，点击恢复声音':'点击静音预览')+'。只改变这里的播放，导出视频的声音不变'" @click="togglePreviewMute"><VolumeX v-if="previewMuted||previewVolume===0" :size="18"/><Volume1 v-else-if="previewVolume<0.5" :size="18"/><Volume2 v-else :size="18"/></button><div class="preview-volume-pop"><div class="preview-volume-rotator"><input type="range" min="0" max="100" step="1" :value="Math.round(previewSlider*100)" :disabled="!canPreview" aria-label="预览音量" :title="'预览音量 '+Math.round(previewSlider*100)+'%'" @input="setPreviewVolume"/></div></div></div><span class="playback-time">{{ format(position) }} <span>/ {{ format(duration) }}</span></span></div><div class="playback-right"><button class="button subtle" :disabled="!canPreview" @click="playFrom(Math.max(0,duration-3),true)"><RotateCcw :size="16"/>回到最新</button><label class="checkbox"><input v-model="showOverlay" type="checkbox"/>弹幕预览</label></div></div>
         <section class="timeline-section" aria-label="连续录像时间轴" :data-view-from="viewport.from" :data-view-to="viewport.to">
@@ -558,7 +569,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         <p v-if="roomChoiceError" class="inline-warning" role="alert">{{ roomChoiceError }}</p>
         <div class="confirm-actions"><button class="button" :disabled="modalBusy" @click="closeModal">取消</button><button class="button primary" :disabled="modalBusy||!roomChoicePlatform" @click="confirmRoomChoice"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>确认添加</button></div>
       </template>
-      <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2><UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
+      <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2><UpdateSettings :state="state.updates" @changed="state.updates=$event"/><FontSettings :font="state.danmakuFont" @changed="state.danmakuFont=$event"/>
         <section class="chat-settings" aria-label="弹幕设置"><div class="chat-rate-heading"><label for="chat-rate-limit">每秒弹幕上限</label><output for="chat-rate-limit">{{ chatRateValue }} 条</output></div><input id="chat-rate-limit" type="range" min="1" max="50" step="1" :value="chatRateValue" :style="{'--chat-rate-fill':(chatRateValue-1)/49*100+'%'}" :disabled="chatRateBusy||modalBusy" @input="chatRateDraft=Number($event.target.value)" @change="setChatRate($event.target.value)"/><p class="muted">每个直播间独立计算 · 自动保存</p><p class="muted">30 字及以上过滤；10 秒内同文达到 5 条，只留一条。</p><p v-if="chatRateError" class="inline-warning" role="alert">{{ chatRateError }}</p></section>
         <fieldset v-if="isDesktop" class="export-versions" aria-label="关闭窗口时"><legend>关闭窗口时</legend><label v-for="choice in [{value:'ask',label:'每次询问'},{value:'exit',label:'退出'},{value:'background',label:'后台运行'}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
         <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>

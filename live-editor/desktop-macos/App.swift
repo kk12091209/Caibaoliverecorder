@@ -185,21 +185,25 @@ import IOKit.pwr_mgt
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let input = message.body as? [String: Any] else { return }
         if input["action"] as? String == "openExternal", input["url"] as? String == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!); return }
-        if input["action"] as? String == "openUpdateInstaller", let id = input["id"] as? String, id.count <= 100, !choosing {
+        if input["action"] as? String == "applyUpdate", let id = input["id"] as? String, id.count <= 100, !choosing {
             choosing = true
-            let origin = backend.endpoint?.origin
             Task { @MainActor in
                 defer { self.choosing = false }
                 var reply: [String: Any] = ["id": id]
-                if let result = await self.backend.call(["action": "prepareUpdate"], timeout: 60), let file = result["updatePath"] as? String {
-                    guard self.backend.endpoint?.origin == origin, self.trusted(self.web.url), !self.backend.exitRequested else { return }
-                    let url = URL(fileURLWithPath: file).standardizedFileURL
-                    let directory = self.backend.data.appendingPathComponent("updates").standardizedFileURL
-                    if url.deletingLastPathComponent() == directory && url.pathExtension == "dmg" && url.resolvingSymlinksInPath() == url && NSWorkspace.shared.open(url) {
-                        reply["value"] = "安装镜像已打开。请退出软件，再将新版拖入应用程序替换；录像与设置保留。"
-                    } else { reply["error"] = "无法打开更新包，请重新下载。" }
-                } else { reply["error"] = "暂时无法安装，请确认录制和导出已停止，或重新下载更新包。" }
-                guard self.backend.endpoint?.origin == origin, self.trusted(self.web.url) else { return }
+                let result = await self.backend.call(["action": "applyUpdate", "target": Bundle.main.bundleURL.standardizedFileURL.path, "guiPid": Int(getpid())], timeout: 120)
+                if result?["quitAccepted"] as? Bool == true {
+                    self.backend.exitRequested = true
+                    self.window.title = "菜播·录包机 · 正在更新"
+                    do {
+                        try await self.backend.waitForExit()
+                        self.terminating = true
+                        NSApp.terminate(nil)
+                    } catch {
+                        self.backend.exitRequested = false
+                        _ = await self.backend.call(["action": "cancelUpdate"])
+                        reply["error"] = "更新退出未完成：\(error.localizedDescription)。原版本保留，请重试。"
+                    }
+                } else { reply["error"] = result?["error"] as? String ?? "更新准备失败。请稍后重试。" }
                 if let bytes = try? JSONSerialization.data(withJSONObject: reply), let json = String(data: bytes, encoding: .utf8) { _ = try? await self.web.evaluateJavaScript("window.dispatchEvent(new CustomEvent('caibo-native',{detail:\(json)}))") }
             }
             return

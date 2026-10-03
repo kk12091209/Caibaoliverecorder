@@ -130,8 +130,9 @@ export class RenderPipeline {
     const info=await this.media.probeSource(sources[0],sources[0].start,options);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const selected=encoder||await this.encoder(options);
-    const profile={version:RENDER_VERSION,width,height,fps:60,encoder:selected,arguments:preparedEncoderArguments(selected)};
-    return {id,session,sources,info,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds)};
+    const font=Object.hasOwn(snapshot,'font')?snapshot.font:this.media.fonts.selected();
+    const profile={font:font?.id||null,version:RENDER_VERSION,width,height,fps:60,encoder:selected,arguments:preparedEncoderArguments(selected)};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds)};
   }
   async sourceFingerprint(source,from,to) {
     const current=this.store.get('SELECT * FROM sources WHERE id=?',source.id);
@@ -173,10 +174,11 @@ export class RenderPipeline {
     try {
       canceled(options.signal);
       const events=visibleComments(plan.layout,plan.snapshot,span.from,span.to);
-      await fs.writeFile(path.join(workDir,'part-0.ass'),this.assText(events,plan.profile.width,plan.profile.height));
+      await fs.writeFile(path.join(workDir,'part-0.ass'),this.assText(events,plan.profile.width,plan.profile.height,plan.font));
+      const fontDirectory=await m.fonts.stage(plan.font,workDir);
       const sourceInfo=source.id===plan.sources[0].id?plan.info:await m.probeSource(source,readFrom,options);
       const geometry=videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height);
-      const chain=[`setpts=PTS+${base}/TB`,geometry,'tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=60:start_time=${span.from}:round=near`,'ass=part-0.ass',`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
+      const chain=[`setpts=PTS+${base}/TB`,geometry,'tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=60:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
       await m.process(['-copyts','-fflags','+genpts','-threads','2','-f','flv','-i','pipe:0','-map','0:v:0','-an','-filter_threads','2','-vf',chain,
         ...plan.profile.arguments,'-frames:v',String(span.frames),'-r','60','-movflags','+faststart','-y',file],
       {cwd:workDir,input:sourceStream(this.store,source.id,readFrom,span.to,{signal:options.signal}),signal:options.signal,background:options.background});

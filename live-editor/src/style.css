@@ -1072,11 +1072,11 @@ svg { flex-shrink: 0; }
 .danmaku-options { flex-wrap: wrap; }
 @media (max-width: 600px) { .ruler-quarter { visibility: hidden; } }
 
-/* Short windows keep the preview and timeline fixed; lists scroll underneath. */
+/* The whole editor remains scrollable at laptop heights and display scaling. */
 @media (max-height: 850px) {
-  .editor { display: flex; flex-direction: column; overflow: hidden; }
+  .editor { display: flex; flex-direction: column; overflow-y: auto; }
   .editor > :not(.bottom-panels) { flex-shrink: 0; }
-  .bottom-panels { flex: 1 1 auto; min-height: 72px; overflow: auto; }
+  .bottom-panels { flex: 0 0 auto; min-height: 72px; overflow: visible; }
   .bottom-switch { position: sticky; top: 0; z-index: 2; background: var(--stage); }
   .archive-line, .preparation-panel { flex-shrink: 0; }
   .panel-empty { min-height: 44px; padding: 10px; }
@@ -1100,3 +1100,9 @@ svg { flex-shrink: 0; }
 .update-reminder { position: fixed; top: 78px; right: 20px; z-index: 12; width: min(390px, calc(100vw - 40px)); padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fff7f8; color: var(--text); box-shadow: 0 8px 30px #4a243233; font-size: 13px; }
 .update-reminder p { margin: 8px 0 12px; color: var(--muted); line-height: 1.5; }
 .update-reminder-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* Playback expands in normal flow; controls remain reachable by scrolling. */
+.video-stage.preview-playing { width: min(100%, calc(min(58vh, 680px) * 16 / 9)); max-height: min(58vh, 680px); flex-shrink: 0; }
+.workspace { grid-template-rows: minmax(0, 1fr); }
+.editor { overscroll-behavior-y: contain; }
+@media (max-width: 960px) { .workspace:not(.danmaku-collapsed) { grid-template-rows: minmax(0,1fr) minmax(160px,280px); } }

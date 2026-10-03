@@ -69,9 +69,11 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         }
         do {
             let (bytes, response) = try await session.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                  value["protocol"] as? Int == 1, value["instance"] as? String == endpoint.instance,
+            guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return nil }
+            if (response as? HTTPURLResponse)?.statusCode != 200 {
+                return action?["action"] as? String == "applyUpdate" ? ["error": value["error"] as? String ?? "更新准备失败。"] : nil
+            }
+            guard value["protocol"] as? Int == 1, value["instance"] as? String == endpoint.instance,
                   value["dataPath"] as? String == endpoint.dataPath else { return nil }
             return value
         } catch { return nil }

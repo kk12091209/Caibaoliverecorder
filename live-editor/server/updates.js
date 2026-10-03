@@ -1,3 +1,4 @@
+import { alive } from './update-helper.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -75,7 +76,7 @@ export class Updates {
   }
   snapshot(){
     const deferred=this.store.setting('update-deferred');
-    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.status,error:this.error,checkedAt:this.checkedAt,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),installBlocked:this.activity().requiresExitConfirmation?'请先停止录制，并等待导出完成。':''};
+    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
   }
   start(){this.startTimer=setTimeout(()=>this.autoCheck(),5000);this.startTimer.unref?.();this.timer=setInterval(()=>this.autoCheck(),3600000);this.timer.unref?.();}
   autoCheck(){if(!this.closed&&this.snapshot().enabled&&this.now()-this.checkedAt>=DAY)void this.check().catch(()=>{});}
@@ -118,10 +119,11 @@ export class Updates {
     }
     return this.root;
   }
-  download(key){
+  download(key,autoInstall=false){
     if(this.closed)fail('软件正在退出。');
     if(this.checkTask)fail('正在检查更新，请稍候。');
     if(!this.candidate||key!==this.candidate.key)fail('更新信息已变化，请重新检查。');
+    if(autoInstall)this.store.setting('update-auto-install',key);
     if(this.downloadTask)return this.snapshot();
     const candidate={...this.candidate};this.status='downloading';this.error='';this.received=0;this.ready=null;
     this.downloadController=new AbortController();
@@ -154,28 +156,47 @@ export class Updates {
     }catch(error){if(signal.aborted&&!cancelSignal.aborted)fail('下载连接中断或超时，请重试。');throw error;}
     finally{clearTimeout(idleTimer);await handle?.close();await fs.rm(temporary,{force:true});this.store.setting('update-partial',null);}
   }
-  cancel(){this.downloadController?.abort();return this.snapshot();}
+  requestInstall(){if(!this.ready)fail('请先完成下载。');this.store.setting('update-auto-install',this.candidate.key);return this.snapshot();}
+  cancel(){this.store.setting('update-auto-install',null);this.downloadController?.abort();return this.snapshot();}
   installPath(){return this.installTask??=this.verifyInstallPath().finally(()=>{this.installTask=null;});}
   async verifyInstallPath(){
     if(this.closed)fail('软件正在退出。');
     if(!this.ready||this.status!=='ready')fail('请先下载并校验更新包。');
-    if(this.activity().requiresExitConfirmation)fail('请先停止录制，并等待导出完成。');
+    if(this.activity().updateBusy??this.activity().requiresExitConfirmation)fail('等待当前录制、导出或素材处理完成后自动更新。');
     await this.directory();const file=this.ready.file,stat=await fs.lstat(file);
     if(!stat.isFile()||stat.isSymbolicLink()||stat.size!==this.ready.size)fail('更新包发生变化，请重新下载。');
     const hash=createHash('sha256'),handle=await fs.open(file,'r');
     try{for await(const chunk of handle.createReadStream())hash.update(chunk);}finally{await handle.close();}
     if(hash.digest('hex')!==this.ready.sha256)fail('更新包校验失败，请重新下载。');
-    if(this.activity().requiresExitConfirmation)fail('已有任务开始，请在任务结束后安装。');
+    if(this.activity().updateBusy??this.activity().requiresExitConfirmation)fail('已有任务开始，请在任务结束后安装。');
     return file;
   }
   async recover(){
+    await this.recoverApplication();
     const name=this.store.setting('update-partial');
     if(typeof name==='string'&&/^[a-f0-9-]{36}\.part$/.test(name)){
       try{await this.directory();await fs.unlink(path.join(this.root,name));}catch(e){if(e.code!=='ENOENT')this.error='有未完成的更新缓存，请检查缓存目录。';}
       this.store.setting('update-partial',null);
     }
   }
+  async recoverApplication(){
+    const applying=this.store.setting('update-application');
+    if(!applying?.ticket||!/^[a-f0-9-]{36}$/.test(applying.ticket))return;
+    const directory=path.join(this.root,'apply-'+applying.ticket);
+    try{
+      const result=JSON.parse(await fs.readFile(path.join(directory,'status.json'),'utf8'));
+      if(result.status==='error')this.error='自动更新未完成：'+String(result.error).slice(0,400);
+      if(['done','error'].includes(result.status)&&Number.isInteger(result.helperPid)&&!alive(result.helperPid)){
+        this.store.setting('update-auto-install',null);
+        // Keep failure diagnostics; delete only the registered successful cache.
+        if(result.status==='done'){const stat=await fs.lstat(directory);if(stat.isDirectory()&&!stat.isSymbolicLink())await fs.rm(directory,{recursive:true});}
+        this.store.setting('update-application',null);return;
+      }
+    }catch{}
+    if(!this.closed&&!this.applicationTimer){this.applicationTimer=setTimeout(()=>{this.applicationTimer=null;if(!this.closed)void this.recoverApplication();},3000);this.applicationTimer.unref?.();}
+  }
   async clearCache(){
+    this.store.setting('update-auto-install',null);
     if(this.downloadTask||this.installTask||this.checkTask)fail('更新任务正在进行，请稍后清理。');
     const saved=this.store.setting('update-download');
     if(saved){
@@ -186,5 +207,5 @@ export class Updates {
     }
     this.ready=null;if(this.status==='ready')this.status='available';return this.snapshot();
   }
-  async close(){this.closed=true;clearTimeout(this.startTimer);clearInterval(this.timer);this.checkController?.abort();this.downloadController?.abort();await Promise.allSettled([this.checkTask,this.downloadTask,this.installTask]);}
+  async close(){this.closed=true;clearTimeout(this.startTimer);clearTimeout(this.applicationTimer);clearInterval(this.timer);this.checkController?.abort();this.downloadController?.abort();await Promise.allSettled([this.checkTask,this.downloadTask,this.installTask]);}
 }

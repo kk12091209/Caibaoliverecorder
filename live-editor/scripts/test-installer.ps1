@@ -98,6 +98,42 @@ db.close();
     Assert-Installer ((Invoke-Setup $installer $arguments) -eq 0) 'Idle upgrade failed.'
     Wait-BackendExit
     foreach ($file in $preserved) { Assert-Installer ([IO.File]::ReadAllText((Join-Path $target $file)) -eq 'private synthetic fixture') ('Upgrade changed user data: '+$file) }
+    # Exercise the actual automatic-update helper against the isolated Inno
+    # package. Hold a synthetic GUI alive to prove installation waits for exit.
+    $autoRoot=Join-Path $qaRoot 'automatic-update'
+    New-Item -ItemType Directory -Force $autoRoot | Out-Null
+    $helperNode=Join-Path $autoRoot 'node.exe'
+    Copy-Item -LiteralPath $node -Destination $helperNode
+    $helperScript=Join-Path $autoRoot 'helper.mjs'
+    Copy-Item -LiteralPath (Join-Path $app 'server/update-helper.js') -Destination $helperScript
+    $autoPackage=Join-Path $autoRoot ("BiliLiveEditor-$Version-win-x64-setup.exe")
+    Copy-Item -LiteralPath $installer -Destination $autoPackage
+    $dummy=Start-Process -FilePath $helperNode -ArgumentList '-e "setInterval(()=>{},1000)"' -PassThru -WindowStyle Hidden
+    $requestFile=Join-Path $autoRoot 'request.json'
+    $request=@{schema=1;platform='win32';package=$autoPackage;target=$target;guiPid=$dummy.Id;backendPid=$dummy.Id;sha256=(Get-FileHash $autoPackage -Algorithm SHA256).Hash.ToLowerInvariant();version=$Version;revision=(Get-Content (Join-Path $app 'package.json') -Raw | ConvertFrom-Json).buildRevision}
+    [IO.File]::WriteAllText($requestFile,($request | ConvertTo-Json),$utf8)
+    $helper=Start-Process -FilePath $helperNode -ArgumentList ('"'+$helperScript+'" "'+$requestFile+'"') -PassThru -WindowStyle Hidden
+    try {
+        $stateFile=Join-Path $autoRoot 'status.json'
+        for($i=0;$i -lt 100 -and !(Test-Path $stateFile);$i++){Start-Sleep -Milliseconds 100}
+        $autoState=Get-Content $stateFile -Raw | ConvertFrom-Json
+        Assert-Installer ($autoState.status -eq 'ready') ('Automatic updater was not ready: '+$autoState.error)
+        Start-Sleep -Milliseconds 500
+        Assert-Installer ((Get-Content $stateFile -Raw | ConvertFrom-Json).status -eq 'ready') 'Updater installed before GUI exit.'
+        Stop-Process -Id $dummy.Id
+        Assert-Installer ($helper.WaitForExit(120000)) 'Automatic updater timed out.'
+        $autoState=Get-Content $stateFile -Raw | ConvertFrom-Json
+        Assert-Installer ($autoState.status -eq 'done') ('Automatic update failed: '+$autoState.error)
+        foreach($file in $preserved){Assert-Installer ([IO.File]::ReadAllText((Join-Path $target $file)) -eq 'private synthetic fixture') ('Automatic update changed user data: '+$file)}
+        # The helper relaunches the installed desktop. Maintenance closes only
+        # this synthetic, idle installation before the uninstall checks below.
+        Start-Sleep -Seconds 3
+        $maintenance=Start-Process -FilePath (Join-Path $target '录播机.exe') -ArgumentList ('--prepare-maintenance "'+$target+'"') -PassThru -WindowStyle Hidden
+        Assert-Installer ($maintenance.WaitForExit(30000) -and $maintenance.ExitCode -eq 0) 'Restarted app did not safely close.'
+    } finally {
+        $dummy.Refresh();if(!$dummy.HasExited){$dummy.Kill()};$dummy.Dispose()
+        $helper.Refresh();if(!$helper.HasExited){$helper.Kill()};$helper.Dispose()
+    }
     $markerText = [IO.File]::ReadAllText($marker)
     [IO.File]::WriteAllText($marker,($qaId + "`r`n" + $qaRoot + "`r`n"),$utf8)
     Assert-Installer ((Invoke-Setup $uninstaller $uninstallArgs) -ne 0) 'Uninstall accepted an ownership path mismatch.'
@@ -113,7 +149,7 @@ db.close();
     Assert-Installer (!(Test-Path -LiteralPath $registry)) 'Uninstall registration remained.'
     Assert-Installer (!(Test-Path -LiteralPath $target)) 'Uninstall left the installation directory behind.'
     Assert-Installer ([IO.File]::ReadAllText($outside) -eq 'outside installation') 'Uninstall followed a junction into unrelated files.'
-    [ordered]@{result='passed';qaRoot=$qaRoot;filesVerified=$manifest.files.Count;installedBytes=$installedBytes;checks=@('shared-folder-install-refused','install','root-uninstall-shortcut','Windows-uninstall-registration','installed-hashes','busy-upgrade-refused','busy-uninstall-refused','idle-safe-upgrade','user-data-survives-upgrade','ownership-mismatch-refused','all-installation-files-removed','outside-junction-target-preserved','program-directory-and-registration-removed')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'verification.json') -Encoding UTF8
+    [ordered]@{result='passed';qaRoot=$qaRoot;filesVerified=$manifest.files.Count;installedBytes=$installedBytes;checks=@('shared-folder-install-refused','install','root-uninstall-shortcut','Windows-uninstall-registration','installed-hashes','busy-upgrade-refused','busy-uninstall-refused','idle-safe-upgrade','automatic-update-waits-for-gui','automatic-silent-upgrade-and-relaunch','user-data-survives-automatic-update','user-data-survives-upgrade','ownership-mismatch-refused','all-installation-files-removed','outside-junction-target-preserved','program-directory-and-registration-removed')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'verification.json') -Encoding UTF8
     Get-Content (Join-Path $qaRoot 'verification.json') -Raw -Encoding UTF8
 } finally {
     if ($backend) {

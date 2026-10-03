@@ -87,7 +87,7 @@ test('下载通过大小和 SHA 校验后才可打开，重复点击不会重复
 });
 test('录制或导出期间拒绝安装；本地安装包被改动后也拒绝安装',async t=>{
   let active=false;const f=await fixture(t,{activity:()=>({requiresExitConfirmation:active})});await downloaded(f);
-  active=true;assert.match(f.updates.snapshot().installBlocked,/停止录制/);await assert.rejects(f.updates.installPath(),/停止录制/);
+  active=true;assert.match(f.updates.snapshot().installBlocked,/等待当前录制/);await assert.rejects(f.updates.installPath(),/等待当前录制/);
   active=false;await fs.writeFile(f.updates.ready.file,Buffer.alloc(f.published.bytes.length));await assert.rejects(f.updates.installPath(),/校验失败/);
 });
 test('错误或超大的下载不替换已存在文件，并清理自己的临时文件',async t=>{

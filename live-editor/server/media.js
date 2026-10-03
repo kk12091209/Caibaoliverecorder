@@ -1,6 +1,7 @@
 import { stopChild } from './child-stop.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { DanmakuFonts } from './danmaku-font.js';
 import path from 'node:path';
 import os from 'node:os';
 import { Readable } from 'node:stream';
@@ -18,9 +19,9 @@ import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments } from './render-plan.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
-export function assText(messages, width = 1280, height = 720) {
+export function assText(messages, width = 1280, height = 720, font = null) {
   const size = Number((Math.max(20, Math.round(height / 24)) * 2 / 3).toFixed(3));
-  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Microsoft YaHei,${size},&H00FFFFFF,&H00FFFFFF,&H00111111,&H80000000,0,0,0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H00FFFFFF,&H00FFFFFF,&H00111111,&H80000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
   const lanes = Array(8).fill(-Infinity);
   return head + messages.map(m => {
     if(m.time+6<=0)return '';
@@ -66,7 +67,7 @@ export class Media {
       .finally(()=>this.exportOperations.delete(job.id));
     return operation.done;
   }
-  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions } = {}) { this.store = store; this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
+  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions } = {}) { this.store = store; this.fonts = new DanmakuFonts(store); this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
   prepareNext(id,options){return this.renderer.prepareNext(id,options);}
   invalidatePreparation(id){this.renderer.invalidate(id);}
   // Preview and audio analysis can run beside preparation. Cleanup still uses
@@ -190,7 +191,7 @@ export class Media {
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
-    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
+    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     try {
       const outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
       for(const job of jobs){
@@ -456,6 +457,7 @@ export class Media {
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session):null;
     const workDir=await this.temporaryDirectory('bili-export-',job.session);
     try {
+    const fontDirectory=await this.fonts.stage(job.font,workDir);
     let outputOffset=0;
     const totalDuration=segments.reduce((sum,segment)=>sum+segment.to-segment.from,0),singlePart=segments.length===1;
     for(const {source,from,to} of segments) {
@@ -464,11 +466,11 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},from,to);
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height));
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height,job.font));
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=videoGeometryFilter(sourceInfo,width,height);
-        const overlayFilter=`fps=60,ass=${subFile}`;
+        const overlayFilter=`fps=60,ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
         const compatibleFull=singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
         let copyClean=!bakedOnly&&compatibleFull;
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;

@@ -26,10 +26,10 @@ export function pickExportFolder(initial) {
   });
 }
 
-export function openUpdateInstaller() {
-  if (!isDesktop) return Promise.reject(new Error('请在桌面应用中打开安装包。'));
+export function applyUpdate() {
+  if (!isDesktop) return Promise.reject(new Error('请在桌面应用中更新。'));
   return new Promise((resolve, reject) => {
-    const id=String(++counter),timer=setTimeout(()=>{pending.delete(id);reject(new Error('安装包验证超时，请重试。'));},90000);
-    pending.set(id,{resolve,reject,timer});post({id,action:'openUpdateInstaller'});
+    const id=String(++counter),timer=setTimeout(()=>{pending.delete(id);reject(new Error('更新准备超时，请稍后重试。'));},120000);
+    pending.set(id,{resolve,reject,timer});post({id,action:'applyUpdate'});
   });
 }

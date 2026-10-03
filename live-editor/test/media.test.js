@@ -315,3 +315,19 @@ test('本机 HTTP 接口支持直播素材播放、导出与来源限制',async(
 });
 
 test.after(async()=>{for(const store of opened)try{store.close();}catch{}if(path.dirname(root)===path.resolve(os.tmpdir())&&path.basename(root).startsWith('bili-editor-test-'))await fs.rm(root,{recursive:true,force:true});});
+
+test('自定义字体冻结在任务中，默认恢复后原任务仍使用导入字体，缓存与像素随字体变化',async t=>{
+  const fontFile=process.platform==='darwin'?'/System/Library/Fonts/Supplemental/Andale Mono.ttf':process.platform==='win32'?path.join(process.env.WINDIR||'C:\\Windows','Fonts','cour.ttf'):'';
+  if(!fontFile){t.skip('Needs an installed test font');return;}
+  try{await fs.access(fontFile);}catch{t.skip('Test font is unavailable');return;}
+  const {store,session,media}=await setup('custom-font-render');media.work=async()=>{};
+  store.run("UPDATE danmaku SET text='Wide WWW iii lll custom font'");
+  const custom=await media.fonts.import(await fs.readFile(fontFile));
+  const job=await media.enqueue(session.id,{ranges:[{start:1,end:4}],mode:'danmaku'});
+  assert.equal(job.font.id,custom.id);const customPlan=await media.renderer.describe(session.id,job,null);
+  media.fonts.reset();const plainPlan=await media.renderer.describe(session.id,store.edit(session.id),null);assert.notEqual(customPlan.profileHash,plainPlan.profileHash);
+  const trace=traceExportWork(media);const customOutput=await media.exportJob(job);assert.ok(trace.subtitles.join('\n').includes('Style: Default,'+custom.family+','));
+  const defaultOutput=await media.exportJob({...job,id:'font-default',font:null,output:undefined});
+  const pixels=file=>execFileSync(ffmpeg,['-v','error','-ss','1','-i',file,'-frames:v','1','-vf','crop=640:75:0:0','-pix_fmt','gray','-f','rawvideo','pipe:1']);
+  assert.notDeepEqual(pixels(customOutput),pixels(defaultOutput));assert.equal(media.fonts.selected(),null);await trace.cleaned();store.close();
+});

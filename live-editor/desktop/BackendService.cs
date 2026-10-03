@@ -9,6 +9,7 @@ namespace LiveRecorderDesktop;
 internal sealed class BackendStatus
 {
     internal bool Busy, Background, QuitAccepted, RequiresExitConfirmation, Stopping;
+    internal string QuitError = "";
     internal string Reason = "", Pending = "", Build = "", CloseAction = "ask";
 }
 
@@ -80,25 +81,33 @@ internal sealed class BackendService : IDisposable
             using var response = await http.SendAsync(request); if (!response.IsSuccessStatusCode) return null;
             var value = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
             if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data)) return null;
-            return new BackendStatus { Busy = Flag(value, "busy"), Background = Flag(value, "background"), QuitAccepted = Flag(value, "quitAccepted"), RequiresExitConfirmation = Flag(value, "requiresExitConfirmation"), Stopping = Flag(value, "stopping"), Reason = Text(value, "reason"), Pending = Text(value, "pending"), Build = Text(value, "build"), CloseAction = Text(value, "closeAction") };
+            return new BackendStatus { Busy = Flag(value, "busy"), Background = Flag(value, "background"), QuitAccepted = Flag(value, "quitAccepted"), RequiresExitConfirmation = Flag(value, "requiresExitConfirmation"), Stopping = Flag(value, "stopping"), QuitError = Text(value, "quitError"), Reason = Text(value, "reason"), Pending = Text(value, "pending"), Build = Text(value, "build"), CloseAction = Text(value, "closeAction") };
         }
         catch (Exception error) when (error is HttpRequestException || error is TaskCanceledException || error is IOException || error is ArgumentException || error is KeyNotFoundException || error is FormatException || error is InvalidOperationException) { return null; }
     }
-    internal async Task<string> UpdatePackageAsync()
+    internal async Task ApplyUpdateAsync(string target)
     {
         if (Origin == "" || token == "") throw new IOException("后台尚未连接。");
-        using var client = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(60) };
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(120) };
         using var request = new HttpRequestMessage(HttpMethod.Post, Origin + "/internal/desktop");
         request.Headers.Add("X-Caibo-Instance", token);
-        request.Content = new StringContent(json.Serialize(new { action = "prepareUpdate" }), Encoding.UTF8, "application/json");
+        request.Content = new StringContent(json.Serialize(new { action = "applyUpdate", target, guiPid = Process.GetCurrentProcess().Id }), Encoding.UTF8, "application/json");
         using var response = await client.SendAsync(request);
         var value = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
         if (!response.IsSuccessStatusCode) throw new IOException(Text(value, "error"));
-        if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data)) throw new IOException("后台连接已变化，请重试。");
-        var file = Path.GetFullPath(Text(value, "updatePath"));
-        if (!SamePath(Path.GetDirectoryName(file)!, Path.Combine(data, "updates")) || !file.EndsWith("-win-x64-setup.exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(file)) throw new IOException("更新包路径无效。");
-        if ((File.GetAttributes(Path.GetDirectoryName(file)!) & FileAttributes.ReparsePoint) != 0 || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("更新包路径异常。");
-        return file;
+        if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data) || !Flag(value, "quitAccepted")) throw new IOException("更新准备失败，请稍后重试。");
+        ExitRequested = true;
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while (IsProcessAlive())
+        {
+            var status = await CallAsync();
+            if (status?.QuitError?.Length > 0 || DateTime.UtcNow > deadline)
+            {
+                await CallAsync(new { action = "cancelUpdate" }); ExitRequested = false;
+                throw new IOException(status?.QuitError ?? "更新退出未完成，原版本已保留。");
+            }
+            await Task.Delay(200);
+        }
     }
     internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", client, pid = Process.GetCurrentProcess().Id });
     internal async Task SaveCloseActionAsync(string closeAction)

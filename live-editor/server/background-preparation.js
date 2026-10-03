@@ -4,7 +4,7 @@ import { exportedJobFile } from './output-names.js';
 const ACTIVE = new Set(['recording', 'waiting', 'finishing', 'importing']);
 const interrupted = error => ['AbortError', 'PREP_CANCELLED', 'ABORT_ERR'].includes(error?.name) || ['PREP_CANCELLED', 'ABORT_ERR'].includes(error?.code);
 const finite = (value, fallback = 0) => Number.isFinite(value) && value >= 0 ? value : fallback;
-const renderingKey = edit => JSON.stringify([[...new Set(edit.excluded||[])].sort(),edit.filterLottery!==false]);
+const renderingKey = edit => JSON.stringify([[...new Set(edit.excluded||[])].sort(),edit.filterLottery!==false,edit.font?.id||null]);
 
 // Scheduling only: render plans, fingerprints, immutable files and disk limits
 // belong to Media/RenderCache. User export jobs are never modified here.
@@ -87,7 +87,7 @@ export class BackgroundPreparation {
     // missing parts were rendered directly rather than added to render-cache.
     for(const row of this.store.all("SELECT p.session FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' AND s.status='finished'")) {
       const id=row.session;if(!this.available(id))continue;
-      const session=this.store.session(id),currentKey=renderingKey(this.store.edit(id));
+      const session=this.store.session(id),currentKey=renderingKey({...this.store.edit(id),font:this.media.fonts?.selected()});
       let matched=false;
       for(const job of this.store.all("SELECT * FROM jobs WHERE session=? AND status='done' AND mode IN ('danmaku','dual') ORDER BY created DESC",id)) {
         let data;try{data=JSON.parse(job.data);}catch{continue;}
@@ -97,9 +97,9 @@ export class BackgroundPreparation {
         if(this.closed||!this.available(id))return;
         // Recheck after I/O: deletion/editing may have changed the evidence.
         const currentJob=this.store.get('SELECT status,data FROM jobs WHERE id=?',job.id);
-        if(currentJob?.status!=='done'||currentJob.data!==job.data||renderingKey(this.store.edit(id))!==currentKey)continue;
+        if(currentJob?.status!=='done'||currentJob.data!==job.data||renderingKey({...this.store.edit(id),font:this.media.fonts?.selected()})!==currentKey)continue;
         await this.interrupt('exported',id);
-        if(this.closed||!this.available(id)||renderingKey(this.store.edit(id))!==currentKey)return;
+        if(this.closed||!this.available(id)||renderingKey({...this.store.edit(id),font:this.media.fonts?.selected()})!==currentKey)return;
         this.store.run("UPDATE preparation_jobs SET status='exported',reason='',error='',paused=0,next_retry=0,updated=? WHERE session=? AND status!='exported'",this.stamp(),id);
         matched=true;break;
       }

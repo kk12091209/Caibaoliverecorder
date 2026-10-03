@@ -2,22 +2,19 @@
 import { computed, ref } from 'vue';
 import { Download, RefreshCw, LoaderCircle } from 'lucide-vue-next';
 import { api } from '../api.js';
-import { isDesktop, openUpdateInstaller } from '../desktop.js';
+import { isDesktop } from '../desktop.js';
 const props=defineProps({ state:Object });
 const emit=defineEmits(['changed']);
 const busy=ref(false),message=ref(''),error=ref('');
 const update=computed(()=>props.state||{});
-const working=computed(()=>busy.value||['checking','downloading'].includes(update.value.status));
+const working=computed(()=>busy.value||['checking','downloading','installing'].includes(update.value.status));
 const percent=computed(()=>Math.min(100,Math.floor((update.value.received||0)/(update.value.candidate?.size||1)*100)));
-const status=computed(()=>({idle:'启动后会自动检查，也可手动检查。',checking:'正在检查更新…',current:'已是最新修订。',available:'发现可用更新',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验。',error:'暂时无法检查更新。'})[update.value.status]||'正在连接更新服务…');
+const status=computed(()=>({idle:'启动后会自动检查，也可手动检查。',checking:'正在检查更新…',current:'已是最新修订。',available:'发现可用更新',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验。',installing:'正在准备安装，完成后自动重新打开…',error:'暂时无法检查更新。'})[update.value.status]||'正在连接更新服务…');
 async function action(name,input={}){
   if(busy.value)return;busy.value=true;error.value='';message.value='';
   try{emit('changed',await api('updates/'+name,input));}catch(e){error.value=e.message;}finally{busy.value=false;}
 }
-async function install(){
-  if(working.value)return;busy.value=true;error.value='';message.value='';
-  try{message.value=await openUpdateInstaller();}catch(e){error.value=e.message;}finally{busy.value=false;}
-}
+
 </script>
 
 <template>
@@ -32,11 +29,11 @@ async function install(){
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
       <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" aria-label="更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">取消下载</button></template>
       <div v-else class="update-actions">
-        <button v-if="update.status==='ready'" class="button primary small" :disabled="working||!!update.installBlocked||!isDesktop" @click="install"><Download :size="14"/>{{ busy?'正在验证…':'打开安装包' }}</button>
-        <button v-else class="button primary small" :disabled="working" @click="action('download',{key:update.candidate.key})"><Download :size="14"/>下载更新（{{ (update.candidate.size/1048576).toFixed(1) }} MB）</button>
-        <button class="button subtle small" :disabled="working" @click="action('defer')">稍后提醒</button>
+        <button v-if="update.status==='ready'" class="button primary small" :disabled="working||update.autoInstall||!isDesktop" @click="action('apply')"><Download :size="14"/>{{ update.autoInstall?'等待空闲时更新…':'更新并重启' }}</button>
+        <button v-else class="button primary small" :disabled="working" @click="action('download',{key:update.candidate.key,autoInstall:isDesktop})"><Download :size="14"/>{{ isDesktop?'更新并重启':'下载更新' }}（{{ (update.candidate.size/1048576).toFixed(1) }} MB）</button>
+        <button v-if="update.autoInstall" class="button subtle small" :disabled="busy" @click="action('cancel')">取消自动更新</button><button v-else class="button subtle small" :disabled="working" @click="action('defer')">稍后提醒</button>
       </div>
-      <p v-if="update.status==='ready'" class="muted">{{ update.platform==='darwin-arm64'?'打开 DMG 后，退出软件，再拖入“应用程序”替换。':'打开安装向导后，按提示更新到原安装目录。' }}录像和设置保留。</p>
+      <p v-if="update.status==='ready'" class="muted">下载完成后，软件会在空闲时自动安装并重新打开。录像、导出视频和设置保留。</p>
       <p v-if="update.status==='ready'&&update.installBlocked" class="inline-warning">{{ update.installBlocked }}</p>
       <p v-if="update.status==='ready'&&!isDesktop" class="muted">请回到桌面应用打开安装包。</p>
     </div>

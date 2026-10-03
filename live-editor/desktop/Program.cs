@@ -86,7 +86,10 @@ internal sealed class MainWindow : Form
         activation = activationSignal; backend = new BackendService(root);
         shutdownSignal = shutdown;
         BackColor = Color.FromArgb(20, 16, 18); StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1460, 960); MinimumSize = new Size(1100, 720);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        Size = new Size(Math.Min(1460, area.Width), Math.Min(960, area.Height));
+        MinimumSize = new Size(Math.Min(800, area.Width), Math.Min(480, area.Height));
         using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("LiveRecorderDesktop.app.ico")
             ?? throw new InvalidOperationException("未找到应用图标资源。"))
         using (var applicationIcon = new Icon(stream))
@@ -98,6 +101,11 @@ internal sealed class MainWindow : Form
         tray.ContextMenuStrip = menu;
         tray.DoubleClick += (_, _) => RestoreWindow();
         health.Tick += async (_, _) => await CheckBackendAsync();
+        Shown += (_, _) => {
+            var work = Screen.FromControl(this).WorkingArea;
+            MinimumSize = new Size(Math.Min(MinimumSize.Width, work.Width), Math.Min(MinimumSize.Height, work.Height));
+            Size = new Size(Math.Min(Width, work.Width), Math.Min(Height, work.Height));
+        };
         FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; var external = e.CloseReason != CloseReason.UserClosing; await RequestCloseAsync(external, external); };
         FormClosed += (_, _) => { health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
         Controls.Add(web); Controls.Add(splash);
@@ -254,13 +262,11 @@ internal sealed class MainWindow : Form
                 return;
             }
             if (id is null || id.Length > 100) return;
-            if (actionName == "openUpdateInstaller")
+            if (actionName == "applyUpdate")
             {
                 choosingFolder = true;
-                var installer = await backend.UpdatePackageAsync();
-                if (IsDisposed || backend.ExitRequested || !IsLocal(web.Source?.AbsoluteUri ?? "")) throw new IOException("窗口状态已变化，请重试。");
-                Process.Start(new ProcessStartInfo { FileName = installer, Arguments = "/DIR=\"" + root + "\"", UseShellExecute = true });
-                web.CoreWebView2.PostWebMessageAsJson(Json.Serialize(new { id, value = "安装向导已打开，请按提示更新到原目录；录像与设置保留。" }));
+                await backend.ApplyUpdateAsync(root);
+                closing = true; Close();
                 return;
             }
             if (actionName != "pickExportFolder") return;
