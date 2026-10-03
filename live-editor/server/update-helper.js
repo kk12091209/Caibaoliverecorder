@@ -41,7 +41,9 @@ export async function update(requestFile){
       await run('/usr/bin/codesign',['--verify','--deep','--strict',source]);
       stage=path.join(path.dirname(target),`.Caibo-update-${path.basename(root)}.app`);backup=stage+'.backup';
       await fs.lstat(stage).then(()=>{throw new Error('更新暂存目录已存在。');},e=>{if(e.code!=='ENOENT')throw e;});
-      await run('/usr/bin/ditto',[source,stage]);
+      // Copy the signed bundle without Finder/resource-fork attributes that ditto
+      // can add to a new .app; they invalidate strict bundle verification.
+      await run('/usr/bin/ditto',['--norsrc','--noextattr',source,stage]);
       await run('/usr/bin/codesign',['--verify','--deep','--strict',stage]);
       await run('/usr/bin/hdiutil',['detach',mount]);mounted=false;
     }else{
