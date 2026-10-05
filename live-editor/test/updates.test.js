@@ -10,8 +10,8 @@ import { createApp } from '../server/index.js';
 import packageInfo from '../package.json' with {type:'json'};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const current={version:'0.1.6',revision:2};
-function publication(platform='win32-x64',revision=3){
-  const bytes=Buffer.from('verified update package\n'),version='0.1.6',tag_name='v'+version,name=packageName(version,platform);
+function publication(platform='win32-x64',revision=3,version='0.1.6'){
+  const bytes=Buffer.from('verified update package\n'),tag_name='v'+version,name=packageName(version,platform);
   const manifest={schema:1,version,revision,notes:['修复测试问题'],platforms:{[platform]:{name,size:bytes.length,sha256:sha(bytes)}}};
   const manifestBytes=Buffer.from(JSON.stringify(manifest));
   const asset=(name,bytes)=>({name,size:bytes.length,state:'uploaded',digest:'sha256:'+sha(bytes),browser_download_url:`https://github.com/${UPDATE_REPOSITORY}/releases/download/${tag_name}/${name}`});
@@ -34,6 +34,12 @@ test('相同版本依靠修订号更新，较老版本和修订不会降级',()=
   assert.equal(newerRelease({version:'0.1.7',revision:1},current),true);
   for(const version of ['v0.1.6','0.1.6-beta','../../x','1.2'])assert.throws(()=>newerRelease({version,revision:3},current));
   assert.throws(()=>newerRelease({...current,revision:0},current));
+});
+test('0.1.7 起只按版本号更新，旧版客户端仍能升级',()=>{
+  assert.equal(newerRelease({version:'0.1.7',revision:1},{version:'0.1.6',revision:6}),true);
+  assert.equal(newerRelease({version:'0.1.7',revision:999},{version:'0.1.7'}),false);
+  assert.equal(newerRelease({version:'0.1.8'},{version:'0.1.7'}),true);
+  assert.equal(newerRelease({version:'0.1.6',revision:999},{version:'0.1.7'}),false);
 });
 test('Windows 与 Mac 只选择各自的安装包',()=>{
   for(const platform of ['win32-x64','darwin-arm64']){
@@ -123,13 +129,14 @@ test('已安装相同修订不提醒，历史下载缓存仍可手动清理',asy
   const f=await fixture(t,{current:{...current,revision:3}});await f.updates.check();assert.equal(f.updates.status,'current');assert.equal(f.updates.candidate,null);
 });
 test('安装路径仅通过授权桌面通道提供；Web 更新接口不接受路径或任意 URL',async t=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',packageInfo.buildRevision+1);
+  const next=packageInfo.version.split('.').map(Number);next[2]++;
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',1,next.join('.'));
   const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('update-manifest.json')?p.manifestBytes:p.bytes)}});
   app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
   const post=(route,body={},headers={})=>fetch(app.runtime.origin+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   assert.equal((await post('/internal/desktop',{action:'prepareUpdate'})).status,403);
   await post('/api/updates/check');const state=await(await fetch(app.runtime.origin+'/api/state')).json();
-  assert.equal(state.updates.current.version,packageInfo.version);assert.equal(state.updates.current.revision,packageInfo.buildRevision);
+  assert.equal(state.updates.current.version,packageInfo.version);assert.equal(state.updates.current.revision,packageInfo.buildRevision||1);
   assert.equal((await post('/api/updates/download',{key:'wrong',url:'http://localhost/test'})).status,400);
   assert.equal((await post('/api/updates/download',{key:state.updates.candidate.key})).status,202);await app.updates.downloadTask;
   const response=await post('/internal/desktop',{action:'prepareUpdate'},{'X-Caibo-Instance':app.runtime.token});assert.equal(response.status,200);

@@ -46,6 +46,25 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         }
         expectedBuild = hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
+    func validateInterface() throws {
+        let directory = appRoot.appendingPathComponent("dist")
+        let message = "应用的界面文件缺失或损坏。请重新安装完整应用，原有录像和设置会保留。"
+        guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("index.html")),
+              bytes.count < 262144, let html = String(data: bytes, encoding: .utf8),
+              html.contains("id=\"app\"") else { throw problem(message) }
+        let expression = try NSRegularExpression(pattern: "(?:src|href)=[\"'](/assets/[^\"']+)[\"']")
+        let matches = expression.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        var hasScript = false
+        for match in matches {
+            guard let range = Range(match.range(at: 1), in: html),
+                  let reference = String(html[range]).removingPercentEncoding,
+                  !reference.contains(".."), !reference.contains("\\"),
+                  let contents = try? Data(contentsOf: directory.appendingPathComponent(String(reference.dropFirst()))),
+                  !contents.isEmpty else { throw problem(message) }
+            if reference.hasSuffix(".js") { hasScript = true }
+        }
+        guard hasScript else { throw problem(message) }
+    }
     @discardableResult func readEndpoint() -> Bool {
         guard let bytes = try? Data(contentsOf: data.appendingPathComponent("desktop-service.json")),
               let value = try? JSONDecoder().decode(Endpoint.self, from: bytes), value.protocol == 1, value.pid > 0,
@@ -78,8 +97,8 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
             return value
         } catch { return nil }
     }
-    func heartbeat() async -> [String: Any]? {
-        await call(["action": "heartbeat", "client": client, "pid": ProcessInfo.processInfo.processIdentifier])
+    func heartbeat(timeout: TimeInterval = 5) async -> [String: Any]? {
+        await call(["action": "heartbeat", "client": client, "pid": ProcessInfo.processInfo.processIdentifier], timeout: timeout)
     }
     func waitForExit(timeout: TimeInterval = 60) async throws {
         guard let expected = endpoint else { throw problem("无法确认正在退出的后台，请重试。") }
@@ -120,25 +139,27 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         task.standardOutput = log; task.standardError = log
         try task.run(); try log.close(); process = task
     }
-    func ensure() async throws -> [String: Any] {
+    func ensure(timeout: TimeInterval = 60) async throws -> [String: Any] {
         guard !connecting else { throw problem("后台正在连接，请稍候。") }
         connecting = true; defer { connecting = false }
         var restartInstance = "", launchedAt = Date.distantPast
-        for _ in 0..<240 {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
             if exitRequested { throw problem("软件正在退出。") }
-            if readEndpoint(), let status = await heartbeat() {
+            if readEndpoint(), let status = await heartbeat(timeout: min(5, max(0.01, deadline.timeIntervalSinceNow))) {
                 if status["stopping"] as? Bool != true {
                     if status["build"] as? String == expectedBuild { return status }
                     if restartInstance != endpoint?.instance {
                         restartInstance = endpoint?.instance ?? ""
-                        _ = await call(["action": "restart"])
+                        if Date() < deadline { _ = await call(["action": "restart"], timeout: min(5, max(0.01, deadline.timeIntervalSinceNow))) }
                     }
                     if status["busy"] as? Bool == true { return status }
                 }
-            } else if process?.isRunning != true && Date().timeIntervalSince(launchedAt) > 3 {
+            } else if Date() < deadline && process?.isRunning != true && Date().timeIntervalSince(launchedAt) > 3 {
                 try start(); launchedAt = Date()
             }
-            try await Task.sleep(nanoseconds: 250_000_000)
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(min(0.25, remaining) * 1_000_000_000)) }
         }
         throw problem("后台启动超时。请查看数据目录中的 desktop-backend.log：\(data.path)")
     }

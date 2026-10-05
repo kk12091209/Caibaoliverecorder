@@ -86,12 +86,11 @@ v0.1.3 起采用完整卸载。安装只接受专用文件夹，拒绝磁盘根�
 
 发布附件含中文安装包、ZIP、7z、安装体积报告、完整对应源码及清单、`windows-build.json` 与 `SHA256SUMS.txt`。`windows-build.json` 记录确切源码提交和检查结果；发布标签必须指向该提交。云端安装与软件编码测试不等同于用户显卡硬件加速、WebView2 窗口和真实直播的完整实机验收。
 
-## 更新清单与同版本修订
+## 更新清单与版本号
 
-`live-editor/package.json` 的 `version` 是产品版本；`buildRevision` 是正整数内部修订号。
-每次重新发布程序包必须增加 `buildRevision`，两端使用相同值。只替换同名附件而不改变修订号，已经安装的同修订客户端不会收到提醒。0.1.6 首次接入更新器使用修订 2。
+`live-editor/package.json` 的 `version` 是产品版本。0.1.7 起，每次发布更新递增补丁版本，两端保持一致，不再递增内部修订。更新清单保留固定的 `revision: 1`，Mac 打包时补入固定的 `buildRevision: 1`，仅用于让已安装的 0.1.6 更新器接受新应用；这些兼容字段不显示给用户，也不用于新版的同版本更新。
 
-1. 从同一提交构建 Windows 与 Mac；通过共用回归、原生构建、安装及归档检查。两个构建记录都写入版本、内部修订号及源码提交。
+1. 从同一提交构建 Windows 与 Mac；通过共用回归、原生构建、安装及归档检查。两个构建记录都写入版本及源码提交。
 2. 新建草稿 Release；替换现有同版本发布时，先将其转为草稿。上传并核对两端安装包、便携包、源码、构建记录与校验文件。
 3. 获取该草稿的 GitHub Release JSON，准备简短更新说明 JSON 数组；运行：
 
@@ -99,9 +98,9 @@ v0.1.3 起采用完整卸载。安装只接受专用文件夹，拒绝磁盘根�
 node live-editor/scripts/create-update-manifest.mjs release.json windows-build.json macos-build.json notes.json update-manifest.json
 ```
 
-脚本要求 Release 的 `target_commitish`、两端构建记录源码提交及内部修订号完全一致，且安装包均已上传并有 GitHub SHA-256。Mac 构建记录需包含 `version`、`buildRevision`、`applicationSourceRevision`、`releaseRevision`、`nodeTests` 及 `localChecks.dmgManifest/zipManifest`。使用实际验证结果，不能填造通过记录。
+脚本要求 Release 的 `target_commitish`、两端构建记录源码提交和版本完全一致，且安装包均已上传并有 GitHub SHA-256。Mac 构建记录需包含 `version`、`applicationSourceRevision`、`releaseRevision`、`nodeTests` 及 `localChecks.dmgManifest/zipManifest`。使用实际验证结果，不能填造通过记录。
 
 4. **最后上传 `update-manifest.json`**，核对清单中的安装包大小/哈希与 GitHub 附件一致，再公开 Release 并设为最新。不可在公开发布中逐个替换附件，让用户取得混合版本。
-5. 从公开地址测试清单和两端安装包。已安装相同修订不提醒，较新产品版本或相同版本的较大修订号才提示更新。更新器只连接本仓库正式发布和 GitHub 发布 CDN，不需要自建更新服务器。
+5. 从公开地址测试清单和两端安装包。已安装相同版本不提醒，较新的产品版本才提示更新。更新器只连接本仓库正式发布和 GitHub 发布 CDN，不需要自建更新服务器。
 
-更新器仅下载到内部数据目录的 `updates`，下载与安装均需用户点击。Windows 原生入口再次校验包并以原安装目录启动向导；Mac 打开 DMG 后由用户退出、拖放替换。临时签名、公证和系统安全提示仍按原发布要求处理，哈希校验不等同于代码签名或公证。
+更新器仅下载到内部数据目录的 `updates`，下载与安装均需用户点击。安装会等待当前任务空闲，Windows 在原安装目录静默升级，Mac 校验并替换应用，失败时恢复原程序；安装后自动重新打开。临时签名、公证和系统安全提示仍按原发布要求处理，哈希校验不等同于代码签名或公证。

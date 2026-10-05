@@ -78,11 +78,16 @@ internal sealed class MainWindow : Form
     private readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(20, 16, 18) };
     private readonly Label splash = new() { Dock = DockStyle.Fill, Text = "正在打开菜播·录包机…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, Font = new Font("Microsoft YaHei UI", 14) };
     private bool choosingFolder, choosingClose;
+    private bool recovering, pageReady;
+    private DateTime? pageDeadline, pageReadySince;
+    private int recoveryAttempts;
     private static readonly JavaScriptSerializer Json = new() { MaxJsonLength = 16 * 1024 * 1024 };
 
     public MainWindow(string projectRoot, EventWaitHandle activationSignal, EventWaitHandle shutdown)
     {
         root = projectRoot; Text = "菜播·录包机";
+        int.TryParse(Environment.GetEnvironmentVariable("CAIBO_UI_RECOVERY_ATTEMPT"), out recoveryAttempts);
+        recoveryAttempts = Math.Min(3, Math.Max(0, recoveryAttempts));
         activation = activationSignal; backend = new BackendService(root);
         shutdownSignal = shutdown;
         BackColor = Color.FromArgb(20, 16, 18); StartPosition = FormStartPosition.CenterScreen;
@@ -137,13 +142,27 @@ internal sealed class MainWindow : Form
             web.CoreWebView2.NavigationStarting += (_, e) => { if (!IsLocal(e.Uri)) e.Cancel = true; };
             web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; if (IsAuthorPage(e.Uri)) OpenAuthorPage(e.Uri); };
             web.CoreWebView2.WebMessageReceived += OnWebMessage;
+            web.CoreWebView2.ProcessFailed += async (_, e) => {
+                if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited ||
+                    e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited ||
+                    e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive) await RecoverInterfaceAsync();
+            };
+            await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
+                (() => {
+                    const report = () => {
+                        if (document.getElementById('app')?.childElementCount > 0)
+                            window.chrome.webview.postMessage({action: 'interfaceReady'});
+                    };
+                    document.addEventListener('DOMContentLoaded', report, {once: true});
+                    setInterval(report, 2000);
+                })();");
             web.CoreWebView2.NavigationCompleted += (_, e) =>
             {
-                if (e.IsSuccess) { splash.Hide(); web.Focus(); }
-                else splash.Text = "界面加载失败，请关闭窗口后重新打开。\n后台录制不会因关闭窗口而停止。";
+                if (!e.IsSuccess && !closing) _ = RecoverInterfaceAsync();
             };
-            web.CoreWebView2.Navigate(backend.Origin);
             ready = true;
+            if (recoveryAttempts >= 3) { splash.Text = "自动恢复连续失败，已暂停重试。\n原有录像和设置会保留，请稍后重新打开软件。"; return; }
+            LoadInterface();
         }
         catch (Exception error)
         {
@@ -222,6 +241,8 @@ internal sealed class MainWindow : Form
     private async Task CheckBackendAsync()
     {
         if (activation.WaitOne(0)) { RestoreWindow(); backend.RefreshBuild(); }
+        if (pageReady && pageReadySince.HasValue && DateTime.UtcNow - pageReadySince.Value >= TimeSpan.FromSeconds(60)) recoveryAttempts = 0;
+        if (!closing && !recovering && !choosingFolder && !choosingClose && pageDeadline.HasValue && DateTime.UtcNow >= pageDeadline.Value) { await RecoverInterfaceAsync(); return; }
         if (checking || closing) return;
         if (!choosingClose && shutdownSignal.WaitOne(0)) { await RequestCloseAsync(true, true); return; }
         checking = true;
@@ -237,13 +258,40 @@ internal sealed class MainWindow : Form
             if (!ready) return;
             var previous = backend.Origin;
             await backend.EnsureAsync();
-            if (!IsDisposed && backend.Origin != previous) web.CoreWebView2.Navigate(backend.Origin);
+            if (!IsDisposed && backend.Origin != previous && recoveryAttempts < 3) LoadInterface();
         }
         catch (Exception error)
         {
             if (!IsDisposed && Visible) { splash.Text = "正在恢复后台连接…\n" + error.Message; splash.Show(); }
         }
         finally { checking = false; }
+    }
+
+    private void LoadInterface()
+    {
+        pageReady = false; pageReadySince = null; pageDeadline = DateTime.UtcNow.AddSeconds(30);
+        splash.Text = "正在打开界面，请稍候…"; splash.Show(); splash.BringToFront();
+        web.CoreWebView2.Navigate(backend.Origin);
+    }
+    private async Task RecoverInterfaceAsync()
+    {
+        if (closing || recovering || choosingClose || choosingFolder || !ready) return;
+        recovering = true; pageDeadline = null;
+        splash.Text = "正在自动恢复界面…\n录像和后台任务会继续保留。"; splash.Show(); splash.BringToFront();
+        try
+        {
+            var app = RuntimeDependencies.ApplicationDirectory(root);
+            var node = RuntimeDependencies.Resolve(root, "node", "node.exe", "NODE_EXE", "Node.js");
+            recoveryAttempts = Math.Min(3, recoveryAttempts + 1);
+            var start = new ProcessStartInfo(node) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = app };
+            start.Arguments = $"\"{Path.Combine(app, "server", "interface-recovery.js")}\" {Process.GetCurrentProcess().Id} \"{Application.ExecutablePath}\" \"{Path.Combine(app, "data")}\" {recoveryAttempts}";
+            start.EnvironmentVariables["RECORDER_PROJECT_ROOT"] = root;
+            using var helper = Process.Start(start) ?? throw new IOException("界面恢复助手未能启动。");
+            if (await backend.RegisterRecoveryAsync(helper.Id) is null) throw new IOException("后台连接暂时中断，请稍后重试。");
+            // Close only this window process; the helper keeps the backend live.
+            closing = true; Close();
+        }
+        catch (Exception error) { splash.Text = "自动恢复暂未完成\n" + error.Message; recovering = false; }
     }
 
     private async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -255,6 +303,13 @@ internal sealed class MainWindow : Form
             var request = Json.Deserialize<Dictionary<string, object>>(e.WebMessageAsJson);
             id = request.TryGetValue("id", out var rawId) ? rawId as string : null;
             var actionName = request.TryGetValue("action", out var action) ? action as string : null;
+            if (actionName == "interfaceReady")
+            {
+                if (recovering || closing || recoveryAttempts >= 3) return;
+                pageDeadline = DateTime.UtcNow.AddSeconds(30);
+                if (!pageReady) { pageReady = true; pageReadySince = DateTime.UtcNow; splash.Hide(); web.Focus(); }
+                return;
+            }
             if (actionName == "openExternal")
             {
                 var url = request.TryGetValue("url", out var rawUrl) ? rawUrl as string : null;

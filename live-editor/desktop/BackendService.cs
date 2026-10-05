@@ -110,6 +110,7 @@ internal sealed class BackendService : IDisposable
         }
     }
     internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", client, pid = Process.GetCurrentProcess().Id });
+    internal Task<BackendStatus?> RegisterRecoveryAsync(int pid) => CallAsync(new { action = "heartbeat", client = Guid.NewGuid().ToString(), pid });
     internal async Task SaveCloseActionAsync(string closeAction)
     {
         var status = await CallAsync(new { action = "setCloseAction", closeAction });

@@ -9,7 +9,7 @@ const busy=ref(false),message=ref(''),error=ref('');
 const update=computed(()=>props.state||{});
 const working=computed(()=>busy.value||['checking','downloading','installing'].includes(update.value.status));
 const percent=computed(()=>Math.min(100,Math.floor((update.value.received||0)/(update.value.candidate?.size||1)*100)));
-const status=computed(()=>({idle:'启动后会自动检查，也可手动检查。',checking:'正在检查更新…',current:'已是最新修订。',available:'发现可用更新',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验。',installing:'正在准备安装，完成后自动重新打开…',error:'暂时无法检查更新。'})[update.value.status]||'正在连接更新服务…');
+const status=computed(()=>({idle:'启动后会自动检查，也可手动检查。',checking:'正在检查更新…',current:'已是最新版本。',available:'发现可用更新',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验。',installing:'正在准备安装，完成后自动重新打开…',error:'暂时无法检查更新。'})[update.value.status]||'正在连接更新服务…');
 async function action(name,input={}){
   if(busy.value)return;busy.value=true;error.value='';message.value='';
   try{emit('changed',await api('updates/'+name,input));}catch(e){error.value=e.message;}finally{busy.value=false;}
@@ -19,13 +19,13 @@ async function action(name,input={}){
 
 <template>
   <section class="update-settings" aria-label="软件更新">
-    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.1.6' }}<small v-if="update.current"> · 修订 {{ update.current.revision }}</small></span></div>
+    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.1.7' }}</span></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>自动检查更新并提醒</label>
     <p class="muted">后台每天检查 GitHub 发布页；由你确认下载和安装，不会强制中断录制或导出。</p>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>检查更新</button><small v-if="update.checkedAt">上次检查 {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
     <p role="status">{{ status }}</p>
     <div v-if="update.candidate" class="update-available">
-      <strong>{{ update.candidate.version }} · 修订 {{ update.candidate.revision }}</strong>
+      <strong>{{ update.candidate.version }}</strong>
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
       <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" aria-label="更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">取消下载</button></template>
       <div v-else class="update-actions">

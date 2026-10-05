@@ -37,7 +37,7 @@ export async function update(requestFile){
       const source=path.join(mount,'菜播·录包机.app');
       if(await run('/usr/libexec/PlistBuddy',['-c','Print :CFBundleIdentifier',path.join(source,'Contents/Info.plist')]).then(s=>s.trim())!=='io.github.kk12091209.caibo')throw new Error('更新包不是本应用。');
       const info=JSON.parse(await fs.readFile(path.join(source,'Contents/Resources/live-editor/package.json'),'utf8'));
-      if(info.version!==request.version||info.buildRevision!==request.revision)throw new Error('更新包修订号不匹配。');
+      if(info.version!==request.version||(info.buildRevision??1)!==request.revision)throw new Error('更新包版本不匹配。');
       await run('/usr/bin/codesign',['--verify','--deep','--strict',source]);
       stage=path.join(path.dirname(target),`.Caibo-update-${path.basename(root)}.app`);backup=stage+'.backup';
       await fs.lstat(stage).then(()=>{throw new Error('更新暂存目录已存在。');},e=>{if(e.code!=='ENOENT')throw e;});

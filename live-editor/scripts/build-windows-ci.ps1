@@ -60,7 +60,7 @@ foreach ($extension in @('zip','7z')) {
 }
 & (Join-Path $PSScriptRoot 'test-installer.ps1') -ProjectRoot $root -Stage (Join-Path $output $name) -ToolsRoot $tools -Version $version
 & (Join-Path $PSScriptRoot 'package-source.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -OutputFile (Join-Path $output "Caibo-$version-source.zip") -RepositoryUrl 'https://github.com/kk12091209/Caibaoliverecorder.git'
-$metadata = [ordered]@{version=$version;buildRevision=(Get-Content live-editor/package.json -Raw | ConvertFrom-Json).buildRevision;sourceRevision=$revision;sourceUrl=$sourceUrl;runtimeBaseline='v0.1.3';runtimeBaselineZipSha256=$baselineSha;workflowRun=$env:GITHUB_RUN_ID;nodeTests='passed';coreTests='passed';coreLifecycle='passed';portableZip='passed';portable7z='passed';installerUpgradeUninstall='passed'}
+$metadata = [ordered]@{version=$version;sourceRevision=$revision;sourceUrl=$sourceUrl;runtimeBaseline='v0.1.3';runtimeBaselineZipSha256=$baselineSha;workflowRun=$env:GITHUB_RUN_ID;nodeTests='passed';coreTests='passed';coreLifecycle='passed';portableZip='passed';portable7z='passed';installerUpgradeUninstall='passed'}
 $metadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'windows-build.json') -Encoding UTF8
 $hashes = @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object { ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) + '  ' + $_.Name })
 [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS.txt'),($hashes -join "`n") + "`n",[Text.UTF8Encoding]::new($false))

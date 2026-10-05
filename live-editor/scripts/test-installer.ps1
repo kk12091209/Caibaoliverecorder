@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Stage,
     [Parameter(Mandatory=$true)][string]$ToolsRoot,
-    [string]$Version = '0.1.6',
+    [string]$Version = '0.1.7',
     [string]$ProjectRoot = '',
     [string]$QaInstaller = ''
 )
@@ -110,7 +110,7 @@ db.close();
     Copy-Item -LiteralPath $installer -Destination $autoPackage
     $dummy=Start-Process -FilePath $helperNode -ArgumentList '-e "setInterval(()=>{},1000)"' -PassThru -WindowStyle Hidden
     $requestFile=Join-Path $autoRoot 'request.json'
-    $request=@{schema=1;platform='win32';package=$autoPackage;target=$target;guiPid=$dummy.Id;backendPid=$dummy.Id;sha256=(Get-FileHash $autoPackage -Algorithm SHA256).Hash.ToLowerInvariant();version=$Version;revision=(Get-Content (Join-Path $app 'package.json') -Raw | ConvertFrom-Json).buildRevision}
+    $request=@{schema=1;platform='win32';package=$autoPackage;target=$target;guiPid=$dummy.Id;backendPid=$dummy.Id;sha256=(Get-FileHash $autoPackage -Algorithm SHA256).Hash.ToLowerInvariant();version=$Version;revision=[math]::Max(1,[int](Get-Content (Join-Path $app 'package.json') -Raw | ConvertFrom-Json).buildRevision)}
     [IO.File]::WriteAllText($requestFile,($request | ConvertTo-Json),$utf8)
     $helper=Start-Process -FilePath $helperNode -ArgumentList ('"'+$helperScript+'" "'+$requestFile+'"') -PassThru -WindowStyle Hidden
     try {

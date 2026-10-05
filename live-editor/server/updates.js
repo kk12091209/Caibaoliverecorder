@@ -9,14 +9,17 @@ const DAY = 86400000, MAX_PACKAGE = 512 * 1024 * 1024;
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw Object.assign(new Error(message),{updateError:true}); };
 export function releaseIdentity(value) {
-  if (!value || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(value.version) || !Number.isSafeInteger(value.revision) || value.revision < 1) fail('更新版本信息无效。');
-  return `${value.version}-r${value.revision}`;
+  if (!value || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(value.version) || (value.revision !== undefined && (!Number.isSafeInteger(value.revision) || value.revision < 1))) fail('更新版本信息无效。');
+  const parts=value.version.split('.').map(Number);
+  const legacy=parts[0]===0&&parts[1]===1&&parts[2]<=6;
+  return legacy ? `${value.version}-r${value.revision??1}` : value.version;
 }
 export function newerRelease(candidate, current) {
   releaseIdentity(candidate); releaseIdentity(current);
   const a=candidate.version.split('.').map(Number), b=current.version.split('.').map(Number);
   for(let i=0;i<3;i++)if(a[i]!==b[i])return a[i]>b[i];
-  return candidate.revision>current.revision;
+  // Older 0.1.6 installations can still recognize their historical updates.
+  return a[0]===0&&a[1]===1&&a[2]<=6&&(candidate.revision??1)>(current.revision??1);
 }
 export function packageName(version, platform) {
   return platform==='win32-x64' ? `BiliLiveEditor-${version}-win-x64-setup.exe` : platform==='darwin-arm64' ? `Caibo-${version}-macos-arm64.dmg` : '';
@@ -38,7 +41,7 @@ export function validateUpdate(release, manifest, current, platform) {
   const asset=releaseAsset(release,name);
   if(asset.digest!==`sha256:${item.sha256}`||asset.size!==item.size)fail('安装包与更新清单不一致，请稍后检查。');
   if(!Array.isArray(manifest.notes)||manifest.notes.length>12||manifest.notes.some(note=>typeof note!=='string'||note.length>500))fail('更新说明无效。');
-  return {key,version:manifest.version,revision:manifest.revision,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
+  return {key,version:manifest.version,revision:manifest.revision??1,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
 }
 
 // Only the project's GitHub endpoint and GitHub's release CDN are contacted.
