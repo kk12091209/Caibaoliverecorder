@@ -300,6 +300,11 @@ async function createManagedApp(options,runtime) {
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const app=await createApp({noRecorder:process.env.NO_RECORDER==='1'});
+  const close=app.close.bind(app);
+  // Only the standalone backend owns this process. After every tracked task,
+  // database and server has closed, release its executable as well: unrelated
+  // keep-alive handles must not hold an idle installation open indefinitely.
+  app.close=async()=>{await close();process.exit(0);};
   console.log(`录播机已启动：http://127.0.0.1:${app.port}\n素材目录：${app.root}`);
   for(const event of ['SIGINT','SIGTERM'])process.once(event,async()=>{await app.close();process.exit(0);});
 }

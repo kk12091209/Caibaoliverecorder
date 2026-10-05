@@ -126,7 +126,10 @@ import IOKit.pwr_mgt
         menu.addItem(withTitle: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem.menu = menu
     }
-    @objc func showWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    func renewInterfaceDeadline() { if pageLoading || pageReady { pageDeadline = Date().addingTimeInterval(30) } }
+    @objc func showWindow() { renewInterfaceDeadline(); window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    func applicationDidBecomeActive(_ notification: Notification) { renewInterfaceDeadline() }
+    func windowDidDeminiaturize(_ notification: Notification) { renewInterfaceDeadline() }
     @objc func openExports() {
         Task {
             guard let origin = backend.origin else { return }
@@ -154,7 +157,9 @@ import IOKit.pwr_mgt
     func poll() async {
         // A stuck WebContent process must not block the native timeout or the
         // backend heartbeat. Keep this check outside the in-flight guards.
-        if (pageLoading || pageReady), !choosing, !terminating, !backend.exitRequested, let deadline = pageDeadline, Date() >= deadline {
+        let visible = window.isVisible && !window.isMiniaturized && !NSApp.isHidden
+        if !visible { renewInterfaceDeadline() }
+        if visible, (pageLoading || pageReady), !choosing, !terminating, !backend.exitRequested, let deadline = pageDeadline, Date() >= deadline {
             failPage(pageReady ? "界面暂时无响应。" : "界面加载超时。", retry: true)
         }
         if pageReady, let since = pageReadySince, Date().timeIntervalSince(since) >= 60 { pageRetries = 0 }
@@ -195,6 +200,10 @@ import IOKit.pwr_mgt
     }
     func failPage(_ message: String, retry: Bool) {
         guard !terminating, !pageFailed else { return }
+        if retry, !window.isVisible || window.isMiniaturized || NSApp.isHidden {
+            pageLoading = true; pageDeadline = Date().addingTimeInterval(30)
+            return
+        }
         pageGeneration += 1; pageLoading = false; pageReady = false; pageFailed = true; pageDeadline = nil; pageReadySince = nil
         web.stopLoading(); logStartup("界面加载失败：\(message)")
         guard retry, let origin = backend.origin else { showStartupFailure(message); return }

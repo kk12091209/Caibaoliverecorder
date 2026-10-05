@@ -185,6 +185,7 @@ internal sealed class MainWindow : Form
     private void RestoreWindow()
     {
         if (closing) return;
+        if (pageDeadline.HasValue) pageDeadline = DateTime.UtcNow.AddSeconds(30);
         Show(); WindowState = FormWindowState.Normal; Activate(); tray.Visible = false;
     }
     private void KeepInTray(string message)
@@ -241,8 +242,10 @@ internal sealed class MainWindow : Form
     private async Task CheckBackendAsync()
     {
         if (activation.WaitOne(0)) { RestoreWindow(); backend.RefreshBuild(); }
+        var visible = Visible && WindowState != FormWindowState.Minimized;
+        if (!visible && pageDeadline.HasValue) pageDeadline = DateTime.UtcNow.AddSeconds(30);
         if (pageReady && pageReadySince.HasValue && DateTime.UtcNow - pageReadySince.Value >= TimeSpan.FromSeconds(60)) recoveryAttempts = 0;
-        if (!closing && !recovering && !choosingFolder && !choosingClose && pageDeadline.HasValue && DateTime.UtcNow >= pageDeadline.Value) { await RecoverInterfaceAsync(); return; }
+        if (visible && !closing && !exitWhenReady && !recovering && !choosingFolder && !choosingClose && pageDeadline.HasValue && DateTime.UtcNow >= pageDeadline.Value) { await RecoverInterfaceAsync(); return; }
         if (checking || closing) return;
         if (!choosingClose && shutdownSignal.WaitOne(0)) { await RequestCloseAsync(true, true); return; }
         checking = true;
@@ -275,7 +278,7 @@ internal sealed class MainWindow : Form
     }
     private async Task RecoverInterfaceAsync()
     {
-        if (closing || recovering || choosingClose || choosingFolder || !ready) return;
+        if (closing || exitWhenReady || recovering || choosingClose || choosingFolder || !ready || !Visible || WindowState == FormWindowState.Minimized) return;
         recovering = true; pageDeadline = null;
         splash.Text = "正在自动恢复界面…\n录像和后台任务会继续保留。"; splash.Show(); splash.BringToFront();
         try

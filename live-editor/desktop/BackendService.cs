@@ -151,6 +151,26 @@ internal sealed class BackendService : IDisposable
         }
         return false;
     }
+    private bool InstallationRuntimeActive()
+    {
+        var paths = new[] {
+            Path.Combine(root, "程序组件", "runtime", "node", "node.exe"),
+            Path.Combine(root, "程序组件", "runtime", "recorder", "BililiveRecorder.Cli.exe"),
+            Path.Combine(root, "程序组件", "runtime", "ffmpeg", "ffmpeg.exe"),
+            Path.Combine(root, "程序组件", "runtime", "ffmpeg", "ffprobe.exe")
+        };
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                try { if (paths.Any(file => SamePath(file, process.MainModule?.FileName ?? ""))) return true; }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+                catch (ArgumentException) { }
+            }
+        }
+        return false;
+    }
     internal async Task<int> PrepareMaintenanceAsync()
     {
         // Install/uninstall must never launch a service or interrupt work.
@@ -167,7 +187,7 @@ internal sealed class BackendService : IDisposable
         shutdown.Set(); await RequestExitAsync();
         for (var n = 0; n < 120; n++)
         {
-            if (!HasDataWriter() && !DesktopActive()) return 0;
+            if (!HasDataWriter() && !DesktopActive() && !InstallationRuntimeActive()) return 0;
             await Task.Delay(250);
         }
         return 3;
