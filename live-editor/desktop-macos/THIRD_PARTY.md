@@ -8,9 +8,10 @@ The macOS window uses Apple's system AppKit and WKWebView frameworks.
 - FFmpeg/FFprobe 9.0.2, Apple Silicon release build 1789931890_9.0.2 from https://ffmpeg.martin-riedl.de/ . Original binary URLs and SHA-256 are pinned in scripts/prepare-macos.sh. Source: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz . Build scripts: https://git.martin-riedl.de/ffmpeg/build-script . Exact dependency versions: ffmpeg-versions.txt. FFmpeg's COPYING.GPLv3 and LICENSE.md are included. The build contains libass and libx264 and is GPL-enabled.
 - Vue and Lucide versions are recorded in editor-dependencies.json; license files are included alongside it.
 
-Corresponding application source is published with the v0.1.4 release, including
+Corresponding application source is published alongside each application release, including
 submodule source, Swift shell, build scripts, Node service, UI and recorder changes:
-https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.4
+https://github.com/kk12091209/Caibaoliverecorder/releases
+Choose the release matching the installed version and its Caibo-VERSION-source.zip.
 
 The exact supplier configuration and dependency version inventory is included in
 ffmpeg-versions.txt. FFmpeg and dependency upstream source locations are listed in
