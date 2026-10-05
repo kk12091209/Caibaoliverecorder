@@ -10,7 +10,9 @@ export async function recoverInterface({pid, target, data, attempt}, {
   isAlive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } },
   pause = ms => new Promise(resolve => setTimeout(resolve, ms)),
   launch = (file, args, env) => new Promise((resolve, reject) => {
-    const child = spawn(file, args, {env, detached: true, stdio: 'ignore', windowsHide: true});
+    // The restarted Windows GUI must be visible. The native host already
+    // starts this Node helper without a console window.
+    const child = spawn(file, args, {env, detached: true, stdio: 'ignore', windowsHide: false});
     child.once('error', reject); child.once('spawn', () => { child.unref(); resolve(); });
   }),
   fetcher = fetch, timeoutMs = 30000, keepAliveMs = 10000,
