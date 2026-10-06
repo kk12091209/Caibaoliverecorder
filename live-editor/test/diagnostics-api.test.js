@@ -16,6 +16,9 @@ test('settings expose a fixed log directory; desktop events require authenticati
   const headers={'Content-Type':'application/json','X-Caibo-Instance':app.runtime.token};
   response=await fetch(origin+'/internal/desktop',{method:'POST',headers,body:JSON.stringify({action:'heartbeat',client:'a'.repeat(32),pid:process.pid,clientKind:'desktop'})});assert.equal(response.status,200);await response.json();
   response=await fetch(origin+'/internal/desktop',{method:'POST',headers,body:JSON.stringify(event)});assert.equal(response.status,200);await response.json();
+  app.recorder.action=async()=>{};
+  for(const action of ['start','stop','auto']){response=await fetch(origin+`/api/rooms/280446/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});assert.equal(response.status,200);await response.json();}
   await app.close();const names=(await fs.readdir(state.paths.logs)).filter(name=>name.endsWith('.txt'));const text=await fs.readFile(path.join(state.paths.logs,names[0]),'utf8');
+  assert.match(text,/直播间 280446：stop 已成功执行/);assert.match(text,/停止录制与监控/);assert.match(text,/直播间 280446：auto 已成功执行/);
   assert.match(text,/打开应用/);assert.match(text,/native test failed/);assert.match(text,/后台正常退出/);assert.equal(text.includes('private-token'),false);assert.equal(text.includes(app.runtime.token),false);
 });

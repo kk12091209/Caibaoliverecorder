@@ -87,3 +87,8 @@ test('bounded lifecycle tail retains valid closing records even for maximum-widt
   const f=await fixture(t);for(let n=0;n<200;n++)await f.log.record('桌面','😀'.repeat(1600)+n,{important:true});await f.log.close();
   const bytes=await fs.readFile(path.join(f.log.directory,'2026-10-06.txt'));assert.ok(bytes.length<=LOG_MAX_BYTES);assert.match(bytes.toString('utf8'),/本次关闭汇总/);
 });
+
+test('coalesced events retain their identity when one component reports different repeated faults',async t=>{
+ const f=await fixture(t);for(let n=0;n<4;n++){await f.log.record('核心','磁盘错误');await f.log.record('核心','网络错误');}await f.log.tick();
+ const text=await f.read('2026-10-06');assert.match(text,/磁盘错误（相同记录又出现 3 次/);assert.match(text,/网络错误（相同记录又出现 3 次/);
+});

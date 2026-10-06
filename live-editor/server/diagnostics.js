@@ -100,14 +100,14 @@ export class DailyDiagnostics{
       await this.rotate(day);this.counts.events++;if(level==='警告')this.counts.warnings++;if(level==='错误')this.counts.errors++;
       const key=source+'|'+level+'|'+text,previous=this.repeat.get(key);
       if(previous&&at-previous.at<60000&&!important){previous.count++;return;}
-      if(previous?.count)await this.append(day,`[${stamp(at)}] [${level}] ${source}：此前相同记录重复 ${previous.count} 次。\n`);
+      if(previous?.count)await this.append(day,`[${stamp(at)}] [${level}] ${source}：${text}（此前相同记录重复 ${previous.count} 次）。\n`);
       if(this.repeat.size>=256&&!this.repeat.has(key)){await this.flushRepeats();this.repeat.clear();}
-      this.repeat.set(key,{at,count:0,source,level});
+      this.repeat.set(key,{at,count:0,source,level,text});
       await this.append(day,`[${stamp(at)}] [${level}] ${source}：${text}\n`,important);
     });
   }
   async flushRepeats(){
-    for(const item of this.repeat.values())if(item.count){await this.append(this.day,`[${stamp(this.now())}] [${item.level}] ${item.source}：相同记录又出现 ${item.count} 次（已合并）。\n`);item.count=0;}
+    for(const item of this.repeat.values())if(item.count){await this.append(this.day,`[${stamp(this.now())}] [${item.level}] ${item.source}：${item.text}（相同记录又出现 ${item.count} 次，已合并）。\n`);item.count=0;}
   }
   async summary(label){
     await this.append(this.day,`[${stamp(this.now())}] [汇总] ${label}：累计事件 ${this.counts.events}，警告 ${this.counts.warnings}，错误 ${this.counts.errors}；队列或文件上限省略 ${this.dropped} 条。\n`,true);this.dropped=0;

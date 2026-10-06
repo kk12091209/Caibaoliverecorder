@@ -181,7 +181,7 @@ async function createManagedApp(options,runtime) {
         return json(res,preparation.snapshot());
       }
       if((match=/^\/api\/rooms\/(\d+|douyin:\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
-        const input=await body(req);diagnostics.record('用户操作',`直播间 ${match[1]}：${{start:'手动开始录制',stop:'停止录制',auto:'设置自动录制',remove:'移除监控'}[match[2]]}${match[2]==='auto'?`；启用=${input.enabled===true}`:''}`);await recorder.action(match[1],match[2],input);return json(res,{ok:true});
+        const input=await body(req);diagnostics.record('用户操作',`直播间 ${match[1]}：${{start:'手动开始录制',stop:'停止录制与监控',auto:'设置自动录制',remove:'移除监控'}[match[2]]}${match[2]==='auto'?`；启用=${input.enabled===true}`:''}`);try{await recorder.action(match[1],match[2],input);diagnostics.record('监控操作完成',`直播间 ${match[1]}：${match[2]} 已成功执行`);}catch(error){diagnostics.record(`直播间 ${match[1]} ${match[2]} 操作失败`,error,{level:'错误'});throw error;}return json(res,{ok:true});
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
