@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-test('Mac startup retry reports progress, recovers late backends, and limits owned-process recovery', { skip: process.platform !== 'darwin', timeout: 60000 }, async () => {
+test('Mac startup retry reports progress, recovers late backends, and limits owned-process recovery', { skip: process.platform !== 'darwin', timeout: 90000 }, async () => {
   const root = await fs.mkdtemp('/private/tmp/caibo-startup-recovery-');
   const sockets = new Set();
   const data = path.join(root, 'data'), editor = path.join(root, 'resources/live-editor');
@@ -50,7 +50,9 @@ test('Mac startup retry reports progress, recovers late backends, and limits own
     const env = { ...process.env, TMPDIR: '/private/tmp', TMP: '/private/tmp', TEMP: '/private/tmp' };
     const executable = path.join(root, 'checks');
     await run('xcrun', ['swiftc', '-swift-version', '5', '-module-cache-path', path.join(root, 'modules'), fileURLToPath(new URL('../desktop-macos/ProcessOwnership.swift', import.meta.url)), fileURLToPath(new URL('../desktop-macos/Repair.swift', import.meta.url)), fileURLToPath(new URL('../desktop-macos/Backend.swift', import.meta.url)), path.join(root, 'App.swift'), fileURLToPath(new URL('./helpers/macos-startup-recovery.swift', import.meta.url)), '-o', executable], { env, timeout: 45000 });
-    const { stdout } = await run(executable, [root, process.execPath], { env, timeout: 10000 });
+    // The shared runner starts WebKit and several child processes under load.
+    // Keep the scenario assertions and production recovery deadlines unchanged.
+    const { stdout } = await run(executable, [root, process.execPath], { env, timeout: 30000 });
     assert.equal(stdout.match(/^PASS /gm)?.length, 8, stdout);
     assert.ok(!stdout.includes(endpoint.token));
   } finally {

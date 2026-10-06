@@ -101,7 +101,9 @@ test('启动状态文件写入失败不会阻断后台启动，也不会删除�
   assert.equal(JSON.parse(await fs.readFile(app.runtime.startupFile)).instance, 'another-instance');
 });
 
-test('实际后台收到恢复停止信号后保留导出恢复记录、录像和日志并安全退出', { timeout: 15000 }, async t => {
+// Windows kill('SIGTERM') terminates the process without running a signal
+// handler. Its authenticated desktop quit path is covered by desktop-exit.
+test('实际后台收到恢复停止信号后保留导出恢复记录、录像和日志并安全退出', { skip: process.platform==='win32', timeout: 15000 }, async t => {
   const data = await fixture(t), original = path.join(data, 'existing.flv');
   await fs.writeFile(original, 'existing recording');
   const child = spawn(process.execPath, [path.join(appRoot, 'server/index.js')], {
