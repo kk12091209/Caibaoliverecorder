@@ -2,7 +2,7 @@
   <img src="live-editor/src/assets/app-icon.png" width="88" alt="菜播·录包机图标" />
   <h1>菜播·录包机</h1>
   <p>B 站与抖音直播录制、回看与弹幕剪辑，在一个本地工作台完成。</p>
-  <p><a href="https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.7">下载 Windows 版</a> · <a href="https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.7">下载 Mac 版</a> · <a href="#快速开始">使用说明</a> · <a href="live-editor/README.md">开发文档</a> · <a href="https://github.com/kk12091209/Caibaoliverecorder/issues">反馈问题</a> · <a href="https://space.bilibili.com/5162836">联系我们</a></p>
+  <p><a href="https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.8">下载 Windows 版</a> · <a href="https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.8">下载 Mac 版</a> · <a href="#快速开始">使用说明</a> · <a href="live-editor/README.md">开发文档</a> · <a href="https://github.com/kk12091209/Caibaoliverecorder/issues">反馈问题</a> · <a href="https://space.bilibili.com/5162836">联系我们</a></p>
 </div>
 
 菜播·录包机面向希望保留直播、挑选片段并制作弹幕视频的用户。基于 [BililiveRecorder](https://github.com/BililiveRecorder/BililiveRecorder) 的录制核心，增加连续时间轴、边录边剪、音频波形、弹幕密度和导出工作台。视频和编辑数据保存在本机。
@@ -13,8 +13,8 @@
 
 | 系统 | 版本与下载 | 要求 |
 | --- | --- | --- |
-| **Mac（M 系列）** | **[v0.1.7 测试版 DMG](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.7/Caibo-0.1.7-macos-arm64.dmg)** · [ZIP 备用下载](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.7/Caibo-0.1.7-macos-arm64.zip) | Apple Silicon，macOS 14 或更新；暂不支持 Intel Mac |
-| **Windows x64** | **[v0.1.7 中文安装包](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.7/BiliLiveEditor-0.1.7-win-x64-setup.exe)** · [ZIP / 7z 便携版](https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.7) | Windows 10 / 11，.NET Framework 4.7.2+，[WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| **Mac（M 系列）** | **[v0.1.8 测试版 DMG](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.8/Caibo-0.1.8-macos-arm64.dmg)** · [ZIP 备用下载](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.8/Caibo-0.1.8-macos-arm64.zip) | Apple Silicon，macOS 14 或更新；暂不支持 Intel Mac |
+| **Windows x64** | **[v0.1.8 中文安装包](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.1.8/BiliLiveEditor-0.1.8-win-x64-setup.exe)** · [ZIP / 7z 便携版](https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.8) | Windows 10 / 11，.NET Framework 4.7.2+，[WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
 
 运行包包含 Node.js、FFmpeg / FFprobe 和录制核心，普通用户无需安装开发环境。不要下载 `Source code` 作为安装包。文件大小及 SHA-256 见对应 Release。
 
@@ -22,15 +22,14 @@
 
 **首次打开：** Mac 测试版采用临时签名，**未经过 Apple 公证**。从本仓库下载后，若系统因无法验证开发者而阻止打开，先尝试打开一次，再到“系统设置 → 隐私与安全性”找到该应用并点击“仍要打开”，按提示确认。具体操作见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。无需关闭整个系统的安全检查。受管理的电脑可能不允许例外。
 
-### v0.1.7 更新（Mac / Windows 版本统一）
+### v0.1.8 更新（Mac / Windows 版本统一）
 
-- 界面启动时或使用途中持续无响应，会自动恢复窗口并重新连接后台，无需先手动点击重置。恢复窗口时保留录像、设置和后台任务；连续失败后暂停自动重试并显示明确提示。
-- Mac 启动增加加载状态和界面资源检查，避免遇到加载故障时长时间只显示白屏；后台连接使用总超时限制。
-- 软件更新只显示版本号，后续小更新按 0.1.8、0.1.9 递增；两端从同一提交构建。
-- 支持应用内下载、校验、安装并自动重启，安装等待任务空闲。已有内置更新功能的用户可在“设置 → 软件更新”点击“更新并重启”；更早的版本手动覆盖安装一次即可。
-- 保留字体导入、播放时扩大预览、短窗口滚动和每个选段独立排队导出的功能。升级无需先卸载，录像与设置保留。
-
-测试版已在本机完成短时 B 站、抖音实播录制和导出验证；尚未完成其他 Mac、macOS 14 实机及长时间录制验收。详情见 [Mac 说明](live-editor/docs/MACOS.md) 和 [更新记录](CHANGELOG.md)。
+- **每日运行日志**：设置 →「点击查看日志文件」，打开按北京时间命名的 `YYYY-MM-DD.txt`。当天持续写入；下次打开时补充之前使用日的汇总，没有使用的日期不会生成文件。
+- 记录应用打开、退出、录制开关、直播状态、录制文件开始与结束、连接重试、素材整理／删除和导出异常。未能确定的原因明确注明；不会记录弹幕正文、Cookie、认证令牌或直播流链接。
+- 每份 TXT 最多 **512 KiB**，重复记录合并，仅保留最近 **30 个自然日**；日志只存本机。强制结束时，下次启动补记最后存活时间，无法推测准确退出时间。
+- **持续运行**：修复抖音检查循环因异常停止的问题；重连保留用户的录制开关，Windows 后台连接有 60 秒总时限。两端在监控或任务运行时请求防止系统空闲休眠，允许屏幕关闭；唤醒后继续检查。
+- 这些机制已通过代码检查和模拟长期运行的自动化测试验证，未进行连续多日的真机测试。关闭软件、断电、系统强制休眠或合盖期间无法录制，也无法补录。
+- 保留 0.1.7 的界面自动恢复和安全退出改进。产品版本显示统一为 **0.1.8**；已有内置更新功能的用户可在应用内更新。
 
 ## 可以做什么
 
@@ -41,7 +40,7 @@
 - **两种时间定位**：按视频时间点定位，或按北京时间选择录制日期与时刻，支持跨午夜。
 - **波形与弹幕密度**：进度条内显示音频波形，下方显示有效弹幕密度；可缩放和横向浏览长录像。
 - **弹幕编辑与限流**：搜索、跟随播放位置、手动排除消息；内置过滤礼物、整条表情占位消息，以及能识别的福袋 / 天选抽奖口令。每个房间的每秒上限可调 1～50；30 字及以上过滤，10 秒内同文达到 5 条只留一条，少量重复保留。
-- **三种导出模式**：纯净版、弹幕版、纯净 + 弹幕双文件。Windows v0.1.7 / Mac v0.1.7 每个勾选片段创建独立任务，按列表顺序逐个导出，也能导出完整素材。
+- **三种导出模式**：纯净版、弹幕版、纯净 + 弹幕双文件。Windows v0.1.8 / Mac v0.1.8 每个勾选片段创建独立任务，按列表顺序逐个导出，也能导出完整素材。
 - **录完自动预处理**：素材正常结束并整理完成后，加入弹幕预处理队列。需要成片时手动导出；兼容的完整纯净版直接复制音视频码流，不重新编码。
 - **复用弹幕缓存**：预览、选段和波形分析时预处理继续；录制、正式导出和素材整理时暂缓。导出复用已完成且仍有效的块，缺口再处理。
 - **任务管理**：右键取消进行中的导出，或二次确认后删除某个导出任务及其成片；编码完成但保存失败可重试保存。
@@ -53,7 +52,7 @@
 2. Mac 从“应用程序”打开“菜播·录包机”；Windows 打开 `录播机.exe`。
 3. 添加 B 站或抖音直播链接、纯数字房间号。只有一个匹配时直接添加；两边同号时弹窗显示主播名、平台和开播状态，选择后确认添加。取消不会启用监控；平台暂时无法查询时可重试或使用完整链接。未开播时保持监控；“停止”会停止该房间的监控或录制，重开软件仍保持停止，“开始”才重新启用。
 4. 在左侧选择录像素材，播放回看，通过波形和弹幕密度寻找片段。起终点旁实时显示片段时长，拖动标记可微调。设置起终点后点击“添加选段”。
-5. 勾选需要的片段，点击“导出选段”，选择纯净版、弹幕版或双文件；Windows v0.1.7 / Mac v0.1.7 每个片段分别生成一个导出任务，按顺序逐个处理；每个任务生成所选版本的视频。
+5. 勾选需要的片段，点击“导出选段”，选择纯净版、弹幕版或双文件；Windows v0.1.8 / Mac v0.1.8 每个片段分别生成一个导出任务，按顺序逐个处理；每个任务生成所选版本的视频。
 6. 录制结束并整理完成后，右键已完成的素材 →“导出完整素材”，选择纯净版、弹幕版或双文件。
 7. 在导出任务中点击“打开文件夹”查看成片。
 

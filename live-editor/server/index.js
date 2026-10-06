@@ -23,22 +23,28 @@ import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
 import { Updates } from './updates.js';
 import { AutoUpdate } from './auto-update.js';
+import { DailyDiagnostics } from './diagnostics.js';
 import { listenLocal } from './local-endpoint.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
   const root=path.resolve(options.data??process.env.EDITOR_DATA??path.join(appRoot,'data'));
   const runtime=await ServiceRuntime.acquire(root,appRoot,{managed:options.desktopManaged??process.env.EDITOR_DESKTOP_MANAGED==='1',...options.runtimeOptions});
-  try{return await createManagedApp(options,runtime);}catch(error){await runtime.release();throw error;}
+  try{
+    const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
+    runtime.diagnostics=await DailyDiagnostics.open(root,{version:packageInfo.version,...options.diagnosticOptions});
+    runtime.diagnostics.protectSecret(runtime.token);
+    return await createManagedApp(options,runtime);
+  }catch(error){runtime.diagnostics?.record('启动',error,{level:'错误'});await runtime.diagnostics?.close('启动失败，后台退出');await runtime.release();throw error;}
 }
 async function createManagedApp(options,runtime) {
   let port=Number(options.port??process.env.EDITOR_PORT??0);
-  const root=runtime.root;
+  const root=runtime.root,diagnostics=runtime.diagnostics;
   const projectRoot=resolveProjectRoot(appRoot,options.projectRoot??process.env.EDITOR_PROJECT_ROOT);
   const ffmpeg=resolveRuntimeTool(projectRoot,'ffmpeg',{override:options.ffmpeg});
   const ffprobe=resolveRuntimeTool(projectRoot,'ffprobe',{override:options.ffprobe});
   const executable=options.noRecorder?'':resolveRuntimeTool(projectRoot,'recorder',{override:options.recorder,required:false});
-  const store=new Store(root);
+  const store=new Store(root);store.diagnostics=diagnostics;
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
@@ -82,7 +88,7 @@ async function createManagedApp(options,runtime) {
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {danmakuFont:media.fonts.snapshot(),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -106,6 +112,8 @@ async function createManagedApp(options,runtime) {
       const host=req.headers.host||'';
       if(!new Set([`127.0.0.1:${port}`,`localhost:${port}`]).has(host)){json(res,{error:'无效的本机访问地址。'},403);return;}
       const url=new URL(req.url,`http://${host}`),p=url.pathname;
+      // Record only the operation name, never query strings or request bodies.
+      if(req.method==='POST'&&p.startsWith('/api/'))res.once('finish',()=>{const parts=p.split('/');diagnostics.record('操作结果',`${parts[2]} / ${parts.length>4?parts.at(-1):''}；HTTP ${res.statusCode}`,{level:res.statusCode>=400?'警告':'信息'});});
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
       if(p==='/internal/desktop'){
         if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);
@@ -114,10 +122,11 @@ async function createManagedApp(options,runtime) {
           if(input.action==='cancelUpdate'){await autoUpdate.cancel();return json(res,runtime.status(activity()));}
           else if(input.action==='applyUpdate')return json(res,{...runtime.status(activity()),...await autoUpdate.apply(input)});
           else if(input.action==='prepareUpdate'){const updatePath=await updates.installPath();return json(res,{...runtime.status(activity()),updatePath});}
-          else if(input.action==='heartbeat')runtime.heartbeat(input.client,input.pid);
-          else if(input.action==='detach')runtime.clients.delete(input.client);
+          else if(input.action==='heartbeat'){runtime.heartbeat(input.client,input.pid);diagnostics.desktop(input.client,input.pid,input.clientKind??'desktop');}
+          else if(input.action==='diagnostic'){if(typeof input.message!=='string'||input.message.length>3000)throw new Error('运行记录无效。');diagnostics.record('桌面',input.message,{level:input.warning===true?'警告':'信息'});}
+          else if(input.action==='detach'){runtime.clients.delete(input.client);diagnostics.record('桌面','关闭桌面连接',{important:true});}
           else if(input.action==='setCloseAction'){validateCloseAction(input.closeAction);store.setting('window-close-action',input.closeAction);}
-          else if(input.action==='quit'){const decision=await desktopExit.request(input.confirmed??false);return json(res,{...runtime.status(activity()),...decision,closeAction:closeAction()});}
+          else if(input.action==='quit'){diagnostics.record('用户操作',`请求退出；已确认停止任务：${input.confirmed===true?'是':'否'}`,{important:true});const decision=await desktopExit.request(input.confirmed??false);return json(res,{...runtime.status(activity()),...decision,closeAction:closeAction()});}
           else if(['exit','restart'].includes(input.action))runtime.request(input.action);
           else throw new Error('无效的桌面操作。');
         }else if(req.method!=='GET')return json(res,{error:'请求方式无效。'},405);
@@ -152,7 +161,7 @@ async function createManagedApp(options,runtime) {
         await recorder.event(await body(req));return json(res,{ok:true});
       }
       if(p==='/api/rooms'&&req.method==='POST'){
-        const result=await recorder.addRoom(await body(req));return json(res,result);
+        const input=await body(req),result=await recorder.addRoom(input);diagnostics.record('用户操作',`添加监控；平台 ${result?.platform||'bilibili'}；房间 ${result?.roomId||result?.webRid||'见房间状态'}；自动录制=${input.autoRecord!==false}`);return json(res,result);
       }
 
       if(p==='/api/preparation/settings'&&req.method==='POST'){
@@ -172,7 +181,7 @@ async function createManagedApp(options,runtime) {
         return json(res,preparation.snapshot());
       }
       if((match=/^\/api\/rooms\/(\d+|douyin:\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
-        await recorder.action(match[1],match[2],await body(req));return json(res,{ok:true});
+        const input=await body(req);diagnostics.record('用户操作',`直播间 ${match[1]}：${{start:'手动开始录制',stop:'停止录制',auto:'设置自动录制',remove:'移除监控'}[match[2]]}${match[2]==='auto'?`；启用=${input.enabled===true}`:''}`);await recorder.action(match[1],match[2],input);return json(res,{ok:true});
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
@@ -243,7 +252,7 @@ async function createManagedApp(options,runtime) {
       if(!target.startsWith(dist+path.sep)&&target!==dist)return json(res,{error:'无效路径。'},403);
       if(p==='/'||!path.extname(target))target=path.join(dist,'index.html');
       return await sendFile(req,res,target);
-    }catch(e){if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
+    }catch(e){diagnostics.record('请求处理',e,{level:'错误'});if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
   });
   try{port=await listenLocal(server,port);}
   catch(error){media.close();await recorder.close();store.close();throw error;}
@@ -254,9 +263,9 @@ async function createManagedApp(options,runtime) {
   let nextTemporarySweep=0;
   const maintain=()=>{
     if(closing||autoUpdate.applying)return;
-    void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;});
-    if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;});
-    if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;});}
+    void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;diagnostics.record('自动清理',error,{level:'警告'});});
+    if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;diagnostics.record('素材整理',error,{level:'警告'});});
+    if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;diagnostics.record('缓存清理',error,{level:'警告'});});}
   };
   const maintenanceTimer=setInterval(maintain,5000);
   const runtimeTimer=setInterval(()=>{
@@ -265,20 +274,35 @@ async function createManagedApp(options,runtime) {
     void(async()=>{
       if(runtime.pending!=='restart'&&!options.noRecorder&&!await recorder.stopIdle()){runtime.stopping=false;return;}
       await app.close();
-    })().catch(error=>{runtime.stopping=false;runtime.lastError=error.message;});
+    })().catch(error=>{runtime.stopping=false;runtime.lastError=error.message;diagnostics.record('退出',error,{level:'错误'});});
   },options.runtimePollMs??1000);
   maintain();
   if(options.updatesAutoCheck??runtime.managed)updates.start();
-  const timer=setInterval(async()=>{
+  const timer=setInterval(()=>{
+    try{
     if(closing)return;
     for(const s of store.all("SELECT * FROM sessions WHERE status IN ('importing','finishing')")){
       const sources=store.sources(s.id);if(sources.length&&sources.every(x=>x.closed===2))store.run("UPDATE sessions SET status='finished' WHERE id=?",s.id);
     }
     for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
+    }catch(error){diagnostics.record('界面状态推送',error,{level:'错误'});}
   },1000);
+  const diagnosticPoll=()=>{
+    if(closing)return;
+    try{
+      diagnostics.rooms(recorder.rooms,{biliOnline:recorder.online});
+      diagnostics.observe('core',`B站核心：${recorder.online?'已连接':recorder.error||'正在连接'}`,recorder.online?'信息':'警告');
+      diagnostics.observe('activity',`后台工作：${activity().reason||'空闲'}`);
+      for(const source of store.all('SELECT id,error,closed FROM sources ORDER BY rowid DESC LIMIT 16'))if(source.error)diagnostics.observe('source:'+source.id,`素材 ${source.id} 错误：${source.error}`,'错误');
+      for(const job of store.all('SELECT id,status,error FROM jobs ORDER BY rowid DESC LIMIT 32'))diagnostics.observe('job:'+job.id,`导出 ${job.id}：${job.status}${job.error?'；'+job.error:''}`,job.error?'错误':'信息');
+      if(runtime.quitError)diagnostics.observe('quit-error',`退出未完成：${runtime.quitError}`,'错误');
+      void diagnostics.tick();
+    }catch(error){diagnostics.record('运行检查',error,{level:'错误'});}
+  };
+  const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  app={updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
+  app={diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
@@ -293,6 +317,7 @@ async function createManagedApp(options,runtime) {
     await httpClosed;
     await recorderClosed;
     while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
+    await diagnostics.close();
     store.close();
     await runtime.release();
   })();}};

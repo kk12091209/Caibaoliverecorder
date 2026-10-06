@@ -42,7 +42,7 @@ export class SessionDeletion {
       catch (error) {
         const phase = task.control.phase || 'resources';
         this.store.run('UPDATE sessions SET purge_error=? WHERE id=?', `${error.message}（${task.control.detail || phase}）`, id);
-        console.warn(JSON.stringify({ event: 'material-delete-retry', session: id, phase, attempt: task.attempt, code: error.code || 'DELETE_FAILED' }));
+        this.store.diagnostics?.record('素材删除',`素材 ${id}；阶段 ${phase}；重试 ${task.attempt}；${error.code||'DELETE_FAILED'}：${error.message}`,{level:'警告'});
         // Only retry once promptly, after every issued operation has settled.
         // Further attempts use durable, rate-limited maintenance (also after restart).
         if (this.closed || error.code !== 'DELETION_STOPPED' || task.attempt >= 2) throw error;

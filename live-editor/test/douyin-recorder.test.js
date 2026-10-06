@@ -116,3 +116,19 @@ test('turning auto recording off while offline disables monitoring; manual start
  const f=await fixture(t);f.state.metadata.streaming=false;f.recorder.start();await f.recorder.add({webRid:'123'},true);await f.recorder.setAuto('123',false);assert.equal(f.recorder.rooms[0].recordingEnabled,false);
  f.state.metadata.streaming=true;await f.recorder.poll(true);assert.equal(f.state.streams,0);await f.recorder.startRoom('123');await until(()=>f.recorder.rooms[0].recording);assert.equal(f.recorder.rooms[0].autoRecord,false);await f.recorder.stopRoom('123');
 });
+
+test('monitoring reschedules after a transient persistence failure without changing stopped intent',async t=>{
+ const f=await fixture(t,{pollMs:5});f.state.metadata.streaming=false;
+ await f.recorder.add({webRid:'123'},false);
+ const original=f.recorder.save.bind(f.recorder);let failures=3,attempts=0;
+ f.recorder.save=()=>{attempts++;if(failures-->0)throw Object.assign(new Error('temporary disk failure'),{code:'EIO'});return original();};
+ f.recorder.start();await until(()=>attempts>=5);
+ assert.ok(f.recorder.timer||f.recorder.polling);assert.equal(f.recorder.rooms[0].recordingEnabled,false);assert.equal(f.state.streams,0);
+});
+test('a month of offline checks and network failures recovers without losing a user stop',async t=>{
+ let now=Date.now();const f=await fixture(t,{now:()=>now});f.state.metadata.streaming=false;
+ f.recorder.start();await f.recorder.add({webRid:'123'},false);
+ for(let day=0;day<31;day++){now+=86400000;f.state.failure=day%3!==0;await f.recorder.poll();assert.equal(f.recorder.rooms[0].recordingEnabled,false);}
+ f.state.failure=false;f.state.metadata.streaming=true;now+=86400000;await f.recorder.poll();assert.equal(f.state.streams,0);
+ await f.recorder.startRoom('123');await until(()=>f.recorder.rooms[0].recording);assert.equal(f.state.streams,1);
+});

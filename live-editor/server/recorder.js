@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { openSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { availableLocalPort, findOwnedCore, stopOwnedCore } from './local-endpoint.js';
@@ -21,6 +20,7 @@ export class Recorder {
     this.directory=path.join(store.root,'originals');this.rooms=this.roomState.snapshot();this.online=false;this.error='';this.log='';
     this.secret=store.setting('recorder-secret')||randomBytes(24).toString('hex');store.setting('recorder-secret',this.secret);
     this.webhookSecret=store.setting('webhook-secret')||randomBytes(24).toString('hex');store.setting('webhook-secret',this.webhookSecret);
+    store.diagnostics?.protectSecret(this.secret);store.diagnostics?.protectSecret(this.webhookSecret);
     this.pollBusy=false;this.process=null;this.childRunning=false;this.closed=false;this.monitoring=false;this.starting=null;
     this.failures=0;this.retryAt=0;this.shutdown=new AbortController();
     this.lifecycle={fetch,spawn,now:Date.now,isAlive:alive,availablePort:availableLocalPort,findOwned:findOwnedCore,stopProcess:stopOwnedCore,healthMs:2000,retryMs:1000,maxRetryMs:30000,startupMs:30000,startupPollMs:250,requestMs:10000,...lifecycle};
@@ -46,11 +46,11 @@ export class Recorder {
   }
   schedule(){
     if(this.closed||this.quitting||!this.monitoring||this.timer)return;
-    this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}finally{this.schedule();}},this.lifecycle.healthMs);
+    this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch(error){this.failed(error);}finally{this.schedule();}},this.lifecycle.healthMs);
   }
   failed(error){
     if(this.closed)return;
-    this.online=false;this.error=error.message;this.failures=Math.min(this.failures+1,16);
+    this.store.diagnostics?.record('B站录制核心',error,{level:'警告'});this.online=false;this.error=error.message;this.failures=Math.min(this.failures+1,16);
     this.retryAt=this.lifecycle.now()+Math.min(this.lifecycle.maxRetryMs,this.lifecycle.retryMs*2**(this.failures-1));
   }
   ensureReady(){
@@ -59,7 +59,7 @@ export class Recorder {
     if(this.lifecycle.now()<this.retryAt)return Promise.resolve(false);
     this.starting=this.connect().then(()=>{
       if(this.closed)return false;
-      this.online=true;this.error='';this.failures=0;this.retryAt=0;return true;
+      this.store.diagnostics?.record('B站录制核心','已连接；监控恢复，沿用保存的录制开关');this.online=true;this.error='';this.failures=0;this.retryAt=0;return true;
     }).catch(error=>{this.failed(error);return false;}).finally(()=>{this.starting=null;});
     return this.starting;
   }
@@ -133,9 +133,10 @@ export class Recorder {
       this.assertOpen();this.childFailure=null;
       await this.roomState.prepareLaunch(this.directory,()=>this.assertOpen());this.assertOpen();
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
-      const logFd=openSync(path.join(this.store.root,'recorder.log'),'a');
-      let child;
-      try{child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore',logFd,logFd],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1'}});}finally{closeSync(logFd);}
+      const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1',BILILIVERECORDER_DISABLE_FILE_LOG:'1'}});
+      this.store.diagnostics?.attach(child.stdout,'B站核心输出');this.store.diagnostics?.attach(child.stderr,'B站核心错误');
+      // Always drain the pipes, including embedded/test users without diagnostics.
+      if(!this.store.diagnostics){child.stdout?.resume();child.stderr?.resume();}
       this.process=child;this.childRunning=!!child.pid;
       if(this.automaticPort&&child.pid){this.ownedEndpoint={pid:child.pid,port:this.port,executable:this.executable,directory:this.directory};this.store.setting('recorder-endpoint',this.ownedEndpoint);}
       child.on('error',e=>{
@@ -230,6 +231,7 @@ export class Recorder {
       this.store.run("UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room=? AND status='finished')",room);
     }
     this.store.run('INSERT OR IGNORE INTO events VALUES(?)',event.EventId);
+    if(['FileOpening','FileClosed','SessionEnded','StreamEnded'].includes(type))this.store.diagnostics?.record('B站录制事件',`房间 ${room}：${type}`);
   }
   async roomControl(id){if(!this.roomState.get(id))this.roomState.capture(await this.api('room'));this.assertOpen();const room=this.roomState.get(id);if(!room)throw new Error('直播间不存在或已移除。');return room;}
   async addRoom(input){
@@ -300,7 +302,7 @@ export class Recorder {
       // stop only our verified core, keeping the recorded FLV/XML for recovery.
       const endpoint=this.ownedEndpoint??(this.process?.pid?{pid:this.process.pid,port:this.port,executable:this.executable,directory:this.directory}:await this.lifecycle.findOwned({executable:this.executable,directory:this.directory}));
       if(endpoint){
-        if(!await this.lifecycle.stopProcess(endpoint))throw new Error('录制核心未能退出。');
+        if(!await this.lifecycle.stopProcess({...endpoint,report:event=>this.store.diagnostics?.record('录制核心退出',JSON.stringify(event),{level:'警告'})}))throw new Error('录制核心未能退出。');
         this.store.setting('recorder-endpoint',null);this.ownedEndpoint=null;this.childRunning=false;
       }else if(this.childRunning)throw new Error('无法确认录制核心，已保留录像。');
     }
@@ -323,7 +325,7 @@ export class Recorder {
     const endpoint=this.ownedEndpoint;
     if(!endpoint)return false;
     this.quitting=true;clearTimeout(this.timer);this.timer=null;
-    const stopped=await this.lifecycle.stopProcess(endpoint);
+    const stopped=await this.lifecycle.stopProcess({...endpoint,report:event=>this.store.diagnostics?.record('录制核心退出',JSON.stringify(event),{level:'警告'})});
     if(stopped){this.store.setting('recorder-endpoint',null);return true;}
     this.quitting=false;this.schedule();return false;
   }

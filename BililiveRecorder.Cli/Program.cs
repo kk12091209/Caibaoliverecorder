@@ -531,16 +531,16 @@ namespace BililiveRecorder.Cli
                 })
                 .WriteTo.Logger(sl =>
                 {
-                    sl
+                    if (Environment.GetEnvironmentVariable("BILILIVERECORDER_DISABLE_FILE_LOG") != "1") sl
                     .Filter.ByExcluding(matchMicrosoft)
-                    .WriteTo.File(new CompactJsonFormatter(), logFilePath, restrictedToMinimumLevel: logFileLevel, shared: true, rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true)
+                    .WriteTo.File(new CompactJsonFormatter(), logFilePath, restrictedToMinimumLevel: logFileLevel, shared: true, rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true, fileSizeLimitBytes: 1024 * 1024, retainedFileCountLimit: 7)
                     ;
                 })
                 .WriteTo.Logger(sl =>
                 {
-                    sl
+                    if (Environment.GetEnvironmentVariable("BILILIVERECORDER_DISABLE_FILE_LOG") != "1") sl
                     .Filter.ByIncludingOnly(matchMicrosoft)
-                    .WriteTo.File(new CompactJsonFormatter(), logFilePathMicrosoft, restrictedToMinimumLevel: logFileLevel, shared: true, rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true)
+                    .WriteTo.File(new CompactJsonFormatter(), logFilePathMicrosoft, restrictedToMinimumLevel: logFileLevel, shared: true, rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true, fileSizeLimitBytes: 1024 * 1024, retainedFileCountLimit: 7)
                     ;
                 });
 

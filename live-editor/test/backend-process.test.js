@@ -43,4 +43,8 @@ for (const action of ['exit', 'quit']) test(`standalone backend releases its pro
   assert.deepEqual(result, [0, null], 'clean shutdown did not release the process: ' + stderr);
   await assert.rejects(fs.stat(path.join(data, 'desktop-service.json')), {code: 'ENOENT'});
   assert.equal(await fs.readFile(sentinel, 'utf8'), 'synthetic recording must remain');
+  const dailyFiles=(await fs.readdir(path.join(data,'logs'))).filter(name=>/\d{4}-\d{2}-\d{2}\.txt$/.test(name));
+  const log=await fs.readFile(path.join(data,'logs',dailyFiles[0]),'utf8');
+  assert.match(log,/后台正常退出/);assert.match(log,/本次关闭汇总/);
+  assert.equal(JSON.parse(await fs.readFile(path.join(data,'logs','.daily-state.json'),'utf8')).clean,true);
 });

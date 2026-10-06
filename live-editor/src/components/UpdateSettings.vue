@@ -19,7 +19,7 @@ async function action(name,input={}){
 
 <template>
   <section class="update-settings" aria-label="软件更新">
-    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.1.7' }}</span></div>
+    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.1.8' }}</span></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>自动检查更新并提醒</label>
     <p class="muted">后台每天检查 GitHub 发布页；由你确认下载和安装，不会强制中断录制或导出。</p>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>检查更新</button><small v-if="update.checkedAt">上次检查 {{ new Date(update.checkedAt).toLocaleString() }}</small></div>

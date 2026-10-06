@@ -75,6 +75,27 @@ internal sealed class MainWindow : Form
     private readonly System.Windows.Forms.Timer health = new() { Interval = 2000 };
     private readonly NotifyIcon tray = new() { Text = "菜播·录包机" };
     private bool checking, closing, exitWhenReady, ready;
+    private bool sleepProtected;
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint SetThreadExecutionState(uint flags);
+    private void ProtectSleep(bool active)
+    {
+        if (active == sleepProtected) return;
+        var result = SetThreadExecutionState(active ? 0x80000001u : 0x80000000u);
+        if (result != 0) sleepProtected = active;
+        _ = backend.DiagnosticAsync(result == 0 ? "请求防止空闲休眠失败；请检查系统电源设置" : active ? "监控或任务运行中：已请求防止系统空闲休眠（允许关闭屏幕）" : "任务与监控空闲：已解除休眠保护", result == 0);
+    }
+    private void OnPowerChanged(object sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != Microsoft.Win32.PowerModes.Resume || IsDisposed || !IsHandleCreated) return;
+        BeginInvoke((Action)(() => {
+            pageDeadline = DateTime.UtcNow.AddSeconds(30); pageReadySince = null;
+            // Sleep/reset can clear the thread's execution-state request.
+            sleepProtected = false;
+            _ = backend.DiagnosticAsync("系统已唤醒：恢复后台检查，休眠期间无法录制");
+            _ = CheckBackendAsync();
+        }));
+    }
     private readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(20, 16, 18) };
     private readonly Label splash = new() { Dock = DockStyle.Fill, Text = "正在打开菜播·录包机…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, Font = new Font("Microsoft YaHei UI", 14) };
     private bool choosingFolder, choosingClose;
@@ -105,6 +126,7 @@ internal sealed class MainWindow : Form
         menu.Items.Add("退出软件", null, async (_, _) => await RequestCloseAsync(true));
         tray.ContextMenuStrip = menu;
         tray.DoubleClick += (_, _) => RestoreWindow();
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerChanged;
         health.Tick += async (_, _) => await CheckBackendAsync();
         Shown += (_, _) => {
             var work = Screen.FromControl(this).WorkingArea;
@@ -112,7 +134,7 @@ internal sealed class MainWindow : Form
             Size = new Size(Math.Min(Width, work.Width), Math.Min(Height, work.Height));
         };
         FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; var external = e.CloseReason != CloseReason.UserClosing; await RequestCloseAsync(external, external); };
-        FormClosed += (_, _) => { health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
+        FormClosed += (_, _) => { Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerChanged; ProtectSleep(false); health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
         Controls.Add(web); Controls.Add(splash);
         health.Start();
         Shown += async (_, _) => await InitializeAsync();
@@ -124,7 +146,7 @@ internal sealed class MainWindow : Form
         try
         {
             var app = RuntimeDependencies.ApplicationDirectory(root);
-            await backend.EnsureAsync();
+            var initialStatus = await backend.EnsureAsync(); ProtectSleep(initialStatus.Background);
             // Windows supplies .NET Framework; ship only the small WebView2 interop files.
             var loader = RuntimeDependencies.DesktopFile(root, "WebView2Loader.dll") ?? throw new IOException("缺少 WebView2Loader.dll，请恢复程序组件/runtime/desktop 文件夹。");
             CoreWebView2Environment.SetLoaderDllFolderPath(Path.GetDirectoryName(loader)!);
@@ -168,7 +190,12 @@ internal sealed class MainWindow : Form
         {
             if (IsDisposed || closing) return;
             splash.Text = "菜播·录包机暂时无法打开\n" + error.Message;
-            try { File.AppendAllText(Path.Combine(RuntimeDependencies.ApplicationDirectory(root), "data", "desktop-error.log"), $"{DateTimeOffset.Now:O} {error}\n"); } catch { }
+            _ = backend.DiagnosticAsync("桌面启动失败：" + error.Message, true);
+            try {
+                var file = Path.Combine(RuntimeDependencies.ApplicationDirectory(root), "data", "desktop-error.log");
+                if (File.Exists(file) && new FileInfo(file).Length > 512 * 1024) File.WriteAllText(file, "旧启动记录达到上限，已清理。\n");
+                File.AppendAllText(file, $"{DateTimeOffset.Now:O} {error.Message}\n");
+            } catch { }
             MessageBox.Show(this, error.Message, "菜播·录包机", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -190,6 +217,7 @@ internal sealed class MainWindow : Form
     }
     private void KeepInTray(string message)
     {
+        _ = backend.DiagnosticAsync("关闭窗口，继续后台运行");
         tray.Visible = true; Hide();
         tray.ShowBalloonTip(4000, "菜播·录包机", message, ToolTipIcon.Info);
     }
@@ -252,6 +280,7 @@ internal sealed class MainWindow : Form
         try
         {
             var status = await backend.HeartbeatAsync();
+            if (status is not null) ProtectSleep(status.Background && !status.Stopping);
             if (exitWhenReady)
             {
                 if (status is null && !backend.IsProcessAlive()) { closing = true; Close(); }
@@ -265,6 +294,7 @@ internal sealed class MainWindow : Form
         }
         catch (Exception error)
         {
+            _ = backend.DiagnosticAsync("后台重连未完成：" + error.Message, true);
             if (!IsDisposed && Visible) { splash.Text = "正在恢复后台连接…\n" + error.Message; splash.Show(); }
         }
         finally { checking = false; }
@@ -285,6 +315,7 @@ internal sealed class MainWindow : Form
         {
             var app = RuntimeDependencies.ApplicationDirectory(root);
             var node = RuntimeDependencies.Resolve(root, "node", "node.exe", "NODE_EXE", "Node.js");
+            await backend.DiagnosticAsync("界面无响应：自动重启界面，后台录制继续", true);
             recoveryAttempts = Math.Min(3, recoveryAttempts + 1);
             var start = new ProcessStartInfo(node) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = app };
             start.Arguments = $"\"{Path.Combine(app, "server", "interface-recovery.js")}\" {Process.GetCurrentProcess().Id} \"{Application.ExecutablePath}\" \"{Path.Combine(app, "data")}\" {recoveryAttempts}";
@@ -310,7 +341,7 @@ internal sealed class MainWindow : Form
             {
                 if (recovering || closing || recoveryAttempts >= 3) return;
                 pageDeadline = DateTime.UtcNow.AddSeconds(30);
-                if (!pageReady) { pageReady = true; pageReadySince = DateTime.UtcNow; splash.Hide(); web.Focus(); }
+                if (!pageReady) { _ = backend.DiagnosticAsync("界面已就绪"); pageReady = true; pageReadySince = DateTime.UtcNow; splash.Hide(); web.Focus(); }
                 return;
             }
             if (actionName == "openExternal")

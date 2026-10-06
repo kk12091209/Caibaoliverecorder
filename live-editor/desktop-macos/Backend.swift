@@ -98,7 +98,7 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         } catch { return nil }
     }
     func heartbeat(timeout: TimeInterval = 5) async -> [String: Any]? {
-        await call(["action": "heartbeat", "client": client, "pid": ProcessInfo.processInfo.processIdentifier], timeout: timeout)
+        await call(["action": "heartbeat", "clientKind": "desktop", "client": client, "pid": ProcessInfo.processInfo.processIdentifier], timeout: timeout)
     }
     func waitForExit(timeout: TimeInterval = 60) async throws {
         guard let expected = endpoint else { throw problem("无法确认正在退出的后台，请重试。") }
@@ -134,6 +134,7 @@ func problem(_ message: String) -> NSError { NSError(domain: "Caibo", code: 1, u
         task.arguments = [appRoot.appendingPathComponent("server/index.js").path]
         task.currentDirectoryURL = appRoot; task.environment = env; task.standardInput = FileHandle.nullDevice
         let logURL = data.appendingPathComponent("desktop-backend.log")
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path), let size = attributes[.size] as? NSNumber, size.intValue > 512 * 1024 { try? FileManager.default.removeItem(at: logURL) }
         if !FileManager.default.fileExists(atPath: logURL.path) { FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let log = try FileHandle(forWritingTo: logURL); try log.seekToEnd()
         task.standardOutput = log; task.standardError = log

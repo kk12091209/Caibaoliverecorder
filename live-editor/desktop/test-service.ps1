@@ -105,6 +105,38 @@ else { const db=new DatabaseSync(path.join(app,'data/editor.sqlite')); if(action
     $lock = [IO.File]::Open((Join-Path $testData 'desktop-service.lock.sqlite'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite)
     try { Assert-Service ((Invoke-Backend $second 'PrepareMaintenanceAsync') -eq 3) '未知持有者占用数据锁时应拒绝维护。' } finally { $lock.Dispose() }
     Assert-Service ((Invoke-Backend $second 'PrepareMaintenanceAsync') -eq 0) '无运行服务时维护启动了额外进程。'
+    # A live Node PID with an HTTP socket that never answers must not hold
+    # the desktop in its connect loop forever. Shorten only this fixture's budget.
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
+    $listener.Start()
+    $fixtureNode = $null; $timedBackend = $null
+    try {
+        $start = [Diagnostics.ProcessStartInfo]::new($env:NODE_EXE)
+        $start.UseShellExecute=$false; $start.CreateNoWindow=$true
+        $start.Arguments='-e "setInterval(()=>{},60000)"'
+        $fixtureNode=[Diagnostics.Process]::Start($start)
+        $port=$listener.LocalEndpoint.Port
+        $fakeEndpoint=@{protocol=1;pid=$fixtureNode.Id;origin="http://127.0.0.1:$port";dataPath=$testData;token=('a'*64);instance=('b'*32);build=$nodeBuild}
+        [IO.File]::WriteAllText((Join-Path $testData 'desktop-service.json'),($fakeEndpoint | ConvertTo-Json))
+        $timedBackend=$constructor.Invoke(@([string]$testRoot))
+        $backendType.GetProperty('ConnectionTimeout',$flags).SetValue($timedBackend,[TimeSpan]::FromMilliseconds(600))
+        for($run=0;$run -lt 2;$run++) {
+            $watch=[Diagnostics.Stopwatch]::StartNew();$failed=$false
+            try { Invoke-Backend $timedBackend 'EnsureAsync' | Out-Null } catch {$failed=$true}
+            Assert-Service $failed '无响应的后台连接应按总时限返回错误。'
+            Assert-Service ($watch.Elapsed.TotalSeconds -lt 2) 'HTTP 等待超出了整体连接预算。'
+            Assert-Service (!$fixtureNode.HasExited) '超时不应杀死或替换现有后台。'
+        }
+    } finally {
+        $listener.Stop()
+        if($timedBackend){$timedBackend.Dispose()}
+        if($fixtureNode){if(!$fixtureNode.HasExited){$fixtureNode.Kill();$fixtureNode.WaitForExit(5000)|Out-Null};$fixtureNode.Dispose()}
+        Remove-Item -LiteralPath (Join-Path $testData 'desktop-service.json') -Force -ErrorAction SilentlyContinue
+    }
+    $dailyLogs=Get-ChildItem -LiteralPath (Join-Path $testData 'logs') -Filter '*.txt'
+    Assert-Service ($dailyLogs.Count -gt 0) '没有生成每天的 TXT 日志。'
+    $dailyText=($dailyLogs | ForEach-Object {Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8}) -join "`n"
+    Assert-Service ($dailyText.Contains('打开应用') -and $dailyText.Contains('后台正常退出')) '日志缺少桌面打开或安全退出记录。'
     '桌面后台集成测试通过：自动地址、复用与更新、关闭偏好、任务退出确认、空闲直接退出、退出后立即重开；安装维护保护。'
 } catch { Write-Output $_.Exception.ToString(); throw } finally {
     if (Test-Path -LiteralPath $helper) { try { & $env:NODE_EXE $helper 'idle' $testApp } catch {} }

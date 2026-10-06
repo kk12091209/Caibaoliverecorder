@@ -40,6 +40,7 @@ import IOKit.pwr_mgt
             guard let resources = Bundle.main.resourceURL else { throw problem("应用资源目录不存在。") }
             backend = Backend(resources: resources, data: data, exports: exports)
             try backend.prepare()
+            NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
             lockFD = Darwin.open(data.appendingPathComponent("desktop-window.lock").path, O_CREAT | O_RDWR, 0o600)
             guard lockFD >= 0 else { throw problem("无法创建窗口锁：\(data.path)") }
             if flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
@@ -174,9 +175,11 @@ import IOKit.pwr_mgt
         } else { await connect() }
     }
     func logStartup(_ message: String) {
+        Task { _ = await backend.call(["action": "diagnostic", "message": String(message.prefix(2000)), "warning": message.contains("失败") || message.contains("异常")]) }
         let file = backend.data.appendingPathComponent("desktop-startup.log")
         let text = "\(ISO8601DateFormatter().string(from: Date())) [\(getpid())] \(message.prefix(2000))\n"
         do {
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: file.path), let size = attributes[.size] as? NSNumber, size.intValue > 512 * 1024 { try? FileManager.default.removeItem(at: file) }
             if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
             let log = try FileHandle(forWritingTo: file); defer { try? log.close() }
             try log.seekToEnd(); try log.write(contentsOf: Data(text.utf8))
@@ -237,7 +240,7 @@ import IOKit.pwr_mgt
         let log = try FileHandle(forWritingTo: backend.data.appendingPathComponent("desktop-startup.log"))
         try log.seekToEnd(); helper.standardOutput = log; helper.standardError = log
         do { try helper.run(); try log.close() } catch { try? log.close(); throw error }
-        guard await backend.call(["action": "heartbeat", "client": UUID().uuidString, "pid": Int(helper.processIdentifier)]) != nil else { throw problem("后台连接暂时中断，请稍后重试。") }
+        guard await backend.call(["action": "heartbeat", "clientKind": "recovery", "client": UUID().uuidString, "pid": Int(helper.processIdentifier)]) != nil else { throw problem("后台连接暂时中断，请稍后重试。") }
         // The independent helper retains the backend lease until the new UI
         // connects. Exiting our GUI also releases its stuck WebKit processes.
         logStartup("自动重启界面；恢复 \(attempt)")
@@ -263,11 +266,18 @@ import IOKit.pwr_mgt
         Task { await connect() }
     }
     @objc func openStartupLogs() { NSWorkspace.shared.open(backend.data) }
+    @objc func systemDidWake(_ notification: Notification) {
+        renewInterfaceDeadline(); pageReadySince = nil
+        if hasSleepAssertion { IOPMAssertionRelease(sleepAssertion); hasSleepAssertion = false }
+        logStartup("系统已唤醒：恢复后台检查，休眠期间无法录制")
+        Task { await poll() }
+    }
     func updateSleep(_ status: [String: Any]) {
-        let busy = status["busy"] as? Bool == true
+        let busy = status["background"] as? Bool == true && status["stopping"] as? Bool != true
         if busy && !hasSleepAssertion {
-            hasSleepAssertion = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), "菜播正在录制或处理视频" as CFString, &sleepAssertion) == kIOReturnSuccess
-        } else if !busy && hasSleepAssertion { IOPMAssertionRelease(sleepAssertion); hasSleepAssertion = false }
+            hasSleepAssertion = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), "菜播正在监控直播或处理视频" as CFString, &sleepAssertion) == kIOReturnSuccess
+            logStartup(hasSleepAssertion ? "监控或任务运行中：已请求防止系统空闲休眠（允许关闭屏幕）" : "请求休眠保护失败，请检查系统电源设置")
+        } else if !busy && hasSleepAssertion { IOPMAssertionRelease(sleepAssertion); hasSleepAssertion = false; logStartup("任务与监控空闲：已解除休眠保护") }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
     func windowShouldClose(_ sender: NSWindow) -> Bool { Task { await requestClose() }; return false }
@@ -288,7 +298,7 @@ import IOKit.pwr_mgt
             action = result == .alertFirstButtonReturn ? "background" : "exit"
             if alert.suppressionButton?.state == .on { _ = await backend.call(["action": "setCloseAction", "closeAction": action]) }
         }
-        if action == "background" { window.orderOut(nil) } else { await quitCore() }
+        if action == "background" { logStartup("关闭窗口，继续后台运行"); window.orderOut(nil) } else { await quitCore() }
     }
     func requestQuit() async {
         guard !choosing, !terminating else { return }
@@ -328,6 +338,7 @@ import IOKit.pwr_mgt
     }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         if hasSleepAssertion { IOPMAssertionRelease(sleepAssertion) }
         if lockFD >= 0 { Darwin.close(lockFD) }
     }

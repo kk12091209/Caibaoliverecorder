@@ -29,9 +29,10 @@ export class DouyinRecorder {
     for(const session of this.store.all("SELECT id FROM sessions WHERE room=0 AND status IN ('recording','waiting')"))if(this.store.setting('douyin-session:'+session.id)){
       this.store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);this.store.run("UPDATE sessions SET status='finishing' WHERE id=?",session.id);
     }
-    this.schedule();void this.poll();
+    this.schedule();void this.poll().catch(error=>this.reportPollError(error));
   }
-  schedule(){if(this.closed||this.paused||!this.started||this.timer)return;this.timer=setTimeout(async()=>{this.timer=null;await this.poll();this.schedule();},this.pollMs);}
+  reportPollError(error){if(!this.closed)this.store.diagnostics?.record('抖音监控循环',error,{level:'错误'});}
+  schedule(){if(this.closed||this.paused||!this.started||this.timer)return;this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch(error){this.reportPollError(error);}finally{this.schedule();}},this.pollMs);}
   assertOpen(){if(this.closed)throw new Error('录制服务已关闭。');}
   room(key){const room=this.entries.get(String(key).replace(/^douyin:/,''));if(!room)throw new Error('直播间不存在。');return room;}
   async add(descriptor,autoRecord=true){
@@ -55,20 +56,20 @@ export class DouyinRecorder {
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);
           if(!metadata.streaming||room.actualRoom&&room.actualRoom!==metadata.roomId){await this.finish(room);}
           this.maybeRecord(room);
-        }catch{if(!this.closed){room.error='抖音连接失败，正在重试。';room.nextPoll=this.now()+15000;}}
+        }catch(error){if(!this.closed){this.store.diagnostics?.record(`抖音开播检查 ${room.webRid}`,error,{level:'警告'});room.error='抖音连接失败，正在重试。';room.nextPoll=this.now()+15000;}}
       }};
       await Promise.all([scan(),scan()]);if(!this.closed)this.save();
     })().finally(()=>{this.polling=null;});return this.polling;
   }
   maybeRecord(room){
     if(this.closed||this.paused||!this.started||room.active||room.blocked||!room.enabled||!room.streaming||this.now()<room.retryAt)return;
-    if(!room.metadata?.stream){room.error='该直播暂未提供可剪辑的 H.264/AAC 画质。';return;}
-    room.active=this.capture(room).catch(()=>{if(!this.closed)room.error='录像写入失败，请检查磁盘后重试。';room.blocked=true;}).finally(()=>{room.active=null;room.recording=false;room.nextPoll=0;});
+    if(!room.metadata?.stream){this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：未提供 H.264/AAC 画质，未开始录制`,{level:'警告'});room.error='该直播暂未提供可剪辑的 H.264/AAC 画质。';return;}
+    room.active=this.capture(room).catch(error=>{this.store.diagnostics?.record('抖音录制',error,{level:'错误'});if(!this.closed)room.error='录像写入失败，请检查磁盘后重试。';room.blocked=true;}).finally(()=>{room.active=null;room.recording=false;room.nextPoll=0;});
   }
   async capture(room){
     const metadata=room.metadata,abort=new AbortController();room.abort=abort;let response,flv,xml,source,session,normalizer;
     let lastData=this.now(),recordError;
-    const watchdog=setInterval(()=>{if(this.now()-lastData>this.idleMs)abort.abort(new Error('直播连接超时。'));},Math.min(5000,this.idleMs));
+    const watchdog=setInterval(()=>{if(this.now()-lastData>this.idleMs&&!abort.signal.aborted){this.store.diagnostics?.record('抖音连接',`房间 ${room.webRid}：连续 ${this.idleMs/1000} 秒没有视频数据，取消连接并重试`,{level:'警告'});abort.abort(new Error('直播连接超时。'));}},Math.min(5000,this.idleMs));
     const signal=AbortSignal.any([this.shutdown.signal,abort.signal]);
     try{
       const origin=safeStreamUrl(metadata.stream.url);if(!origin)throw new Error('直播服务器地址无效。');
@@ -80,7 +81,7 @@ export class DouyinRecorder {
         await response.body?.cancel();response=null;
         url=safeStreamRedirect(new URL(next,url).href,origin);if(!url)throw new Error('直播服务器跳转地址无效。');
       }
-      if(!response?.ok||!response.body)throw new Error('直播暂时无法连接。');
+      if(!response?.ok||!response.body)throw new Error(`直播暂时无法连接（HTTP ${response?.status??'未收到响应'}）。`);
       if(signal.aborted)throw signal.reason;
       const wall=new Date(this.now()).toISOString(),directory=path.join(this.store.root,'originals','douyin',room.webRid);
       await fs.mkdir(directory,{recursive:true});const file=path.join(directory,wall.replace(/[^\d]/g,'')+'-'+randomUUID()+'.flv');
@@ -93,13 +94,14 @@ export class DouyinRecorder {
       room.sourceId=source.id;
       xml=await fs.open(source.xml,'wx');
       await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="douyin" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
-      this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;
+      this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
       normalizer=new DouyinFlv();
       try{this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:metadata.userUniqueId,cookie:metadata.cookie,sourceStart:Date.parse(wall)},
         {write:batch=>writeAll(xml,chatXml(batch)),status:status=>{room.chatError=status==='connected'?'':status==='write-failed'?'弹幕保存失败。':'弹幕连接重试中。';}});}catch{room.chatError='弹幕暂时无法连接。';}
       for await(const chunk of response.body){lastData=this.now();if(signal.aborted)break;for(const bytes of normalizer.feed(chunk))await writeAll(flv,bytes);}
       if(!signal.aborted)normalizer.finish();
     }catch(error){
+      if(!this.closed&&(!room.abort?.signal.aborted||room.abort.signal.reason?.message==='直播连接超时。'))this.store.diagnostics?.record('抖音录制连接',error,{level:'警告'});
       // Network failures retain the partial source and reconnect. Invalid
       // codec/data or disk failures stop retries until the user starts again.
       if(!signal.aborted&&source&&(!response?.body||!/fetch|network|terminated|socket|abort/i.test(error.message))){recordError=error;room.blocked=true;room.error=error.message;}
@@ -115,6 +117,7 @@ export class DouyinRecorder {
       }
       await Promise.allSettled([xml?.close(),flv?.close()]);
       if(source){
+        this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：结束当前文件；${recordError?'文件错误：'+recordError.message:!room.enabled?'用户停止':this.closed?'应用退出':'直播结束或连接中断，将按监控设置继续'}`,{level:recordError?'错误':'信息'});
         // An unsupported/empty/failed source has no index work left to wait for.
         // Preserve its originals and expose the error; it remains deletable.
         this.store.run('UPDATE sources SET closed=MAX(closed,?),error=? WHERE id=?',recordError?2:1,recordError?.message||'',source.id);

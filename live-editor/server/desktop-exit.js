@@ -26,7 +26,7 @@ export class DesktopExit {
     // Keep the authenticated endpoint alive if stopping the core fails. The
     // desktop must report the failure and allow another quit attempt rather
     // than disappearing while a recorder keeps running.
-    this.completion.catch(error=>{this.runtime.lastError=error.message;this.runtime.quitError=error.message;this.accepted=false;});
+    this.completion.catch(error=>{this.runtime.diagnostics?.record('安全退出',error,{level:'错误'});this.runtime.lastError=error.message;this.runtime.quitError=error.message;this.accepted=false;});
     return {quitAccepted:true,requiresExitConfirmation:false};
   }
 }

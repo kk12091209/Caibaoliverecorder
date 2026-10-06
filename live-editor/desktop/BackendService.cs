@@ -24,6 +24,7 @@ internal sealed class BackendService : IDisposable
     private Task<BackendStatus>? connecting;
     internal string Origin { get; private set; } = "";
     internal bool ExitRequested { get; private set; }
+    internal TimeSpan ConnectionTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     internal BackendService(string projectRoot)
     {
@@ -70,7 +71,7 @@ internal sealed class BackendService : IDisposable
         }
         catch { return false; }
     }
-    private async Task<BackendStatus?> CallAsync(object? action = null)
+    private async Task<BackendStatus?> CallAsync(object? action = null, TimeSpan? timeout = null)
     {
         if (Origin == "" || token == "") return null;
         try
@@ -78,7 +79,8 @@ internal sealed class BackendService : IDisposable
             using var request = new HttpRequestMessage(action is null ? HttpMethod.Get : HttpMethod.Post, Origin + "/internal/desktop");
             request.Headers.Add("X-Caibo-Instance", token);
             if (action is not null) request.Content = new StringContent(json.Serialize(action), Encoding.UTF8, "application/json");
-            using var response = await http.SendAsync(request); if (!response.IsSuccessStatusCode) return null;
+            using var cancellation = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(3));
+            using var response = await http.SendAsync(request, cancellation.Token); if (!response.IsSuccessStatusCode) return null;
             var value = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
             if (Convert.ToInt32(value["protocol"]) != 1 || Text(value, "instance") != instance || !SamePath(Text(value, "dataPath"), data)) return null;
             return new BackendStatus { Busy = Flag(value, "busy"), Background = Flag(value, "background"), QuitAccepted = Flag(value, "quitAccepted"), RequiresExitConfirmation = Flag(value, "requiresExitConfirmation"), Stopping = Flag(value, "stopping"), QuitError = Text(value, "quitError"), Reason = Text(value, "reason"), Pending = Text(value, "pending"), Build = Text(value, "build"), CloseAction = Text(value, "closeAction") };
@@ -109,8 +111,9 @@ internal sealed class BackendService : IDisposable
             await Task.Delay(200);
         }
     }
-    internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", client, pid = Process.GetCurrentProcess().Id });
-    internal Task<BackendStatus?> RegisterRecoveryAsync(int pid) => CallAsync(new { action = "heartbeat", client = Guid.NewGuid().ToString(), pid });
+    internal Task<BackendStatus?> HeartbeatAsync() => CallAsync(new { action = "heartbeat", clientKind = "desktop", client, pid = Process.GetCurrentProcess().Id });
+    internal Task<BackendStatus?> DiagnosticAsync(string message, bool warning = false) => CallAsync(new { action = "diagnostic", message, warning });
+    internal Task<BackendStatus?> RegisterRecoveryAsync(int pid) => CallAsync(new { action = "heartbeat", clientKind = "recovery", client = Guid.NewGuid().ToString(), pid });
     internal async Task SaveCloseActionAsync(string closeAction)
     {
         var status = await CallAsync(new { action = "setCloseAction", closeAction });
@@ -208,21 +211,28 @@ internal sealed class BackendService : IDisposable
     {
         Process? launched = null;
         string restartRequested = "";
+        var elapsed = Stopwatch.StartNew();
+        var timeout = ConnectionTimeout;
         try
         {
-            for (var attempt = 0; attempt < 480; attempt++)
+            while (elapsed.Elapsed < timeout)
             {
                 if (ExitRequested) throw new IOException("软件正在退出。");
                 if (ReadEndpoint())
                 {
-                    var status = await HeartbeatAsync();
+                    var remaining = timeout - elapsed.Elapsed;
+                    if (remaining <= TimeSpan.Zero) break;
+                    var status = await CallAsync(new { action = "heartbeat", clientKind = "desktop", client, pid = Process.GetCurrentProcess().Id }, remaining);
                     if (status is not null)
                     {
                         if (status.Stopping || status.Pending == "quit") { await Task.Delay(100); continue; }
                         if (status.Build == build) return status;
                         if (restartRequested != instance)
                         {
-                            restartRequested = instance; status = await CallAsync(new { action = "restart" }) ?? status;
+                            restartRequested = instance;
+                            var left = timeout - elapsed.Elapsed;
+                            if (left <= TimeSpan.Zero) break;
+                            status = await CallAsync(new { action = "restart" }, left) ?? status;
                         }
                         // Existing work remains available; the managed backend
                         // switches only after recording/export/preparation settles.
@@ -231,7 +241,8 @@ internal sealed class BackendService : IDisposable
                     else if (!IsProcessAlive() && (launched is null || launched.HasExited)) launched = StartBackend();
                 }
                 else if (launched is null || launched.HasExited) launched = StartBackend();
-                await Task.Delay(250);
+                var delay = Math.Min(250, (timeout - elapsed.Elapsed).TotalMilliseconds);
+                if (delay > 0) await Task.Delay((int)delay);
             }
             throw new IOException("后台服务仍在启动或切换，请稍后重新打开软件。运行记录位于程序组件/live-editor/data。");
         }

@@ -82,10 +82,11 @@ export async function findOwnedCore({executable,directory}){
 }
 // Stop only the recorded core executable and originals directory. Never kill
 // an arbitrary owner of a port or a recycled PID belonging to another app.
-export async function stopOwnedCore({pid,executable,directory}){
+export async function stopOwnedCore({pid,executable,directory,report}){
   if(!Number.isInteger(pid)||pid<=0)return false;
   if(process.platform==='darwin'){
     return stopMacCore(pid,{
+      ...(report?{report}:{}),
       isAlive:target=>{try{process.kill(target,0);return true;}catch(error){return error.code!=='ESRCH';}},
       signal:(target,name)=>process.kill(target,name),
       inspect:async target=>{
