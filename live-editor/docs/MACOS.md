@@ -7,7 +7,7 @@ Windows 保留现有 WinForms/WebView2 壳。每个勾选片段创建独立任�
 
 ## 下载与安装
 
-从 [v0.1.6 Release](https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.1.6) 下载 DMG，打开后将应用拖入 Applications，弹出磁盘映像，再从“应用程序”打开。也可下载 ZIP，解压后将 `.app` 移入“应用程序”。普通用户无需安装下面的开发工具。
+从 [v0.2.0 Release](https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.2.0) 下载 DMG，打开后将应用拖入 Applications，弹出磁盘映像，再从“应用程序”打开。也可下载 ZIP，解压后将 `.app` 移入“应用程序”。普通用户无需安装下面的开发工具。
 
 要求 M 系列芯片、macOS 14 或更新。测试版使用临时签名，未公证；被系统拦截时，确认来自本仓库，按 [Apple 官方指引](https://support.apple.com/zh-cn/102445) 到“系统设置 → 隐私与安全性”选择“仍要打开”。不建议关闭系统安全检查。
 
@@ -44,7 +44,7 @@ macOS 的系统临时目录可能经过 `/var` 符号链接。测试前 source �
 ./script/build_and_run.sh --verify
 ```
 
-构建输出在 `release/macOS/0.1.6`，目录已存在时拒绝覆盖。可传入一个新的
+构建输出在 `release/macOS/0.2.0`，目录已存在时拒绝覆盖。可传入一个新的
 绝对输出目录。包内包括原生窗口、前端、服务、Node、FFmpeg/FFprobe、自包含
 录制核心及第三方说明。记录 SHA-256 与逐文件清单，不包含测试视频、数据库、
 Cookie、真实录像、SDK 或 node_modules。默认生成临时签名 ZIP；再运行 `./live-editor/scripts/package-macos-dmg.sh /绝对路径/输出目录` 生成拖放安装 DMG。DMG 打包用的 ds_store / mac_alias 只安装到仓库 `.tools`，不随应用分发。

@@ -8,7 +8,7 @@ Windows v0.1.6 包含逐段独立导出，以及 B 站与抖音录制、双平�
 
 这是基于官方 BililiveRecorder v2.20.0 的本地剪辑工作台。官方 CLI 独立负责自动录制和弹幕采集；新增服务负责录制中的一秒内部素材、连续预览、非破坏性剪辑和导出；正常录完并校验后改为直接读取原片，自动释放重复分片。Windows EXE 使用 WebView2 显示本地界面，视频仍由录制核心直接下载保存，不是录制浏览器画面，不需要上传视频。
 
-macOS Apple Silicon v0.1.6 测试版提供 DMG / ZIP，见 [Mac 下载与构建说明](docs/MACOS.md)。下方启动安装步骤针对 Windows v0.1.6；Mac v0.1.6 与 Windows v0.1.6 均支持逐段独立导出。
+macOS Apple Silicon v0.2.0 测试版提供 DMG / ZIP，见 [Mac 下载与构建说明](docs/MACOS.md)。下方启动安装步骤针对 Windows；Mac 与 Windows 均支持逐段独立导出。
 
 ## 启动
 
