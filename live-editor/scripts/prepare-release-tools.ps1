@@ -11,7 +11,7 @@ if (!$Destination) { $Destination = Join-Path $ProjectRoot '.tools\release-tools
 $Destination = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $assets = @(
-    @{ name='7zr.exe'; url='https://www.7-zip.org/a/7zr.exe'; sha256='ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d' },
+    @{ name='7zr.exe'; url='https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe'; sha256='ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d' },
     @{ name='7z2603-x64.exe'; url='https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe'; sha256='0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd' },
     @{ name='innosetup-6.7.3.exe'; url='https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'; sha256='9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732' },
     @{ name='NODE-LICENSE.txt'; url='https://raw.githubusercontent.com/nodejs/node/v24.12.0/LICENSE'; sha256='537308465103a306d0e3eecf42632b4ff1b48aaaec044e9fc10a78c81fd00b34' },

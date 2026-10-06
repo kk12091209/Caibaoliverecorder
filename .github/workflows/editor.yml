@@ -80,4 +80,4 @@ jobs:
           npm run build
           cd ..
           dotnet test test/BililiveRecorder.Core.UnitTests/BililiveRecorder.Core.UnitTests.csproj -c Release -f net8.0
-          TMPDIR=/private/tmp xcrun swiftc -swift-version 5 -O -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o .tools/CaiboDesktop
+          TMPDIR=/private/tmp xcrun swiftc -swift-version 5 -O -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/ProcessOwnership.swift live-editor/desktop-macos/Repair.swift live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o .tools/CaiboDesktop
