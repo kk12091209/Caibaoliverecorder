@@ -8,7 +8,7 @@ param(
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
     [string]$FFmpegRoot = '',
-    [string]$Version = '0.1.9',
+    [string]$Version = '0.2.0',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
     [switch]$Include7z,

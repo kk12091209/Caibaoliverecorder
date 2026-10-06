@@ -23,11 +23,11 @@ test('ASS applies imported font, size and transparency to fill and outline, incl
   assert.match(assText([{time:0,text:'TEST'}],1280,720,null,{size:0.6,opacity:0}),/20,&HFFFFFFFF,&HFFFFFFFF,&HFF111111/);
   for(const value of [{size:0.5,opacity:100},{size:0.6,opacity:101},{size:0.6,opacity:2.2},{size:0.6,opacity:100,extra:true},null])assert.throws(()=>validateDanmakuStyle(value));
 });
-test('workbench export-style layout limits simultaneous bursts to free lanes and preserves six-second travel',()=>{
+test('workbench export-style layout retains simultaneous bursts regardless of lane capacity and preserves six-second travel',()=>{
   const messages=Array.from({length:50},(_,i)=>({id:String(i).padStart(2,'0'),time:0,text:'SAMPLE'}));
   const geometry=danmakuGeometry(720,{size:0.6,opacity:100});
   const layout=layoutDanmaku(messages,{width:1280,height:720,fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,measure:()=>120});
-  assert.equal(layout.size,geometry.lanes);assert.equal(new Set([...layout.values()].map(m=>m.lane)).size,layout.size);
+  assert.equal(layout.size,messages.length);assert.equal(new Set([...layout.values()].map(m=>m.lane)).size,geometry.lanes);
   for(const m of layout.values()){assert.equal(m.end,6);assert.equal(m.speed,(1280+m.textWidth)/6);}
 });
 test('sparse traffic uses both halves at every source size and preview font measurement cannot change exported positions',()=>{
@@ -42,18 +42,21 @@ test('sparse traffic uses both halves at every source size and preview font meas
     }
   }
 });
-test('dense scrolling never overlaps or catches a preceding comment, including short then long text and all size levels',()=>{
+test('dense scrolling retains every admitted message at all sizes and prefers clear lanes when available',()=>{
   const one=scrollingTracks([{id:'a',time:0,text:'短'},{id:'b',time:.5,text:'很长的弹幕内容'.repeat(6)},{id:'c',time:5.9,text:'很长的弹幕内容'.repeat(6)}],{width:400,lanes:1,top:20,lineHeight:40,size:20});
-  assert.deepEqual(one.map(m=>m.id),['a','c']);
+  assert.deepEqual(one.map(m=>m.id),['a','b','c']);
   for(const size of DANMAKU_SIZE_STEPS){
     const g=danmakuGeometry(720,{size,opacity:100}),raw=Array.from({length:500},(_,i)=>({id:String(i),time:i*.02,text:i%3?'短弹幕':'很长的弹幕内容'.repeat(8)}));
-    const shown=scrollingTracks(raw,{width:1280,...g});assert.ok(shown.length>0&&shown.length<raw.length);
-    for(let frame=0;frame<960;frame++){
-      const time=frame/60,active=shown.filter(m=>m.time<=time&&m.end>time);
-      const byLane=new Map();
-      for(const m of active){const x=1280-(time-m.time)*m.speed,rect={left:Math.max(0,x),right:Math.min(1280,x+m.textWidth)};if(rect.right<=rect.left)continue;const row=byLane.get(m.lane)||[];row.push(rect);byLane.set(m.lane,row);}
-      for(const row of byLane.values()){row.sort((a,b)=>a.left-b.left);for(let i=1;i<row.length;i++)assert.ok(row[i-1].right<=row[i].left+1e-6,`size ${size}, time ${time}`);}
-    }
+    const shown=scrollingTracks(raw,{width:1280,...g});assert.equal(shown.length,raw.length);
+    assert.deepEqual(shown.map(m=>m.id),raw.map(m=>m.id));
+    for(const message of shown){assert.ok(message.lane>=0&&message.lane<g.lanes);assert.equal(message.end,message.time+6);}
+  }
+  const clear=scrollingTracks([{id:'a',time:0,text:'短'},{id:'b',time:.5,text:'长'.repeat(80)}],{width:400,lanes:2,top:20,lineHeight:40,size:20});
+  assert.notEqual(clear[0].lane,clear[1].lane);
+  const messages=Array.from({length:100},(_,i)=>({id:String(i).padStart(3,'0'),time:i*.01,type:'d',text:'测试 '+i}));
+  for(const size of DANMAKU_SIZE_STEPS)for(const rate of [1,7,17,50]){
+    const exported=layoutComments(messages,{rate,style:{size,opacity:100}});
+    assert.equal(exported.length,rate);assert.deepEqual(exported.map(m=>m.id),messages.slice(0,rate).map(m=>m.id));
   }
 });
 test('settings validate atomically, retain style across restart, invalidate preparation and snapshot each new export',async t=>{

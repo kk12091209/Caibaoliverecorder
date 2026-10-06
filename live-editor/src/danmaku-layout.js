@@ -1,6 +1,6 @@
 import { scrollingTracks } from '../shared/danmaku-tracks.js';
-// Legacy callers use one velocity; export-style callers also guard against a
-// longer, faster comment catching the preceding one.
+// Legacy callers use one velocity; export-style callers prefer clear lanes
+// while retaining every comment admitted by the user's per-second limit.
 export const DANMAKU_FONT_SIZE = 22 * 2 / 3;
 export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, lineHeight = fontSize + 12, top = 18, maxLanes = 10, exportLayout = false, font, measure, previous = new Map() }) {
   const speed = Math.max(100, width / 6);

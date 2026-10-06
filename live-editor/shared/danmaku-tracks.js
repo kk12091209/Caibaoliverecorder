@@ -41,7 +41,10 @@ export function scrollingTracks(messages, { width, lanes, top, lineHeight, size,
     if(lane<0)for(const candidate of order){
       if(canUse(candidate)&&(lane<0||uses[candidate]<uses[lane]))lane=candidate;
     }
-    if (lane < 0) continue; // Density is an upper bound; never force a full lane.
+    // The user's per-second limit alone controls the displayed count. When
+    // every row is busy, reuse the oldest row instead of dropping a comment.
+    // Prefer clear rows whenever possible, while preserving original timing.
+    if (lane < 0) lane=order.reduce((best,candidate)=>last[candidate].end<last[best].end?candidate:best,order[0]);
     const comment = {...message,text,textWidth,paintWidth:painted??textWidth,lane,y:top+lane*lineHeight,speed,end:message.time+DANMAKU_SECONDS};
     last[lane]=comment;uses[lane]++;result.push(comment);
   }

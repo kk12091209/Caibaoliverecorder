@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Stage,
     [Parameter(Mandatory=$true)][string]$ToolsRoot,
-    [string]$Version = '0.1.9',
+    [string]$Version = '0.2.0',
     [string]$ProjectRoot = '',
     [string]$QaInstaller = ''
 )

@@ -14,21 +14,22 @@ import {danmakuGeometry,DANMAKU_SIZE_STEPS} from '../shared/danmaku-style.js';
 import {videoGeometryFilter} from '../server/export-encoding.js';
 
 test('sample count follows density and export layouts honor the captured per-second rate',()=>{
-  const events=stylePreviewEvents(50,{size:0.6,opacity:100});assert.ok(events.length>40&&events.length<=50);
-  assert.ok(stylePreviewEvents(7,{size:5,opacity:60}).length<=7);
+  const events=stylePreviewEvents(50,{size:0.6,opacity:100});assert.equal(events.length,50);
+  assert.equal(stylePreviewEvents(7,{size:5,opacity:60}).length,7);
   assert.ok(events.filter(event=>event.y>STYLE_PREVIEW_HEIGHT/2).length>15);
   const raw=Array.from({length:50},(_,index)=>({id:String(index),time:index*.01,type:'d',text:'unique '+index}));
-  assert.equal(layoutComments(raw,{rate:8}).length,8);assert.ok(layoutComments(raw,{rate:50}).length>8&&layoutComments(raw,{rate:50}).length<50);
+  assert.equal(layoutComments(raw,{rate:8}).length,8);assert.equal(layoutComments(raw,{rate:50}).length,50);
 });
-test('all preset sizes and densities reserve non-overlapping bounds, including wide fonts and clipped long text',()=>{
+test('all preset sizes and densities retain every chosen sample, including wide fonts and clipped long text',()=>{
   for(const size of DANMAKU_SIZE_STEPS)for(const font of [null,{advanceRatio:3.5}]){
     const full=stylePreviewEvents(50,{size,opacity:100},font);
-    assert.ok(full.length>0&&full.length<=50);
+    assert.equal(full.length,50);
     for(const rate of [1,7,17,50]){
       const events=stylePreviewEvents(rate,{size,opacity:100},font);
+      assert.equal(events.length,rate);
       assert.deepEqual(events,full.filter(event=>Number(event.id)<rate));
       const rects=events.map(e=>({...e,left:Math.max(0,STYLE_PREVIEW_WIDTH+e.time*e.speed),right:Math.min(STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_WIDTH+e.time*e.speed+e.textWidth)}));
-      for(const a of rects){assert.ok(a.right>a.left);for(const b of rects){if(a.id===b.id||a.lane!==b.lane)continue;assert.ok(a.right<=b.left||b.right<=a.left,`size ${size}, samples ${a.id} and ${b.id}`);}}
+      for(const a of rects)assert.ok(a.right>a.left,`size ${size}, sample ${a.id} enters the preview`);
     }
   }
 });
@@ -67,7 +68,7 @@ test('preview and real H264 export retain matching glyph positions across both i
   let imported=null;
   const fontPath=process.platform==='darwin'?'/System/Library/Fonts/Supplemental/Arial.ttf':path.join(process.env.WINDIR||'C:\\Windows','Fonts','arial.ttf');
   try{imported=await media.fonts.import(await fs.readFile(fontPath),'Arial.ttf',{select:false});}catch{}
-  const scenarios=[{size:.6,opacity:100,font:null},{size:1.5,opacity:60,font:null},{size:5,opacity:100,font:null},...(imported?[{size:.6,opacity:100,font:imported.id}]:[])];
+  const scenarios=[{size:.6,opacity:100,font:null},{size:1.5,opacity:60,font:null},{size:2,opacity:100,font:null},{size:5,opacity:100,font:null},...(imported?[{size:.6,opacity:100,font:imported.id}]:[])];
   for(const scenario of scenarios){
     const {font:fontId,...style}=scenario,rate=50,font=await media.fonts.selection(fontId);
     const plan=await media.renderer.describe(session.id,{danmakuStyle:style,danmakuPerSecond:rate,font});

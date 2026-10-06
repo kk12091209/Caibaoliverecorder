@@ -10,7 +10,7 @@ import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry } from '../s
 import { scrollingTracks } from '../shared/danmaku-tracks.js';
 import {chatRate,validateChatRate} from './chat-rules.js';
 
-export const RENDER_VERSION = 4;
+export const RENDER_VERSION = 5;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export function layoutComments(messages,{rate=50,width=1280,height=720,style,font}={}) {
