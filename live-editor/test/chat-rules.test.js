@@ -94,7 +94,7 @@ test('预览和成片字号均为原来的三分之二，缓存版本更新防�
     const output=assText([{time:0,text:'普通弹幕'}],1920,height),size=Number(output.match(/Style: Default,Microsoft YaHei,([^,]+)/)[1]);
     assert.ok(Math.abs(size-Math.max(20,Math.round(height/24))*2/3)<.001);
   }
-  assert.equal(RENDER_VERSION,2);
+  assert.equal(RENDER_VERSION,4);
 });
 
 test('B站和抖音XML索引均执行录制上限与长消息过滤，源文件保持原样',async t=>{

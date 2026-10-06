@@ -17,16 +17,18 @@ import { TemporaryWorkspaces } from './temp-workspaces.js';
 import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments } from './render-plan.js';
+import { danmakuGeometry, assOpacity, savedDanmakuStyle } from '../shared/danmaku-style.js';
+import { chatRate } from './chat-rules.js';
+import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
-export function assText(messages, width = 1280, height = 720, font = null) {
-  const size = Number((Math.max(20, Math.round(height / 24)) * 2 / 3).toFixed(3));
-  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H00FFFFFF,&H00FFFFFF,&H00111111,&H80000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-  const lanes = Array(8).fill(-Infinity);
-  return head + messages.map(m => {
+export function assText(messages, width = 1280, height = 720, font = null, style) {
+  const geometry=danmakuGeometry(height,style),{size,lineHeight,top,lanes:laneCount}=geometry,alpha=assOpacity(style),shadowAlpha=assOpacity(style,128);
+  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+  const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,...geometry,font});
+  return head + planned.map(m => {
     if(m.time+6<=0)return '';
-    let lane = Number.isInteger(m.lane)&&m.lane>=0&&m.lane<8?m.lane:lanes.findIndex(t => t <= m.time); if (lane < 0) lane = lanes.indexOf(Math.min(...lanes)); lanes[lane] = m.time + 3;
-    const content = m.text.replace(/[{}\\\r\n]/g, ' ').slice(0, 200), xEnd = -Math.max(size * content.length, 100), y = 20 + lane * (size + 8);
+    const lane=m.lane,content=danmakuText(m.text),xEnd=-m.textWidth,y=top+lane*lineHeight;
     const startX=width+(xEnd-width)*Math.max(0,-m.time)/6;
     return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+6)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y})}${content}\n`;
   }).join('');
@@ -191,7 +193,7 @@ export class Media {
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
-    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
+    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     try {
       const outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
       for(const job of jobs){
@@ -454,7 +456,8 @@ export class Media {
     const first=segments[0]?.source;if(!first)throw new Error('选段中没有已录制的画面。');
     const info=prepared.first?.id===first.id?prepared.info:await this.probeSource(first,segments[0].from);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
-    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session):null;
+    const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
+    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont}):null;
     const workDir=await this.temporaryDirectory('bili-export-',job.session);
     try {
     const fontDirectory=await this.fonts.stage(job.font,workDir);
@@ -466,7 +469,7 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},from,to);
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height,job.font));
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height,job.font,job.danmakuStyle));
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=videoGeometryFilter(sourceInfo,width,height);

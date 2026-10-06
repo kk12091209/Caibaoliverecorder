@@ -760,6 +760,11 @@ svg { flex-shrink: 0; }
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }
 .modal h2 { font-size: 18px; gap: 10px; margin-bottom: 12px; color: var(--text); }
+.modal.danmaku-style-modal { width: min(960px, calc(100vw - 32px)); }
+.danmaku-style-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.danmaku-style-entry strong { font-size: 14px; }
+.danmaku-style-entry .button { flex-shrink: 0; }
+@media (max-width: 500px) { .danmaku-style-entry { align-items: flex-start; flex-direction: column; } }
 .modal p { font-size: 13px; line-height: 1.7; color: var(--muted); margin-bottom: 8px; }
 .close-modal { position: absolute; top: 12px; right: 12px; }
 .field-label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: #5c3344; margin: 16px 0; }

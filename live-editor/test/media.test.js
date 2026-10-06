@@ -94,7 +94,11 @@ test('双版本共用选段，弹幕实际烧入第二份视频且在非关键�
   // Different frame rates round the final video frame differently; their
   // timelines should still agree within one source frame.
   assert.ok(Math.abs(Number(probe(clean).format.duration)-Number(probe(baked).format.duration))<1/30+.005);assert.equal(probe(baked).streams.length,2);
-  const pixels=(file,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-vf','crop=640:75:0:0','-pix_fmt','gray','-f','rawvideo','pipe:1']);
+  // Global placement now spreads across the full frame. Inspect the actual
+  // message's row rather than assuming every comment lives in the top 75 px.
+  const plan=await media.renderer.describe(session.id,job),comment=plan.layout.find(m=>m.text==='精彩瞬间');assert.ok(comment);
+  const cropTop=Math.max(0,Math.floor(comment.y-4)),cropHeight=Math.min(75,plan.profile.height-cropTop);
+  const pixels=(file,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-vf',`crop=${plan.profile.width}:${cropHeight}:0:${cropTop}:exact=1`,'-pix_fmt','gray','-f','rawvideo','pipe:1']);
   const difference=(time,file=baked)=>{const a=pixels(clean,time),b=pixels(file,time);assert.equal(a.length,b.length);return a.reduce((sum,value,i)=>sum+Math.abs(value-b[i]),0)/a.length;};
   const before=difference(.3),during=difference(2.8);assert.ok(during>before+.2,`expected visible baked text, diff before=${before}, during=${during}`);
   const subtitles=trace.subtitles.join('\n');assert.ok(!subtitles.includes('不想显示'));assert.ok(!subtitles.includes('保留这条'));assert.ok(subtitles.includes('精彩瞬间'));

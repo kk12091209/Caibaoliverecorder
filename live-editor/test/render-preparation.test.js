@@ -9,6 +9,7 @@ import { Ingestor } from '../server/ingest.js';
 import { Media, assText } from '../server/media.js';
 import { RenderPipeline,layoutComments,visibleComments,commentSignature,frameSpan } from '../server/render-plan.js';
 import { clipFile } from '../server/output-names.js';
+import { DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
 
 const runtime=path.resolve('..','..','程序组件','runtime','ffmpeg');
 const ffmpeg=process.env.FFMPEG_PATH||path.join(runtime,'ffmpeg.exe'),ffprobe=process.env.FFPROBE_PATH||path.join(runtime,'ffprobe.exe');
@@ -78,6 +79,21 @@ function frame(file,time){return run(ffmpeg,['-v','error','-ss',String(time),'-i
 function brightCenter(bytes) {let sum=0,count=0;for(let y=15;y<48;y++)for(let x=0;x<320;x++)if(bytes[y*320+x]>180){sum+=x;count++;}assert.ok(count>5);return sum/count;}
 function audio(file){return run(ffmpeg,['-v','error','-i',file,'-map','0:a:0','-ac','1','-ar','48000','-f','f32le','pipe:1']);}
 function longestQuiet(bytes,from,to) {let run=0,longest=0;for(let i=Math.round(from*48000);i<Math.min(bytes.length/4,Math.round(to*48000));i++){if(Math.abs(bytes.readFloatLE(i*4))<.001)longest=Math.max(longest,++run);else run=0;}return longest/48000;}
+
+test('style changes build a new cache profile while a queued export keeps its captured size and opacity',async t=>{
+  const f=await fixture(t,{duration:4.4,comments:[{time:.4,text:'STYLE'}]});
+  await prepare(f);const before=videoRenders(f.calls);
+  const oldProfile=(await f.media.renderer.describe(f.session.id,f.store.edit(f.session.id))).profileHash;
+  const style={size:1.5,opacity:50};f.store.setting(DANMAKU_STYLE_SETTING,style);f.media.invalidatePreparation(f.session.id);
+  await prepare(f);assert.ok(videoRenders(f.calls)>before);
+  const changed=(await f.media.renderer.describe(f.session.id,f.store.edit(f.session.id))).profileHash;assert.notEqual(changed,oldProfile);
+  const job=await f.media.enqueue(f.session.id,{scope:'full',mode:'danmaku',exportDirectory:path.join(f.root,'exports')});
+  f.store.setting(DANMAKU_STYLE_SETTING,{size:0.6,opacity:0});
+  const renders=videoRenders(f.calls),file=await f.media.exportJob(job);
+  assert.deepEqual(job.danmakuStyle,style);assert.equal(videoRenders(f.calls),renders);assert.ok(job.preparedBlocks>0);
+  const translucent=frame(file,1.2);assert.ok(Math.max(...translucent)>80);assert.ok(Math.max(...translucent)<190);
+  const hidden=await exported(f,{scope:'full'});assert.ok(Math.max(...frame(hidden.file,1.2))<10);
+});
 
 test('background builds one block per call, exports reuse across restart, precise clip edges keep lanes and audio continuous',async t=>{
   const f=await fixture(t);

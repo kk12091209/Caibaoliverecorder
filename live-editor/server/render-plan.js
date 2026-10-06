@@ -6,20 +6,19 @@ import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { sourceStream, seekBase } from './ingest.js';
 import { preparedEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
+import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry } from '../shared/danmaku-style.js';
+import { scrollingTracks } from '../shared/danmaku-tracks.js';
+import {chatRate,validateChatRate} from './chat-rules.js';
 
-export const RENDER_VERSION = 2;
+export const RENDER_VERSION = 4;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export function layoutComments(messages) {
-  const lanes = Array(8).fill(-Infinity);
-  return messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !m.policyFiltered && !isStickerPlaceholder(m.text))
+export function layoutComments(messages,{rate=50,width=1280,height=720,style,font}={}) {
+  let second=-Infinity,count=0;
+  const eligible=messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !m.policyFiltered && !isStickerPlaceholder(m.text))
     .sort((a, b) => a.time - b.time || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map(message => {
-      let lane = lanes.findIndex(time => time <= message.time);
-      if (lane < 0) lane = lanes.indexOf(Math.min(...lanes));
-      lanes[lane] = message.time + 3;
-      return { ...message, lane };
-    });
+    .filter(message=>{const current=Math.floor(message.time);if(current!==second){second=current;count=0;}return count++<rate;});
+  return scrollingTracks(eligible,{width,...danmakuGeometry(height,style),font});
 }
 
 export function visibleComments(layout, snapshot, from, to) {
@@ -97,23 +96,24 @@ export class RenderPipeline {
     this.layouts=new Map();this.encodedInfo=new Map();this.operations=new Set();
   }
   invalidate(id){this.layouts.delete(id);}
-  async layout(id,signal) {
+  async layout(id,signal,rate=chatRate(this.store),geometry={}) {
+    validateChatRate(rate);
     await this.store.chatRules?.prepare(id);
     const stamp=this.store.get(`SELECT COALESCE(MAX(rowid),0) AS last,COUNT(*) AS count FROM danmaku WHERE session=?`,id);
     const flags=this.store.get(`SELECT COUNT(*) AS count,COALESCE(MAX(f.rowid),0) AS last FROM danmaku_filters f JOIN danmaku d ON d.id=f.message WHERE d.session=?`,id);
-    const signature=JSON.stringify([stamp,flags]),cached=this.layouts.get(id);
+    const signature=JSON.stringify([stamp,flags,rate,geometry]),cached=this.layouts.get(id);
     if(cached?.signature===signature)return cached.messages;
     const rows=[];let cursor=0;
     while(cursor<stamp.last) {
       canceled(signal);
       const batch=this.store.all(`SELECT d.rowid AS rowid,d.*,EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason='lottery') AS lottery,
-        EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason IN ('length','repeat','rate')) AS policyFiltered
+        EXISTS(SELECT 1 FROM danmaku_filters f WHERE f.message=d.id AND f.reason IN ('length','repeat')) AS policyFiltered
         FROM danmaku d WHERE d.session=? AND d.rowid>? AND d.rowid<=? ORDER BY d.rowid LIMIT 2048`,id,cursor,stamp.last);
       if(!batch.length)break;
       rows.push(...batch);cursor=batch.at(-1).rowid;await yieldTurn();
     }
     canceled(signal);
-    const messages=layoutComments(rows);this.layouts.delete(id);this.layouts.set(id,{signature,messages});
+    const messages=layoutComments(rows,{rate,...geometry});this.layouts.delete(id);this.layouts.set(id,{signature,messages});
     while(this.layouts.size>2)this.layouts.delete(this.layouts.keys().next().value);
     return messages;
   }
@@ -130,9 +130,14 @@ export class RenderPipeline {
     const info=await this.media.probeSource(sources[0],sources[0].start,options);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const selected=encoder||await this.encoder(options);
-    const font=Object.hasOwn(snapshot,'font')?snapshot.font:this.media.fonts.selected();
-    const profile={font:font?.id||null,version:RENDER_VERSION,width,height,fps:60,encoder:selected,arguments:preparedEncoderArguments(selected)};
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds)};
+    const selectedFont=Object.hasOwn(snapshot,'font')?snapshot.font:this.media.fonts.selected();
+    const font=selectedFont?.id?await this.media.fonts.selection(selectedFont.id):selectedFont;
+    // Queued jobs own their style. Older jobs keep the previous default;
+    // background preparation follows the current settings.
+    const danmakuStyle=(Object.hasOwn(snapshot,'danmakuStyle')||Object.hasOwn(snapshot,'mode'))?normalizedDanmakuStyle(snapshot.danmakuStyle):savedDanmakuStyle(this.store);
+    const danmakuPerSecond=validateChatRate(snapshot.danmakuPerSecond??chatRate(this.store));
+    const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:60,encoder:selected,arguments:preparedEncoderArguments(selected)};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds)};
   }
   async sourceFingerprint(source,from,to) {
     const current=this.store.get('SELECT * FROM sources WHERE id=?',source.id);
@@ -174,11 +179,11 @@ export class RenderPipeline {
     try {
       canceled(options.signal);
       const events=visibleComments(plan.layout,plan.snapshot,span.from,span.to);
-      await fs.writeFile(path.join(workDir,'part-0.ass'),this.assText(events,plan.profile.width,plan.profile.height,plan.font));
+      await fs.writeFile(path.join(workDir,'part-0.ass'),this.assText(events,plan.profile.width,plan.profile.height,plan.font,plan.profile.danmakuStyle));
       const fontDirectory=await m.fonts.stage(plan.font,workDir);
       const sourceInfo=source.id===plan.sources[0].id?plan.info:await m.probeSource(source,readFrom,options);
       const geometry=videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height);
-      const chain=[`setpts=PTS+${base}/TB`,geometry,'tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=60:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
+      const chain=[`setpts=PTS+${base}/TB`,geometry,'format=yuv420p','tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=60:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
       await m.process(['-copyts','-fflags','+genpts','-threads','2','-f','flv','-i','pipe:0','-map','0:v:0','-an','-filter_threads','2','-vf',chain,
         ...plan.profile.arguments,'-frames:v',String(span.frames),'-r','60','-movflags','+faststart','-y',file],
       {cwd:workDir,input:sourceStream(this.store,source.id,readFrom,span.to,{signal:options.signal}),signal:options.signal,background:options.background});

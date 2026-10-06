@@ -27,7 +27,8 @@ $trackedAssetExtensions = @('.png','.jpg','.jpeg','.webp','.gif','.ico','.woff',
 $editorAssetPaths = @(
     'live-editor/desktop/app.ico',
     'live-editor/desktop/assets/app-original.png',
-    'live-editor/src/assets/app-icon.png'
+    'live-editor/src/assets/app-icon.png',
+    'live-editor/src/assets/danmaku-style-preview.png'
 )
 $textExtensions = @('.swift','.plist','.py','.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.conf','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
 $textNames = @('LICENSE','NOTICE','COPYING','AUTHORS','Dockerfile','.editorconfig','.gitattributes','.gitignore','.gitmodules','.nojekyll','.dockerignore','.npmrc','.prettierrc','.browserslistrc')
@@ -120,7 +121,7 @@ foreach ($relative in $recorderSourceAdditions) {
 # Replace any previously tracked editor files with this selected current source
 # tree, and include current untracked modules without admitting user data.
 foreach ($key in @($files.Keys)) { if ($key.StartsWith('live-editor/')) { $files.Remove($key) | Out-Null } }
-foreach ($folder in @('src','server','test','scripts','docs','installer','desktop-macos')) {
+foreach ($folder in @('src','server','shared','test','scripts','docs','installer','desktop-macos')) {
     $directory = Join-Path $AppRoot $folder
     if (!(Test-Path -LiteralPath $directory -PathType Container)) { continue }
     foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse -Force) {

@@ -24,7 +24,9 @@ import { DesktopExit } from './desktop-exit.js';
 import { Updates } from './updates.js';
 import { AutoUpdate } from './auto-update.js';
 import { DailyDiagnostics } from './diagnostics.js';
+import { savedDanmakuStyle, validateDanmakuStyle, DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
 import { listenLocal } from './local-endpoint.js';
+import { DanmakuStylePreview } from './danmaku-style-preview.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -48,7 +50,7 @@ async function createManagedApp(options,runtime) {
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
-  const waveform=new WaveformService(store,media),density=new DensityService(store);
+  const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
   await media.recoverPendingSaves();
@@ -88,7 +90,7 @@ async function createManagedApp(options,runtime) {
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -141,15 +143,16 @@ async function createManagedApp(options,runtime) {
       if(p==='/api/updates/defer'&&req.method==='POST'){await body(req);return json(res,updates.defer());}
       if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
       if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));
-      if(p==='/api/danmaku-font'&&req.method==='POST'){
+      if((p==='/api/danmaku-font'||p==='/api/danmaku-font/draft')&&req.method==='POST'){
+        const draft=p.endsWith('/draft');let imported;
         if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
         media.fonts.changing=true;
         try{
           if(req.headers['content-type']==='application/octet-stream'){
-            const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>MAX_FONT_BYTES)throw new Error('字体超过 32 MB。');chunks.push(chunk);}await media.fonts.import(Buffer.concat(chunks));
-          }else{const input=await body(req);if(input.reset!==true)throw new Error('字体设置无效。');media.fonts.reset();}
-          for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
-          return json(res,{font:media.fonts.snapshot()});
+            const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>MAX_FONT_BYTES)throw new Error('字体超过 32 MB。');chunks.push(chunk);}imported=await media.fonts.import(Buffer.concat(chunks),{select:!draft});
+          }else{if(draft)throw new Error('草稿字体请上传字体文件。');const input=await body(req);if(input.reset!==true)throw new Error('字体设置无效。');media.fonts.reset();}
+          if(!draft)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
+          return json(res,{font:draft?imported:media.fonts.snapshot()});
         }finally{media.fonts.changing=false;}
       }
       if(p==='/api/state'&&req.method==='GET')return json(res,snapshot());
@@ -183,15 +186,39 @@ async function createManagedApp(options,runtime) {
       if((match=/^\/api\/rooms\/(\d+|douyin:\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
         const input=await body(req);diagnostics.record('用户操作',`直播间 ${match[1]}：${{start:'手动开始录制',stop:'停止录制与监控',auto:'设置自动录制',remove:'移除监控'}[match[2]]}${match[2]==='auto'?`；启用=${input.enabled===true}`:''}`);try{await recorder.action(match[1],match[2],input);diagnostics.record('监控操作完成',`直播间 ${match[1]}：${match[2]} 已成功执行`);}catch(error){diagnostics.record(`直播间 ${match[1]} ${match[2]} 操作失败`,error,{level:'错误'});throw error;}return json(res,{ok:true});
       }
+      if(p==='/api/danmaku-style/preview'&&req.method==='POST'){
+        const input=await body(req),controller=new AbortController();res.once('close',()=>controller.abort());
+        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]);
+        const result=await stylePreview.render(input,signal);
+        if(!result){if(res.destroyed)return;throw new Error('样式预览超时，请重试。');}
+        const {bytes,samples}=result;
+        res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store','Content-Length':bytes.length,'X-Danmaku-Preview-Count':samples});return res.end(bytes);
+      }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond'].includes(key)))throw new Error('不支持的设置项。');
+        if(Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont'].includes(key)))throw new Error('不支持的设置项。');
         if('closeAction' in input)validateCloseAction(input.closeAction);
         if('danmakuPerSecond' in input)validateChatRate(input.danmakuPerSecond);
-        if('exportDirectory' in input)store.setting('export-directory',await writableDirectory(input.exportDirectory));
-        if('closeAction' in input)store.setting('window-close-action',input.closeAction);
-        if('danmakuPerSecond' in input){store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);}
-        return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)});
+        const style='danmakuStyle' in input?validateDanmakuStyle(input.danmakuStyle):null;
+        if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
+        media.fonts.changing=true;
+        try{
+          const font='danmakuFont' in input?await media.fonts.selection(input.danmakuFont):undefined;
+          const directory='exportDirectory' in input?await writableDirectory(input.exportDirectory):undefined;
+          const changed=(style&&JSON.stringify(style)!==JSON.stringify(savedDanmakuStyle(store)))||
+            (font!==undefined&&(font?.id||null)!==(media.fonts.snapshot()?.id||null))||
+            ('danmakuPerSecond' in input&&input.danmakuPerSecond!==chatRate(store));
+          store.transaction(()=>{
+            if(directory!==undefined)store.setting('export-directory',directory);
+            if('closeAction' in input)store.setting('window-close-action',input.closeAction);
+            if('danmakuPerSecond' in input)store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);
+            if(style)store.setting(DANMAKU_STYLE_SETTING,style);
+            if(font!==undefined)store.setting('danmaku-font',font);
+          });
+          if('danmakuPerSecond' in input)recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);
+          if(changed)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
+          return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store),danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()});
+        }finally{media.fonts.changing=false;}
       }
       if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
       if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){

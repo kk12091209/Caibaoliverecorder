@@ -1,18 +1,20 @@
-// All lanes use the same pixel velocity, so a later short comment cannot catch a longer one.
+import { scrollingTracks } from '../shared/danmaku-tracks.js';
+// Legacy callers use one velocity; export-style callers also guard against a
+// longer, faster comment catching the preceding one.
 export const DANMAKU_FONT_SIZE = 22 * 2 / 3;
-export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, measure, previous = new Map() }) {
-  const speed = Math.max(100, width / 6), lineHeight = fontSize + 12;
-  const laneCount = Math.max(1, Math.min(10, Math.floor((height - 28) / lineHeight)));
+export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, lineHeight = fontSize + 12, top = 18, maxLanes = 10, exportLayout = false, font, measure, previous = new Map() }) {
+  const speed = Math.max(100, width / 6);
+  const laneCount = exportLayout ? Math.max(1, maxLanes) : Math.max(1, Math.min(maxLanes, Math.floor((height - top * 2) / lineHeight)));
+  if(exportLayout)return new Map(scrollingTracks(messages,{width,lanes:laneCount,top,lineHeight,size:fontSize,font,measure,previous}).map(message=>[message.id,message]));
   const occupied = Array(laneCount).fill(-Infinity), result = new Map();
   const ordered = [...messages].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
   for (const message of ordered) {
     const text = String(message.text).replace(/[\r\n]+/g, ' ').slice(0, 160);
     const textWidth = measure(text), old = previous.get(message.id);
     let lane = old && old.lane < laneCount ? old.lane : occupied.findIndex(t => t <= message.time);
-    // Dense bursts wait for the next free lane rather than overlapping or shifting existing comments.
-    if (lane < 0) continue;
-    occupied[lane] = Math.max(occupied[lane], message.time + (textWidth + 28) / speed);
-    result.set(message.id, { ...message, text, textWidth, lane, y: 18 + lane * lineHeight, speed, end: message.time + (width + textWidth) / speed });
+    if(lane<0)continue;
+    occupied[lane] = Math.max(occupied[lane], message.time + (textWidth+28)/speed);
+    result.set(message.id, { ...message, text, textWidth, lane, y: top + lane * lineHeight, speed, end: message.time + (width+textWidth)/speed });
   }
   return result;
 }

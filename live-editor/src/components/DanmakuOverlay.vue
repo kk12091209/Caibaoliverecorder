@@ -2,8 +2,9 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
+import { danmakuGeometry } from '../../shared/danmaku-style.js';
 
-const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean, font: Object });
+const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
 const canvas = ref(null);
 let font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
 const clock = new DanmakuClock(), timeline = new DanmakuTimeline();
@@ -11,15 +12,16 @@ const measured = new DanmakuCache(2048), sprites = new DanmakuCache(20 * 1024 * 
 const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') === '1';
 let context, observer, raf = 0, videoFrame = 0, width = 0, height = 0, scale = 1;
 let layout = new Map(), boundVideo, motionPreference, buffering = false, disposed = false;
+let geometry=danmakuGeometry(720,props.style);
 let lastPaint = 0, lastMediaTime = 0;
 let stats = { frames: 0, drawMs: 0, maxDrawMs: 0, rasterMisses: 0, measuredMisses: 0, active: 0, lateFrames: 0, minClockStep: Infinity, maxClockStep: 0, since: performance.now() };
-const events = ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'loadeddata', 'ratechange', 'ended', 'emptied', 'timeupdate'];
+const events = ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'loadedmetadata', 'loadeddata', 'resize', 'ratechange', 'ended', 'emptied', 'timeupdate'];
 
 function rebuild(reset = false) {
   if (!context) return;
   context.font = font;
   layout = layoutDanmaku(props.messages, {
-    width, height, previous: reset ? new Map() : layout,
+    width, height, fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,previous: reset ? new Map() : layout,
     measure(text) {
       const existing = measured.get(text);
       if (existing !== undefined) return existing;
@@ -36,12 +38,12 @@ function spriteFor(comment) {
   const cached = sprites.get(key);
   if (cached) return cached;
   const bitmap = document.createElement('canvas');
-  const cssWidth = Math.ceil(comment.textWidth) + 8, cssHeight = 40;
+  const cssWidth = Math.ceil(comment.paintWidth??comment.textWidth) + 8, cssHeight = Math.ceil(geometry.size*1.8)+8;
   bitmap.width = Math.ceil(cssWidth * scale); bitmap.height = Math.ceil(cssHeight * scale);
   const brush = bitmap.getContext('2d');
   brush.setTransform(scale, 0, 0, scale, 0, 0);
   brush.font = font; brush.textBaseline = 'top'; brush.lineJoin = 'round'; brush.lineWidth = 3;
-  brush.strokeStyle = 'rgba(0,0,0,.8)'; brush.fillStyle = color;
+  brush.strokeStyle = '#111111'; brush.fillStyle = color;
   brush.strokeText(comment.text, 4, 4); brush.fillText(comment.text, 4, 4);
   stats.rasterMisses++;
   return sprites.set(key, { bitmap, width: bitmap.width / scale, height: bitmap.height / scale }, bitmap.width * bitmap.height * 4);
@@ -101,6 +103,7 @@ function paint(now) {
   if (clock.running !== moving) resetClock();
   if (moving && !player.requestVideoFrameCallback) clock.sample(player.currentTime, now);
   const time = props.base + (moving ? clock.at(now) : player.currentTime);
+  context.save();context.beginPath();context.rect(0,0,width,height);context.clip();context.globalAlpha=geometry.opacity;
   let active = 0;
   for (const comment of timeline.at(time)) {
     if (props.excluded?.has(comment.id) || (motionPreference?.matches && time - comment.time > 4)) continue;
@@ -109,12 +112,14 @@ function paint(now) {
     context.drawImage(sprite.bitmap, x - 4, comment.y - 4, sprite.width, sprite.height);
     active++;
   }
+  context.restore();
   reportMetrics(now, started, time, active);
   if (moving) { queueVideoFrame(); raf = requestAnimationFrame(paint); }
 }
 
 function requestPaint() { if (!disposed && !raf) raf = requestAnimationFrame(paint); }
 function playbackEvent(event) {
+  if(['loadedmetadata','loadeddata','resize'].includes(event.type))resize();
   if (event.type === 'waiting' || event.type === 'seeking' || event.type === 'emptied') buffering = true;
   else if (event.type === 'playing' || event.type === 'seeked' || event.type === 'loadeddata') buffering = false;
   if (event.type !== 'timeupdate') resetClock();
@@ -127,17 +132,27 @@ function bind(player) {
   if (boundVideo) for (const event of events) boundVideo.removeEventListener(event, playbackEvent);
   boundVideo = player; buffering = false;
   if (player) for (const event of events) player.addEventListener(event, playbackEvent);
-  resetClock(); requestPaint(); queueVideoFrame();
+  resize();resetClock(); requestPaint(); queueVideoFrame();
 }
 function resize() {
-  const box = canvas.value.getBoundingClientRect(), newScale = Math.min(devicePixelRatio || 1, 2);
-  if (width === box.width && height === box.height && scale === newScale) return;
+  if(!canvas.value||!context)return;
+  const box = canvas.value.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
+  if(!box.width||!box.height)return;
+  const frameWidth=boundVideo?.videoWidth||1280,frameHeight=boundVideo?.videoHeight||720;
+  const fit=Math.min(box.width/frameWidth,box.height/frameHeight),newScale=fit*dpr;
+  if(width===frameWidth&&height===frameHeight&&scale===newScale&&canvas.value.width===Math.round(box.width*dpr)&&canvas.value.height===Math.round(box.height*dpr))return;
   if (scale !== newScale) sprites.clear();
-  width = box.width; height = box.height; scale = newScale;
-  canvas.value.width = Math.round(width * scale); canvas.value.height = Math.round(height * scale);
-  context.setTransform(scale, 0, 0, scale, 0, 0); rebuild(true);
+  width=frameWidth;height=frameHeight;scale=newScale;
+  canvas.value.width=Math.round(box.width*dpr);canvas.value.height=Math.round(box.height*dpr);
+  context.setTransform(scale,0,0,scale,(box.width-width*fit)/2*dpr,(box.height-height*fit)/2*dpr);
+  updateStyle();
 }
 let fontGeneration=0,customFace;
+function updateStyle(){
+  geometry=danmakuGeometry(height||720,props.style);
+  font=`${props.font?.italic?'italic ':''}${props.font?.bold?'700':'400'} ${geometry.size}px ${customFace?'"'+customFace.family+'", ':''}"Microsoft YaHei", "Segoe UI", sans-serif`;
+  measured.clear();sprites.clear();rebuild(true);
+}
 async function changeFont(value){
   const generation=++fontGeneration;let face;
   try{if(value?.id){face=new FontFace('Caibo_'+value.id,`url("${value.url}")`);await face.load();}}
@@ -145,10 +160,10 @@ async function changeFont(value){
   if(disposed||generation!==fontGeneration)return;
   if(customFace)document.fonts.delete(customFace);customFace=face;
   if(face)document.fonts.add(face);
-  font=`500 ${DANMAKU_FONT_SIZE}px ${face?'"'+face.family+'", ':''}"Microsoft YaHei", "Segoe UI", sans-serif`;
-  measured.clear();sprites.clear();rebuild(true);
+  updateStyle();
 }
 watch(() => props.font?.id,()=>changeFont(props.font),{immediate:true});
+watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.font?.advanceRatio],updateStyle);
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());
 watch(() => [props.base, props.enabled, props.loading], () => { cancelVideoFrame(); resetClock(); requestPaint(); queueVideoFrame(); });

@@ -26,7 +26,12 @@ test('source package retains recorder Runtime/Logs source and current CI while e
     'BililiveRecorder.Core/Scripting/Runtime/JintConsole.cs',
     'BililiveRecorder.Core/Scripting/Runtime/JintFetchSync.cs',
     'BililiveRecorder.Web/Models/Rest/Logs/WebApiLogEventSink.cs',
-    '.github/workflows/editor.yml'
+    '.github/workflows/editor.yml',
+    'live-editor/shared/danmaku-style.js',
+    'live-editor/shared/danmaku-tracks.js',
+    'live-editor/server/danmaku-style-preview.js',
+    'live-editor/src/components/DanmakuStyleSettings.vue',
+    'live-editor/src/assets/danmaku-style-preview.png'
   ])assert.ok(included.has(required),`missing corresponding source: ${required}`);
   if(manifest.submodules.find(module=>module.path==='webui/source')?.initialized)
     assert.ok(included.has('webui/source/.github/default.conf'),'initialized Web UI source must retain its build configuration');

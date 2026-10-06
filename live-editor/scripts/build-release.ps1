@@ -8,7 +8,7 @@ param(
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
     [string]$FFmpegRoot = '',
-    [string]$Version = '0.1.8',
+    [string]$Version = '0.1.9',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
     [switch]$Include7z,
@@ -101,6 +101,7 @@ Add-ComponentFile (Join-Path $ProjectRoot 'THIRD_PARTY_NOTICES.md') 'licenses/TH
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'docs\licenses') -File -Filter '*.txt') { Add-ComponentFile $file.FullName ('licenses/douyin/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'package.json') 'live-editor/package.json'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'server') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/server/' + $file.Name) }
+foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'shared') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/shared/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'dist\index.html') 'live-editor/dist/index.html'
 # Only reachable build assets are included, so old hashed bundles cannot accumulate.
 $assets = [Collections.Generic.Queue[string]]::new()
