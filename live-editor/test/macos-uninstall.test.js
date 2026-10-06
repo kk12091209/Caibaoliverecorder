@@ -1,0 +1,26 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {execFile,spawn} from 'node:child_process';
+import {promisify} from 'node:util';
+import {once} from 'node:events';
+import {ServiceRuntime} from '../server/service-runtime.js';
+const run=promisify(execFile),editor=fileURLToPath(new URL('..',import.meta.url));
+test('Mac 完整卸载与 Node 共用独占数据锁，拒绝活动写入、错误路径并保留损坏锁',{skip:process.platform!=='darwin',timeout:60000},async t=>{
+  const root=await fs.mkdtemp('/private/tmp/caibo-uninstall-'),data=path.join(root,'data');let runtime,child,exited;
+  t.after(async()=>{await runtime?.release();if(child&&child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await exited;}await fs.rm(root,{recursive:true,force:true});});
+  await fs.mkdir(data);await fs.mkdir(path.join(root,'QA.app'));
+  const source=await fs.readFile(path.join(editor,'desktop-macos/App.swift'),'utf8');await fs.writeFile(path.join(root,'App.swift'),source.split('@main struct CaiboMain {')[0]);
+  const executable=path.join(root,'checks'),env={...process.env,TMPDIR:'/private/tmp',TMP:'/private/tmp',TEMP:'/private/tmp'};
+  await run('xcrun',['swiftc','-swift-version','5','-module-cache-path',root+'/modules',...['ProcessOwnership','Repair','Backend'].map(n=>path.join(editor,'desktop-macos',n+'.swift')),root+'/App.swift',path.join(editor,'test/helpers/macos-uninstall.swift'),'-o',executable],{env,timeout:45000});
+  assert.match((await run(executable,['validate',root],{env})).stdout,/PASS/);
+  runtime=await ServiceRuntime.acquire(data,editor);assert.match((await run(executable,['locked',root],{env})).stdout,/PASS/);await runtime.release();runtime=null;
+  child=spawn(executable,['hold',root],{env,stdio:['ignore','pipe','pipe']});exited=once(child,'exit');let output='';child.stdout.on('data',chunk=>output+=chunk);
+  for(let n=0;n<100&&!output.includes('PASS');n++)await new Promise(resolve=>setTimeout(resolve,20));assert.ok(output.includes('PASS'));
+  await assert.rejects(ServiceRuntime.acquire(data,editor),{code:'SERVICE_RUNNING'});await fs.writeFile(root+'/release','1');assert.equal((await exited)[0],0);
+  runtime=await ServiceRuntime.acquire(data,editor);await runtime.release();runtime=null;
+  await fs.writeFile(data+'/desktop-service.lock.sqlite','retained bad lease');assert.match((await run(executable,['corrupt',root],{env})).stdout,/PASS/);
+  assert.equal(await fs.readFile(data+'/desktop-service.lock.sqlite','utf8'),'retained bad lease');
+});

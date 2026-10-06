@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 export const SERVICE_PROTOCOL=1;
@@ -25,22 +25,51 @@ export class ServiceRuntime {
     await fs.mkdir(root,{recursive:true});root=await fs.realpath(root);
     const runtime=new ServiceRuntime(root,{managed,now,isAlive,startupGraceMs,clientTimeoutMs});
     runtime.build=await serviceBuild(appRoot);
-    try{
+    let guard;
+    const acquireLease=()=>{
       runtime.lease=new DatabaseSync(runtime.lockFile);
       runtime.lease.exec('PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS lease(owner TEXT); BEGIN EXCLUSIVE; DELETE FROM lease;');
       runtime.lease.prepare('INSERT INTO lease(owner) VALUES(?)').run(JSON.stringify({pid:process.pid,instance:runtime.instance}));
+    };
+    try{
+      // Serialize lease creation/repair with an independent OS-backed lock.
+      // Never quarantine SQLITE_BUSY: it belongs to an active data writer.
+      for(const file of [runtime.lockFile,path.join(root,'desktop-recovery.lock.sqlite')]) {
+        try{if((await fs.lstat(file)).isSymbolicLink())throw new Error('后台锁文件异常，已保留原文件。');}catch(error){if(error.code!=='ENOENT')throw error;}
+      }
+      guard=new DatabaseSync(path.join(root,'desktop-recovery.lock.sqlite'));
+      guard.exec('PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS repair(owner TEXT); BEGIN EXCLUSIVE;');
+      try{acquireLease();}
+      catch(error){
+        runtime.lease?.close();runtime.lease=null;
+        if(![11,26].includes(error.errcode))throw error;
+        const recovery=path.join(root,'recovery');await fs.mkdir(recovery,{recursive:true,mode:0o700});
+        if((await fs.lstat(recovery)).isSymbolicLink())throw new Error('数据恢复目录异常，已保留原文件。');
+        const backup=path.join(recovery,'lease-'+randomUUID());await fs.mkdir(backup,{mode:0o700});
+        for(const suffix of ['', '-journal','-wal','-shm'])try{await fs.rename(runtime.lockFile+suffix,path.join(backup,'desktop-service.lock.sqlite'+suffix));}catch(error){if(error.code!=='ENOENT')throw error;}
+        acquireLease();runtime.leaseRecovered=true;
+      }
       return runtime;
     }catch(error){
       runtime.lease?.close();runtime.lease=null;
       if([5,6].includes(error.errcode)||/database (?:is )?locked|database is busy/i.test(error.message))throw Object.assign(new Error('这份素材数据已有后台服务，正在连接已有服务。'),{code:'SERVICE_RUNNING'});
       throw error;
-    }
+    }finally{guard?.close();}
   }
   constructor(root,{managed,now,isAlive,startupGraceMs,clientTimeoutMs}){
     Object.assign(this,{root,managed,now,isAlive,startupGraceMs,clientTimeoutMs});
     this.started=now();this.instance=randomBytes(16).toString('hex');this.token=randomBytes(32).toString('hex');
     this.file=path.join(root,'desktop-service.json');this.lockFile=path.join(root,'desktop-service.lock.sqlite');
+    this.startupFile=path.join(root,'desktop-startup-state.json');
     this.clients=new Map();this.pending='';this.closed=false;this.stopping=false;
+  }
+  async startup(phase,{ready=false,recoverable=true}={}){
+    this.startupPhase=phase;
+    this.diagnostics?.record('启动阶段',phase,{important:true});
+    this.onStartup?.(phase);
+    if(!this.managed)return;
+    try{await atomicJson(this.startupFile,{protocol:SERVICE_PROTOCOL,instance:this.instance,pid:process.pid,dataPath:this.root,phase,ready,recoverable,updatedAt:new Date().toISOString()});}
+    catch(error){this.diagnostics?.record('启动诊断','启动状态文件写入失败：'+error.code,{level:'警告'});}
   }
   async publish(port){
     this.origin='http://127.0.0.1:'+port;
@@ -64,12 +93,15 @@ export class ServiceRuntime {
     if(this.pending)return true;
     return this.managed&&this.now()-this.started>=this.startupGraceMs&&this.liveClients()===0;
   }
-  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,quitError:this.quitError||'',...activity};}
+  status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,quitError:this.quitError||'',startupPhase:this.startupPhase||'',...activity};}
   async release(){
     if(this.closed)return;this.closed=true;
     try{
       const owner=await readJson(this.file);
       if(owner?.instance===this.instance)await fs.unlink(this.file).catch(error=>{if(error.code!=='ENOENT')throw error;});
+      // Diagnostic files must never prevent a successful shutdown.
+      try{const startup=await readJson(this.startupFile);if(startup?.instance===this.instance)await fs.unlink(this.startupFile);}
+      catch(error){if(error.code!=='ENOENT')this.onStartup?.('启动诊断状态清理失败（'+(error.code||'UNKNOWN')+'）');}
     }finally{
       try{this.lease?.exec('ROLLBACK;');}finally{this.lease?.close();this.lease=null;}
     }

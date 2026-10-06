@@ -7,6 +7,17 @@ export function roomEnabled(room) {
     ? room.recordingEnabled : !!room.autoRecord && room.autoRecordForThisSession!==false);
 }
 const validId=id=>Number.isInteger(id)&&id>0&&id<=2147483647;
+const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+export function defaultCoreConfig(rooms=[]) {
+  return {version:3,global:{RecordDanmaku:{HasValue:true,Value:true},CuttingMode:{HasValue:true,Value:0},RecordDanmakuFlushInterval:{HasValue:true,Value:0}},
+    // Never start recording before restoring the saved user intent through the API.
+    rooms:rooms.map(room=>({RoomId:{HasValue:true,Value:room.roomId},AutoRecord:{HasValue:true,Value:false}}))};
+}
+function readableConfig(config) {
+  return object(config)&&config.version===3&&(config.global==null||object(config.global))&&Array.isArray(config.rooms)&&config.rooms.every(room=>
+    object(room)&&(room.RoomId==null||object(room.RoomId)&&(!room.RoomId.HasValue||validId(room.RoomId.Value)))&&
+    (room.AutoRecord==null||object(room.AutoRecord)&&(!room.AutoRecord.HasValue||typeof room.AutoRecord.Value==='boolean')));
+}
 
 // User intent survives core exits. The core's AutoRecordForThisSession does not.
 export class BilibiliRooms {
@@ -59,8 +70,27 @@ export class BilibiliRooms {
   async prepareLaunch(directory,assertOpen) {
     // Runs only before launching an absent core, never while its config writer is live.
     // Persisted stops also win when a preceding HTTP stop/config request failed.
-    const file=path.join(directory,'config.json'),config=JSON.parse((await fs.readFile(file,'utf8')).replace(/^\uFEFF/,''));
-    if(config.version!==3||!Array.isArray(config.rooms))throw new Error('录制核心配置无效，已保留原文件。');
+    const file=path.join(directory,'config.json'),stat=await fs.lstat(file);
+    if(!stat.isFile()||stat.isSymbolicLink())throw new Error('录制核心配置文件异常，已保留原文件。');
+    const original=await fs.readFile(file);let config;
+    try{config=JSON.parse(original.toString('utf8').replace(/^\uFEFF/,''));}catch(error){if(!(error instanceof SyntaxError))throw error;}
+    if(!readableConfig(config)) {
+      const recovery=path.join(this.store.root,'recovery');
+      await fs.mkdir(recovery,{recursive:true,mode:0o700});
+      const recoveryStat=await fs.lstat(recovery);
+      if(!recoveryStat.isDirectory()||recoveryStat.isSymbolicLink())throw new Error('录制配置恢复目录异常，已保留原文件。');
+      assertOpen();
+      const backup=path.join(recovery,'recorder-config-'+randomUUID()+'.json');
+      await fs.writeFile(backup,original,{flag:'wx',mode:0o600,flush:true});
+      const temporary=path.join(directory,`.config-start-${randomUUID()}.tmp`);
+      try {
+        assertOpen();await fs.writeFile(temporary,JSON.stringify(defaultCoreConfig([...this.entries.values()]),null,2),{flag:'wx',mode:0o600,flush:true});
+        assertOpen();await fs.rename(temporary,file);
+      } finally {await fs.rm(temporary,{force:true});}
+      this.store.recovery??={};this.store.recovery.coreConfigRecovered=true;
+      this.store.diagnostics?.record('数据恢复','旧录制配置无法读取，已备份并恢复；录像保留，沿用保存的录制开关',{level:'警告',important:true});
+      return;
+    }
     let changed=false;
     for(const raw of config.rooms){
       const id=raw.RoomId?.Value,room=this.get(id);

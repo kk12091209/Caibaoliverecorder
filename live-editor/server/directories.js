@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 export function directories(store) {
   const configured=store.setting('export-directory');
   const exports=configured||store.defaultExportRoot||path.join(store.projectRoot||path.dirname(store.root),'导出视频默认路径');
-  return {logs:path.join(store.root,'logs'),exports,full:path.join(exports,'完整素材'),clips:path.join(exports,'导出片段'),originals:path.join(store.root,'originals')};
+  return {logs:path.join(store.primaryRoot||store.root,'logs'),exports,full:path.join(exports,'完整素材'),clips:path.join(exports,'导出片段'),originals:path.join(store.root,'originals'),retained:path.join(store.primaryRoot||store.root,'originals')};
 }
 export function exportScopeDirectory(root,scope='clips') { return path.join(root,scope==='full'?'完整素材':'导出片段'); }
 export async function writableDirectory(value) {

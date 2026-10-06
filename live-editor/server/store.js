@@ -12,6 +12,7 @@ export class Store {
   constructor(root) {
     this.root = path.resolve(root);
     fs.mkdirSync(this.root, { recursive: true });
+    try {
     this.db = new DatabaseSync(path.join(this.root, 'editor.sqlite'));
     this.db.function('is_sticker_placeholder', { deterministic: true }, text => Number(isStickerPlaceholder(text)));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
@@ -45,15 +46,19 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS deleted_source_paths(path TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+      CREATE TABLE IF NOT EXISTS recovery_records(id TEXT PRIMARY KEY,kind TEXT,record_key TEXT,original TEXT,created TEXT);
     `);
     if (!this.all('PRAGMA table_info(sessions)').some(c => c.name === 'deleted_at')) this.db.exec("ALTER TABLE sessions ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''");
     for (const name of ['purged_at','purge_started_at','purge_error']) if (!this.all('PRAGMA table_info(sessions)').some(c => c.name === name)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     if (!this.all('PRAGMA table_info(jobs)').some(c => c.name === 'mode')) this.db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'clean'");
     if (!this.all('PRAGMA table_info(source_storage)').some(c => c.name === 'eligible')) this.db.exec('ALTER TABLE source_storage ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0');
+    this.recoveryCount=0;
+    this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();
     this.db.prepare("UPDATE jobs SET status='cancelled',error='' WHERE status='cancelling'").run();
     this.db.prepare("UPDATE sessions SET archive_status='pending' WHERE archive_status='running'").run();
     this.chatRules = new ChatRuleIndex(this);
+    } catch (error) { try { this.db?.close(); } catch {} throw error; }
   }
   run(sql, ...args) { return this.db.prepare(sql).run(...args); }
   get(sql, ...args) { return this.db.prepare(sql).get(...args); }
@@ -167,7 +172,16 @@ export class Store {
     this.run('INSERT INTO sources(id,session,path,xml,start,wall,closed) VALUES(?,?,?,?,?,?,?)', id, session, file, file.replace(/\.flv$/i, '.xml'), start, wall, +closed);
     return this.get('SELECT * FROM sources WHERE id=?', id);
   }
-  edit(id) { const row = this.get('SELECT * FROM edits WHERE session=?', id); return row ? { revision: row.revision, ...JSON.parse(row.data), filterLottery: true } : { revision: 0, ranges: [], excluded: [], undo: [], filterLottery: true }; }
+  edit(id) {
+    const row=this.get('SELECT * FROM edits WHERE session=?',id);
+    if(row)try {
+      const data=JSON.parse(row.data);
+      if(data&&typeof data==='object'&&!Array.isArray(data)){data.ranges??=[];data.excluded??=[];data.undo??=[];}
+      if(!data||!Array.isArray(data.ranges)||!Array.isArray(data.excluded)||!Array.isArray(data.undo))throw new SyntaxError('Invalid edit');
+      return {revision:row.revision,...data,filterLottery:true};
+    }catch(error){if(!(error instanceof SyntaxError))throw error;this.recoverRecord('edits',id,row,()=>this.run('DELETE FROM edits WHERE session=?',id));}
+    return {revision:0,ranges:[],excluded:[],undo:[],filterLottery:true};
+  }
   saveEdit(id, input) {
     if (!this.session(id)) throw new Error('找不到录像。');
     const current = this.edit(id);
@@ -188,9 +202,35 @@ export class Store {
   }
   setting(key, value) {
     if (value !== undefined) this.run('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));
-    const row = this.get('SELECT value FROM settings WHERE key=?', key); return row ? JSON.parse(row.value) : undefined;
+    const row=this.get('SELECT value FROM settings WHERE key=?',key);
+    if(!row)return undefined;
+    try {const value=JSON.parse(row.value);if(!validSetting(key,value))throw new SyntaxError('Invalid setting');return value;}
+    catch(error){if(!(error instanceof SyntaxError))throw error;this.recoverRecord('settings',key,row,()=>this.run('DELETE FROM settings WHERE key=?',key));return undefined;}
   }
-  close() { this.chatRules.close(); this.db.close(); }
+  recoverRecord(kind,key,row,change) {
+    // SAVEPOINT also works inside an existing edit/settings transaction.
+    this.db.exec('SAVEPOINT caibo_record_recovery');
+    try {this.quarantine(kind,key,row);change();this.db.exec('RELEASE caibo_record_recovery');}
+    catch(error){this.db.exec('ROLLBACK TO caibo_record_recovery; RELEASE caibo_record_recovery');throw error;}
+  }
+  quarantine(kind,key,row) {
+    // Raw values can contain credentials. Keep them in the private database,
+    // never in diagnostic text or the public state response.
+    this.run('INSERT INTO recovery_records VALUES(?,?,?,?,?)',randomUUID(),kind,key,JSON.stringify(row),new Date().toISOString());
+    this.recoveryCount++;
+    this.diagnostics?.record('数据恢复',`已隔离异常${kind==='settings'?'设置':kind==='jobs'?'导出任务':'剪辑记录'}`,{level:'警告',important:true});
+  }
+  jobDetails(row) {
+    try {const job=JSON.parse(row.data||'{}');if(!job||typeof job!=='object'||Array.isArray(job)||job.id!==undefined&&job.id!==row.id)throw new SyntaxError('Invalid job');return job;}
+    catch(error){if(!(error instanceof SyntaxError))throw error;const original=this.get('SELECT * FROM jobs WHERE id=?',row.id)||row,job={id:row.id,session:original.session,recoveryInvalid:true};
+      this.recoverRecord('jobs',row.id,original,()=>this.run("UPDATE jobs SET status='failed',data=?,error='旧任务记录异常，原记录已保留；请重新导出。' WHERE id=?",JSON.stringify(job),row.id));return job;}
+  }
+  repairRecords() {
+    // SQLite identifies invalid JSON without loading the complete media index.
+    for(const row of this.all('SELECT key FROM settings WHERE NOT json_valid(value)'))this.setting(row.key);
+    for(const row of this.all("SELECT * FROM jobs WHERE NOT json_valid(data) OR CASE WHEN json_valid(data) THEN json_type(data)<>'object' ELSE 0 END"))this.jobDetails(row);
+  }
+  close() { this.chatRules?.close(); this.db.close(); }
 }
 
 export function validateRanges(ranges, duration, allowEmpty = false) {
@@ -200,4 +240,14 @@ export function validateRanges(ranges, duration, allowEmpty = false) {
     if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > duration + 0.05) throw new Error('选段范围超出已录制内容。');
     return { start, end: Math.min(duration, end) };
   });
+}
+
+function validSetting(key,value) {
+  if(value===null)return true;
+  if(['recorder-secret','webhook-secret'].includes(key))return typeof value==='string'&&/^[a-f0-9]{48}$/.test(value);
+  if(key==='export-directory')return typeof value==='string'&&path.isAbsolute(value)&&!/[\x00-\x1f]/.test(value);
+  if(key==='douyin-rooms'||key==='recorder-resume-rooms')return Array.isArray(value);
+  if(['backgroundPreparationEnabled','update-enabled'].includes(key))return typeof value==='boolean';
+  if(key==='danmaku-per-second')return Number.isInteger(value)&&value>=1&&value<=50;
+  return true;
 }

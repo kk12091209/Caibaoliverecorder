@@ -16,7 +16,7 @@ async function fixture(t){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-quit-')),apps=[];
   const options={data:path.join(root,'data'),projectRoot:root,port:0,noRecorder:true,preparation:false,compact:false,runtimePollMs:60000,ffmpeg:'not-launched',ffprobe:'not-launched'};
   t.after(async()=>{for(const app of apps)await app.close();assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('caibo-quit-'));await fs.rm(root,{recursive:true,force:true});});
-  return {root,open:async()=>{const app=await createApp(options);app.ingestor.stop();apps.push(app);return app;}};
+  return {root,open:async()=>{const app=await createApp(options);await app.startupRecovery;app.ingestor.stop();apps.push(app);return app;}};
 }
 async function quit(app,confirmed=false){const response=await fetch(app.runtime.origin+'/internal/desktop',{method:'POST',headers:{'Content-Type':'application/json','X-Caibo-Instance':app.runtime.token},body:JSON.stringify({action:'quit',confirmed})});return {status:response.status,body:await response.json()};}
 

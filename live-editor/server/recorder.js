@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { availableLocalPort, findOwnedCore, stopOwnedCore } from './local-endpoint.js';
 import { alive } from './service-runtime.js';
-import {BilibiliRooms,roomEnabled} from './bilibili-rooms.js';
+import {BilibiliRooms,roomEnabled,defaultCoreConfig} from './bilibili-rooms.js';
 
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
@@ -76,8 +76,10 @@ export class Recorder {
     await fs.mkdir(this.directory,{recursive:true});
     this.assertOpen();
     const config=path.join(this.directory,'config.json');
-    try{await fs.access(config);}catch{this.assertOpen();
-      await fs.writeFile(config,JSON.stringify({version:3,global:{RecordDanmaku:{HasValue:true,Value:true},CuttingMode:{HasValue:true,Value:0},RecordDanmakuFlushInterval:{HasValue:true,Value:0}},rooms:[]},null,2));
+    try{await fs.access(config);}catch(error){
+      if(error.code!=='ENOENT')throw error;this.assertOpen();
+      try{await fs.writeFile(config,JSON.stringify(defaultCoreConfig([...this.roomState.entries.values()]),null,2),{flag:'wx',mode:0o600});}
+      catch(error){if(error.code!=='EEXIST')throw error;}
     }
     this.assertOpen();
     if(this.automaticPort){

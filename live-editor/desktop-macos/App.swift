@@ -2,7 +2,61 @@ import AppKit
 import WebKit
 import UniformTypeIdentifiers
 import Darwin
+import SQLite3
 import IOKit.pwr_mgt
+
+@MainActor struct UninstallDataLease {
+    private var handles: [OpaquePointer] = []
+    static func acquire(data: URL) throws -> UninstallDataLease {
+        var lease = UninstallDataLease()
+        do {
+            for (index, name) in ["desktop-recovery.lock.sqlite", "desktop-service.lock.sqlite"].enumerated() {
+                let file = data.appendingPathComponent(name)
+                if let attributes = try? FileManager.default.attributesOfItem(atPath: file.path), attributes[.type] as? FileAttributeType == .typeSymbolicLink { throw problem("后台锁文件异常，卸载已取消，数据保留。") }
+                var handle: OpaquePointer?
+                let opened = sqlite3_open_v2(file.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+                guard opened == SQLITE_OK, let handle else { if let handle { sqlite3_close(handle) }; throw problem("无法核实后台锁，卸载已取消，数据保留。") }
+                lease.handles.append(handle)
+                let result = sqlite3_exec(handle, "PRAGMA busy_timeout=0; BEGIN EXCLUSIVE;", nil, nil, nil)
+                // The repair lock is always required. A damaged primary lease
+                // cannot have a normal owner; retain it while preventing any
+                // new backend from repairing/opening the data during removal.
+                guard result == SQLITE_OK || index == 1 && [SQLITE_NOTADB, SQLITE_CORRUPT].contains(result) else { throw problem("后台仍在使用数据或锁无法读取，卸载已取消，文件保留。") }
+            }
+            return lease
+        } catch { lease.close(); throw error }
+    }
+    mutating func close() {
+        for handle in handles.reversed() { sqlite3_exec(handle, "ROLLBACK;", nil, nil, nil); sqlite3_close(handle) }
+        handles.removeAll()
+    }
+}
+
+@MainActor enum CompleteUninstall {
+    static func validate(app: URL, data: URL) throws {
+        let files = FileManager.default, home = files.homeDirectoryForCurrentUser.standardizedFileURL
+        guard app.pathExtension == "app", files.fileExists(atPath: app.path),
+              data.lastPathComponent == "data", data.path != home.path, data.path != "/",
+              !app.path.hasPrefix(data.path + "/"), !data.path.hasPrefix(app.path + "/"),
+              OwnedProcess.samePath(app.path, app.resolvingSymlinksInPath().path),
+              OwnedProcess.samePath(data.path, data.resolvingSymlinksInPath().path),
+              files.isWritableFile(atPath: app.deletingLastPathComponent().path),
+              files.isWritableFile(atPath: data.deletingLastPathComponent().path) else {
+            throw problem("无法安全移除此安装或数据目录，请先将应用安装到可写入的应用程序文件夹。")
+        }
+        let volume = try app.resourceValues(forKeys: [.volumeIsReadOnlyKey])
+        guard volume.volumeIsReadOnly != true else { throw problem("当前应用位于只读安装盘，请从应用程序文件夹运行后完整卸载。") }
+    }
+    static func recycle(app: URL, data: URL) async throws {
+        try validate(app: app, data: data)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            NSWorkspace.shared.recycle([app, data]) { _, error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
+            }
+        }
+    }
+}
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
@@ -16,7 +70,14 @@ import IOKit.pwr_mgt
     var sleepAssertion: IOPMAssertionID = 0
     var hasSleepAssertion = false
     var lastStatus: [String: Any] = [:]
-    var connectionErrorShown = false
+    var connectionInFlight = false, retryRequested = false
+    var connectionPaused = false
+    var connectionStarted: Date?
+    var backendRecoveryAttempts = 0
+    var repairing = false, repairAttempted = ProcessInfo.processInfo.environment["CAIBO_REPAIR_ATTEMPT"] == "1"
+    var repairProgress = "", bundleChecked = false
+    var nextReconnectAt = Date.distantPast
+    var reconnectDelay: TimeInterval = 5
     var startupPanel: NSView!
     var startupTitle: NSTextField!
     var startupDetail: NSTextField!
@@ -40,6 +101,7 @@ import IOKit.pwr_mgt
             guard let resources = Bundle.main.resourceURL else { throw problem("应用资源目录不存在。") }
             backend = Backend(resources: resources, data: data, exports: exports)
             try backend.prepare()
+            backend.onDiagnostic = { [weak self] message in self?.logStartup(message, forward: false) }
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
             lockFD = Darwin.open(data.appendingPathComponent("desktop-window.lock").path, O_CREAT | O_RDWR, 0o600)
             guard lockFD >= 0 else { throw problem("无法创建窗口锁：\(data.path)") }
@@ -59,6 +121,8 @@ import IOKit.pwr_mgt
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "显示主窗口", action: #selector(showWindow), keyEquivalent: "0").target = self
         appMenu.addItem(withTitle: "打开导出文件夹", action: #selector(openExports), keyEquivalent: "") .target = self
+        appMenu.addItem(withTitle: "打开原始录像文件夹", action: #selector(openOriginals), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "完整卸载…", action: #selector(completeUninstall), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "隐藏菜播·录包机", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "退出菜播·录包机", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -105,7 +169,8 @@ import IOKit.pwr_mgt
         startupDetail.font = .systemFont(ofSize: 14); startupDetail.alignment = .center
         startupRetry = NSButton(title: "重试", target: self, action: #selector(retryStartup))
         startupLogs = NSButton(title: "打开日志文件夹", target: self, action: #selector(openStartupLogs))
-        let buttons = NSStackView(views: [startupRetry, startupLogs]); buttons.orientation = .horizontal; buttons.spacing = 12
+        let originals = NSButton(title: "打开原始录像文件夹", target: self, action: #selector(openOriginals))
+        let buttons = NSStackView(views: [startupRetry, startupLogs, originals]); buttons.orientation = .horizontal; buttons.spacing = 12
         let stack = NSStackView(views: [startupTitle, startupDetail, buttons])
         stack.orientation = .vertical; stack.alignment = .centerX; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; startupPanel.addSubview(stack)
@@ -141,41 +206,94 @@ import IOKit.pwr_mgt
         }
     }
     func connect() async {
-        guard !backend.connecting, !backend.exitRequested, !terminating else { return }
-        do {
-            try backend.validateInterface()
+        guard !connectionInFlight, !connectionPaused, !backend.connecting, !backend.exitRequested, !terminating else { return }
+        connectionInFlight = true; connectionStarted = Date()
+        defer {
+            connectionInFlight = false; connectionStarted = nil
+            let queued = retryRequested; retryRequested = false
+            if queued && !ready && !backend.exitRequested && !terminating { Task { await connect() } }
+        }
+        if !pageReady { showConnecting() }
+        while !backend.exitRequested && !terminating {
+          do {
+            try await backend.validateComponents()
             let wasReady = ready
-            lastStatus = try await backend.ensure(); ready = true; connectionErrorShown = false
+            lastStatus = try await backend.ensure(); ready = true
+            reconnectDelay = 5; nextReconnectAt = .distantPast
             if pageRetries >= 3 { pageFailed = true; showStartupFailure("自动恢复连续失败，已暂停重试。原有录像和设置会保留。") }
             else if let origin = backend.origin, !wasReady || web.url?.host != origin.host || web.url?.port != origin.port || (!pageReady && !pageLoading && !pageFailed) { loadPage(origin) }
             updateSleep(lastStatus)
-        } catch {
-            if !connectionErrorShown { connectionErrorShown = true; logStartup("启动失败：\(error.localizedDescription)") }
-            ready = false; pageLoading = false; pageDeadline = nil; pageFailed = true
+            logStartup("后台重连成功；\(pageLoading ? "正在加载界面" : "界面状态已检查")")
+            return
+          } catch {
+            if backend.exitRequested || terminating { logStartup("后台连接检查结束：软件正在退出"); return }
+            logStartup("启动失败：\(error.localizedDescription)")
+            ready = false; pageLoading = false; pageReady = false; pageReadySince = nil; pageDeadline = nil; pageFailed = true
+            if error is MissingComponent {
+                await repairComponents(error.localizedDescription); return
+            }
+            if !(error is StartupPaused), !backend.exitRequested && !terminating && backendRecoveryAttempts < 2 {
+                let recovered = await backend.recoverOwnedProcess()
+                if backend.ownedRecoveryAttempted { backendRecoveryAttempts += 1 }
+                if recovered {
+                    resetWebView(); showConnecting(); continue
+                }
+            }
+            if (backendRecoveryAttempts >= 2 || backend.launchAttempts >= 3) && !bundleChecked {
+                bundleChecked = true
+                do { try await Task.detached { _ = try OwnedProcess.command("/usr/bin/codesign", ["--verify", "--deep", "--strict", Bundle.main.bundleURL.path]) }.value }
+                catch { await repairComponents("应用组件完整性检查未通过"); return }
+            }
+            if error is StartupPaused || backendRecoveryAttempts >= 2 || backend.launchAttempts >= 3 {
+                connectionPaused = true
+                logStartup("连续恢复失败，已暂停自动重启；保留录像和设置，等待用户重试或后台自行恢复")
+                showStartupFailure(StartupPaused().localizedDescription)
+                return
+            }
+            nextReconnectAt = Date().addingTimeInterval(reconnectDelay)
+            logStartup("本次重连未成功；\(Int(reconnectDelay)) 秒后再次检查；录像和设置保留")
+            reconnectDelay = min(30, reconnectDelay * 2)
             showStartupFailure(error.localizedDescription)
+            return
+          }
         }
+    }
+    func showConnecting() {
+        startupPanel.isHidden = false; startupTitle.stringValue = "正在尝试重新连接"
+        let seconds = Int(Date().timeIntervalSince(connectionStarted ?? Date()))
+        startupDetail.stringValue = "\(backend.connectionProgress)\(seconds > 0 ? "，已等待 \(seconds) 秒" : "")。\n录像和设置会保留，请稍候。"
+        startupRetry.isHidden = false; startupRetry.isEnabled = false
+        startupLogs.isHidden = false
+        window.title = "菜播·录包机 · 正在重连"
     }
     func poll() async {
         // A stuck WebContent process must not block the native timeout or the
         // backend heartbeat. Keep this check outside the in-flight guards.
-        let visible = window.isVisible && !window.isMiniaturized && !NSApp.isHidden
+        let visible = window.isVisible && window.occlusionState.contains(.visible) && !window.isMiniaturized && !NSApp.isHidden
         if !visible { renewInterfaceDeadline() }
         if visible, (pageLoading || pageReady), !choosing, !terminating, !backend.exitRequested, let deadline = pageDeadline, Date() >= deadline {
             failPage(pageReady ? "界面暂时无响应。" : "界面加载超时。", retry: true)
         }
-        if pageReady, let since = pageReadySince, Date().timeIntervalSince(since) >= 60 { pageRetries = 0 }
+        if pageReady, let since = pageReadySince, Date().timeIntervalSince(since) >= 60 { pageRetries = 0; backendRecoveryAttempts = 0; backend.resetRecoveryBudget(); bundleChecked = false }
+        if repairing {
+            _ = await backend.heartbeat(); showRepairProgress(); return
+        }
+        if connectionInFlight && !pageReady { backend.refreshConnectionDetail(); showConnecting() }
         // Browsing fonts can take longer than the backend client timeout.
-        guard !polling, (!choosing || fontPanelOpen), !backend.connecting, !backend.exitRequested, !terminating else { return }
+        guard !polling, (!choosing || fontPanelOpen), !connectionInFlight, !backend.connecting, !backend.exitRequested, !terminating else { return }
         polling = true; defer { polling = false }
         backend.readEndpoint()
         if let status = await backend.heartbeat(), status["stopping"] as? Bool != true {
             lastStatus = status; updateSleep(status)
+            // A backend timeout is different from an exhausted WebKit retry.
+            // Re-enter connect even when the recovered backend has the same build.
+            if !ready { connectionPaused = false; await connect(); return }
             if let origin = backend.origin, !pageFailed && (web.url?.host != origin.host || web.url?.port != origin.port) && !pageLoading { loadPage(origin) }
             if status["build"] as? String != backend.expectedBuild { await connect() }
-        } else { await connect() }
+        } else if !connectionPaused && Date() >= nextReconnectAt { await connect() }
     }
-    func logStartup(_ message: String) {
-        Task { _ = await backend.call(["action": "diagnostic", "message": String(message.prefix(2000)), "warning": message.contains("失败") || message.contains("异常")]) }
+    func logStartup(_ message: String, forward: Bool = true) {
+        if forward { Task { _ = await backend.call(["action": "diagnostic", "message": String(message.prefix(2000)), "warning": message.contains("失败") || message.contains("异常")]) } }
         let file = backend.data.appendingPathComponent("desktop-startup.log")
         let text = "\(ISO8601DateFormatter().string(from: Date())) [\(getpid())] \(message.prefix(2000))\n"
         do {
@@ -199,11 +317,70 @@ import IOKit.pwr_mgt
         startupPanel.isHidden = false; startupTitle.stringValue = "暂时无法打开界面"
         startupDetail.stringValue = message + "\n可点击“重试”重新连接，录像和设置会保留。"
         startupRetry.isHidden = false; startupLogs.isHidden = false
+        startupRetry.isEnabled = true
         window.title = "菜播·录包机 · 启动未完成"
+    }
+    func showRepairProgress() {
+        startupPanel.isHidden = false; startupTitle.stringValue = "正在自动修复"
+        startupDetail.stringValue = repairProgress + "\n录像、设置和日志会保留，请稍候。"
+        startupRetry.isHidden = false; startupRetry.isEnabled = false; startupLogs.isHidden = false
+        window.title = "菜播·录包机 · 正在修复"
+    }
+    func repairComponents(_ reason: String) async {
+        guard !repairing, !backend.exitRequested, !terminating else { return }
+        let ledger = backend.data.appendingPathComponent("desktop-repair-attempt.json")
+        if let bytes = try? Data(contentsOf: ledger), let item = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+           let time = item["time"] as? Double, (0..<600).contains(Date().timeIntervalSince1970 - time) { repairAttempted = true }
+        guard !repairAttempted else { connectionPaused = true; showStartupFailure("自动修复未完成，已暂停重复下载。请检查网络或安装目录权限后点击重试。\n" + reason); return }
+        repairAttempted = true; repairing = true
+        defer { repairing = false }
+        try? JSONSerialization.data(withJSONObject: ["time": Date().timeIntervalSince1970]).write(to: ledger, options: .atomic)
+        repairProgress = "正在检查官方修复包"; showRepairProgress(); logStartup("触发组件自动修复：\(reason)")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let repair = ComponentRepair(target: Bundle.main.bundleURL, data: backend.data, version: version, progress: { [weak self] message in
+            self?.repairProgress = message; self?.showRepairProgress()
+        }, log: { [weak self] message in self?.logStartup(message, forward: false) })
+        var staged: URL?
+        defer {
+            if !terminating, let staged { try? Data().write(to: staged.deletingLastPathComponent().appendingPathComponent("cancel")) }
+        }
+        do {
+            let request = try await repair.stage()
+            staged = request
+            guard !backend.exitRequested, !terminating else { return }
+            // Ask a healthy writer to checkpoint its tasks before replacement.
+            if await backend.call() != nil {
+                guard await backend.call(["action": "quit", "confirmed": true])?["quitAccepted"] as? Bool == true else { throw problem("后台尚未完成任务保存，已保留原应用。") }
+                try await backend.waitForExit()
+            } else if backend.process?.isRunning == true || (backend.readEndpoint() && OwnedProcess.inspect(backend.endpoint?.pid ?? 0) != nil) {
+                guard await backend.recoverOwnedProcess() else { throw problem("无法确认后台已停止，修复包已暂存，原应用已保留。") }
+            }
+            _ = await backend.recoverOrphanedComponents()
+            guard !backend.exitRequested, !terminating else { return }
+            let helper = Process(); helper.executableURL = request.deletingLastPathComponent().appendingPathComponent("repair-helper")
+            helper.arguments = ["--repair-apply", request.path]
+            var env = ProcessInfo.processInfo.environment; env["CAIBO_DATA_ROOT"] = backend.data.path; env["CAIBO_EXPORT_ROOT"] = backend.exports.path
+            helper.environment = env; helper.standardInput = FileHandle.nullDevice; helper.standardOutput = FileHandle.nullDevice; helper.standardError = FileHandle.nullDevice
+            try helper.run()
+            for _ in 0..<300 {
+                let status = (try? Data(contentsOf: request.deletingLastPathComponent().appendingPathComponent("status.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                if status?["status"] as? String == "ready" {
+                    logStartup("修复包已校验并暂存；自动退出界面、替换组件并重新启动")
+                    terminating = true; NSApp.terminate(nil); return
+                }
+                if !helper.isRunning || status?["status"] as? String == "error" { throw problem(status?["error"] as? String ?? "修复助手未能启动。") }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            throw problem("修复准备超时，原应用和数据已保留。")
+        } catch {
+            connectionPaused = true
+            logStartup("自动修复失败：\(error.localizedDescription)", forward: false)
+            showStartupFailure("自动修复暂未完成：\(error.localizedDescription)")
+        }
     }
     func failPage(_ message: String, retry: Bool) {
         guard !terminating, !pageFailed else { return }
-        if retry, !window.isVisible || window.isMiniaturized || NSApp.isHidden {
+        if retry, !window.isVisible || !window.occlusionState.contains(.visible) || window.isMiniaturized || NSApp.isHidden {
             pageLoading = true; pageDeadline = Date().addingTimeInterval(30)
             return
         }
@@ -213,7 +390,10 @@ import IOKit.pwr_mgt
         if pageRetries >= 2 {
             Task { @MainActor in
                 do { try await self.restartInterface(attempt: 3) }
-                catch { self.showStartupFailure(message + "\n" + error.localizedDescription) }
+                catch {
+                    if error is MissingComponent { await self.repairComponents(error.localizedDescription) }
+                    else { self.showStartupFailure(message + "\n" + error.localizedDescription) }
+                }
             }
             return
         }
@@ -228,10 +408,15 @@ import IOKit.pwr_mgt
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !self.terminating, !self.backend.exitRequested, generation == self.pageGeneration, self.backend.origin == origin else { return }
             do { try self.backend.validateInterface(); try await self.restartInterface(attempt: self.pageRetries) }
-            catch { self.logStartup("界面文件检查失败：\(error.localizedDescription)"); self.showStartupFailure(error.localizedDescription) }
+            catch {
+                self.logStartup("界面文件检查失败：\(error.localizedDescription)")
+                if error is MissingComponent { await self.repairComponents(error.localizedDescription) }
+                else { self.showStartupFailure(error.localizedDescription) }
+            }
         }
     }
     func restartInterface(attempt: Int) async throws {
+        try await backend.validateComponents()
         let helper = Process()
         helper.executableURL = backend.resources.appendingPathComponent("runtime/node/node")
         helper.arguments = [backend.appRoot.appendingPathComponent("server/interface-recovery.js").path, String(getpid()), Bundle.main.bundleURL.path, backend.data.path, String(attempt)]
@@ -257,15 +442,66 @@ import IOKit.pwr_mgt
         previous.removeFromSuperview(); pageNavigation = nil
     }
     @objc func retryStartup() {
-        guard !backend.connecting, !backend.exitRequested, !choosing, !terminating else { return }
+        guard !backend.exitRequested, !choosing, !terminating else { return }
+        logStartup("用户重试启动")
+        if repairing { showRepairProgress(); return }
+        if connectionInFlight || backend.connecting {
+            retryRequested = true; showConnecting()
+            logStartup("已收到用户重试；后台检查正在进行，失败后继续重试，不重复启动进程")
+            return
+        }
         resetWebView()
+        repairAttempted = false
+        try? FileManager.default.removeItem(at: backend.data.appendingPathComponent("desktop-repair-attempt.json"))
         pageGeneration += 1; pageRetries = 0; pageReady = false; pageLoading = false; pageFailed = false
-        connectionErrorShown = false; logStartup("用户重试启动")
-        startupTitle.stringValue = "正在重新连接"; startupDetail.stringValue = "正在重新连接本地服务，请稍候。"
-        startupRetry.isHidden = true; startupLogs.isHidden = true
+        ready = false; backendRecoveryAttempts = 0; backend.resetRecoveryBudget(); connectionPaused = false; nextReconnectAt = .distantPast; reconnectDelay = 5
+        showConnecting()
         Task { await connect() }
     }
     @objc func openStartupLogs() { NSWorkspace.shared.open(backend.data) }
+    @objc func openOriginals() {
+        // Works even when the embedded web page or backend cannot start.
+        for relative in ["originals", "recovery/safe-data/originals"] {
+            let folder = backend.data.appendingPathComponent(relative)
+            if FileManager.default.fileExists(atPath: folder.path) { NSWorkspace.shared.open(folder) }
+        }
+    }
+    @objc func completeUninstall() {
+        Task { @MainActor in
+            guard !choosing, !terminating, !connectionInFlight, !repairing else { return }
+            choosing = true; defer { choosing = false }
+            let alert = NSAlert(); alert.alertStyle = .warning
+            alert.messageText = "完整卸载菜播·录包机？"
+            alert.informativeText = "会先停止录制和任务，再将此应用、内部录像、弹幕、设置及缓存移到废纸篓。数据目录之外的导出视频保留。重新安装会从干净状态开始。\n\n内部数据：\(backend.data.path)"
+            alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "移到废纸篓并退出")
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+            do {
+                try CompleteUninstall.validate(app: Bundle.main.bundleURL, data: backend.data)
+                if let status = await backend.call() {
+                    if status["stopping"] as? Bool != true {
+                        guard let result = await backend.call(["action": "quit", "confirmed": true]), result["quitAccepted"] as? Bool == true else { throw problem("后台尚未安全停止，卸载已取消，文件保留。") }
+                    }
+                    backend.exitRequested = true
+                    try await backend.waitForExit()
+                } else {
+                    _ = await backend.recoverOwnedProcess()
+                    let valid = backend.readEndpoint()
+                    let alive = valid && backend.endpoint.map { Darwin.kill($0.pid, 0) == 0 || errno != ESRCH } == true
+                    guard backend.process?.isRunning != true, !alive else { throw problem("后台仍在使用数据，卸载已取消，文件保留。") }
+                    backend.exitRequested = true
+                }
+                // Do not move a data directory while any owned recorder still
+                // writes into it, including an orphan left by a failed start.
+                guard OwnedProcess.orphanedComponents(resources: backend.resources, data: backend.data).isEmpty else { throw problem("录制组件仍在运行，卸载已取消，文件保留。") }
+                var lease = try UninstallDataLease.acquire(data: backend.data)
+                defer { lease.close() }
+                logStartup("用户确认完整卸载：停止后台后移入废纸篓")
+                try await CompleteUninstall.recycle(app: Bundle.main.bundleURL, data: backend.data)
+                if let identifier = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: identifier) }
+                terminating = true; NSApp.terminate(nil)
+            } catch { backend.exitRequested = false; showError(error) }
+        }
+    }
     @objc func systemDidWake(_ notification: Notification) {
         renewInterfaceDeadline(); pageReadySince = nil
         if hasSleepAssertion { IOPMAssertionRelease(sleepAssertion); hasSleepAssertion = false }
@@ -386,6 +622,7 @@ import IOKit.pwr_mgt
             if !wasReady {
                 pageReadySince = Date(); startupPanel.isHidden = true; window.title = "菜播·录包机"
                 logStartup("界面已就绪")
+                ComponentRepair.cleanup(data: backend.data, target: Bundle.main.bundleURL)
             }
             return
         }
@@ -429,6 +666,10 @@ import IOKit.pwr_mgt
 }
 @main struct CaiboMain {
     @MainActor static func main() {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--repair-apply" {
+            do { try ComponentRepair.apply(URL(fileURLWithPath: CommandLine.arguments[2])) } catch { Darwin.exit(1) }
+            return
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

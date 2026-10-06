@@ -145,3 +145,52 @@ test('使用短号重新添加已有的正式房间时不会丢失监控记录',
   f.state.intercept=async(route,body,options)=>route==='/api/room'&&options.method==='POST'?new Response(JSON.stringify(f.state.rooms[0])):null;
   await f.recorder.addRoom({url:'42',autoRecord:true});assert.equal(f.store.setting('bilibili-rooms').length,1);assert.equal(f.recorder.rooms[0].recordingEnabled,true);
 });
+
+test('损坏录制配置先备份再恢复；保留录像与已停止的监控，重启不重复隔离',async t=>{
+  const f=await fixture(t);await f.recorder.start();await f.recorder.stopRoom(42);await f.reopen();
+  const original=Buffer.from('{"version":3,"rooms":['),video=path.join(f.root,'originals','retained.flv');
+  await fs.writeFile(f.configFile,original);await fs.writeFile(video,'synthetic original');
+  assert.equal(await f.recorder.start(),true);assert.equal(f.recorder.online,true);
+  assert.equal(f.state.spawnSnapshots[0].rooms[0].AutoRecord.Value,false);assert.equal(f.state.rooms[0].recording,false);
+  assert.equal(f.recorder.rooms[0].recordingEnabled,false);assert.equal(f.store.recovery.coreConfigRecovered,true);
+  const recovery=path.join(f.root,'recovery'),backups=await fs.readdir(recovery);
+  assert.equal(backups.length,1);assert.deepEqual(await fs.readFile(path.join(recovery,backups[0])),original);
+  if(process.platform!=='win32')assert.equal((await fs.stat(path.join(recovery,backups[0]))).mode&0o777,0o600);
+  assert.equal(await fs.readFile(video,'utf8'),'synthetic original');
+  await f.reopen();assert.equal(await f.recorder.start(),true);assert.deepEqual(await fs.readdir(recovery),backups);
+});
+
+test('异常配置结构不会卡住；恢复后自动监控和手动录制按保存的开关分别恢复',async t=>{
+  for(const [raw,automatic] of [[JSON.stringify({version:3,rooms:[null]}),true],[JSON.stringify({version:3,global:[],rooms:[]}),false]]) {
+    const f=await fixture(t,{automatic});await f.recorder.start();if(!automatic)await f.recorder.startRoom(42);
+    await f.reopen();await fs.writeFile(f.configFile,raw);
+    assert.equal(await f.recorder.start(),true);assert.equal(f.state.rooms[0].recording,true);
+    assert.equal(f.state.spawnSnapshots[0].rooms[0].AutoRecord.Value,false);
+    assert.equal(f.recorder.rooms[0].autoRecord,automatic);assert.equal(f.recorder.rooms[0].recordingEnabled,true);
+  }
+});
+
+test('核心仍在运行时不改写损坏配置，不启动第二个写入者',async t=>{
+  const f=await fixture(t);await fs.writeFile(f.configFile,'synthetic malformed config');
+  assert.equal(await f.recorder.start(),true);assert.equal(f.state.spawnSnapshots.length,0);
+  assert.equal(await fs.readFile(f.configFile,'utf8'),'synthetic malformed config');
+  await assert.rejects(fs.stat(path.join(f.root,'recovery')),{code:'ENOENT'});
+});
+
+test('配置路径或恢复目录异常时保留原文件，不绕过保护重置',async t=>{
+  const f=await fixture(t,{available:false});const target=path.join(f.root,'external-config.json');
+  await fs.writeFile(target,'synthetic malformed config');await fs.rm(f.configFile);
+  if(process.platform==='win32')await fs.mkdir(f.configFile);else await fs.symlink(target,f.configFile);
+  assert.equal(await f.recorder.start(),false);assert.equal(f.state.spawnSnapshots.length,0);assert.equal(await fs.readFile(target,'utf8'),'synthetic malformed config');
+  await fs.rm(f.configFile,{recursive:true});await fs.writeFile(f.configFile,'synthetic malformed config');
+  await fs.writeFile(path.join(f.root,'recovery'),'not a directory');f.recorder.retryAt=0;
+  assert.equal(await f.recorder.start(),false);assert.equal(await fs.readFile(f.configFile,'utf8'),'synthetic malformed config');
+  assert.equal(f.state.spawnSnapshots.length,0);
+});
+
+test('录制配置丢失时按已保存的房间重建，不丢失已停止的监控列表',async t=>{
+  const f=await fixture(t);await f.recorder.start();await f.recorder.stopRoom(42);await f.reopen();await fs.rm(f.configFile);
+  assert.equal(await f.recorder.start(),true);assert.equal(f.recorder.rooms.length,1);
+  assert.equal(f.recorder.rooms[0].recordingEnabled,false);assert.equal(f.state.rooms[0].recording,false);
+  assert.equal(f.store.setting('bilibili-rooms')[0].roomId,42);
+});

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Store } from './store.js';
+import { openRecoveredStore } from './data-recovery.js';
 import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { Ingestor } from './ingest.js';
 import { CompactStorage } from './compact-storage.js';
@@ -31,11 +31,15 @@ import { DanmakuStylePreview } from './danmaku-style-preview.js';
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
   const root=path.resolve(options.data??process.env.EDITOR_DATA??path.join(appRoot,'data'));
+  options.onStartup?.('检查数据目录与已有后台');
   const runtime=await ServiceRuntime.acquire(root,appRoot,{managed:options.desktopManaged??process.env.EDITOR_DESKTOP_MANAGED==='1',...options.runtimeOptions});
+  runtime.onStartup=options.onStartup;
   try{
     const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
     runtime.diagnostics=await DailyDiagnostics.open(root,{version:packageInfo.version,...options.diagnosticOptions});
     runtime.diagnostics.protectSecret(runtime.token);
+    if(runtime.leaseRecovered)runtime.diagnostics.record('数据恢复','异常后台锁已隔离并重新建立；原素材保留',{level:'警告',important:true});
+    await runtime.startup('初始化运行日志');
     return await createManagedApp(options,runtime);
   }catch(error){runtime.diagnostics?.record('启动',error,{level:'错误'});await runtime.diagnostics?.close('启动失败，后台退出');await runtime.release();throw error;}
 }
@@ -46,21 +50,22 @@ async function createManagedApp(options,runtime) {
   const ffmpeg=resolveRuntimeTool(projectRoot,'ffmpeg',{override:options.ffmpeg});
   const ffprobe=resolveRuntimeTool(projectRoot,'ffprobe',{override:options.ffprobe});
   const executable=options.noRecorder?'':resolveRuntimeTool(projectRoot,'recorder',{override:options.recorder,required:false});
-  const store=new Store(root);store.diagnostics=diagnostics;
+  await runtime.startup('打开素材数据库');
+  const store=await openRecoveredStore(root,diagnostics);
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
-  await media.recoverPendingSaves();
-  const clients=new Set(); let closing=false,app,closePromise;
+  const clients=new Set(); let closing=false,app,closePromise,startupRecovery;
+  store.recovery.recovering=true;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
   let autoUpdate;
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     busyReason:()=>{
-      if(closing||autoUpdate?.applying)return 'foreground';
+      if(closing||store.recovery.recovering||autoUpdate?.applying)return 'foreground';
       if(!options.noRecorder&&recorder.connectionPending)return 'connection';
       if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
       if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
@@ -81,16 +86,18 @@ async function createManagedApp(options,runtime) {
     const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
     const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy||!!recorder.douyin.polling;
     const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
-    return {updateBusy:recording||processing||organising||!!preparation.active||media.fonts.changing||!!recorder.starting, busy,background:busy||monitoring,requiresExitConfirmation:recording||exporting,reason:recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
+    return {updateBusy:store.recovery.recovering||recording||processing||organising||!!preparation.active||media.fonts.changing||!!recorder.starting, busy:busy||store.recovery.recovering,background:busy||monitoring||store.recovery.recovering,requiresExitConfirmation:recording||exporting,reason:store.recovery.recovering?'任务恢复':recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
   }
   const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
   const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
-  await updates.recover();
+  await runtime.startup('检查上次更新状态');
+  try{await updates.recover();}
+  catch(error){await updates.close();media.close();await recorder.close();store.close();throw error;}
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=JSON.parse(data||'{}');return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -134,6 +141,7 @@ async function createManagedApp(options,runtime) {
         }else if(req.method!=='GET')return json(res,{error:'请求方式无效。'},405);
         return json(res,{...runtime.status(activity()),closeAction:closeAction()});
       }
+      if(store.recovery.recovering&&req.method==='POST'&&p.startsWith('/api/')&&!['/api/folders/open'].includes(p))return json(res,{error:'正在恢复上次任务，请稍候；原始素材已保留。'},503);
       if((runtime.stopping||autoUpdate.applying)&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
       if(p==='/api/updates/apply'&&req.method==='POST'){await body(req);return json(res,updates.requestInstall());}
       if(p==='/api/updates/check'&&req.method==='POST'){await body(req);return json(res,await updates.check());}
@@ -281,15 +289,16 @@ async function createManagedApp(options,runtime) {
       return await sendFile(req,res,target);
     }catch(e){diagnostics.record('请求处理',e,{level:'错误'});if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
   });
+  await runtime.startup('连接本地界面服务');
   try{port=await listenLocal(server,port);}
   catch(error){media.close();await recorder.close();store.close();throw error;}
   port=server.address().port;recorder.editorPort=port;
-  try{await media.recoverInterruptedExports();await runtime.publish(port);}
+  try{await runtime.publish(port);await runtime.startup('本地界面服务已就绪',{ready:true});}
   catch(error){media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
-  ingestor.start();void media.work();if(options.preparation!==false)preparation.start();
+
   let nextTemporarySweep=0;
   const maintain=()=>{
-    if(closing||autoUpdate.applying)return;
+    if(closing||store.recovery.recovering||autoUpdate.applying)return;
     void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;diagnostics.record('自动清理',error,{level:'警告'});});
     if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;diagnostics.record('素材整理',error,{level:'警告'});});
     if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;diagnostics.record('缓存清理',error,{level:'警告'});});}
@@ -307,7 +316,7 @@ async function createManagedApp(options,runtime) {
   if(options.updatesAutoCheck??runtime.managed)updates.start();
   const timer=setInterval(()=>{
     try{
-    if(closing)return;
+    if(closing||store.recovery.recovering)return;
     for(const s of store.all("SELECT * FROM sessions WHERE status IN ('importing','finishing')")){
       const sources=store.sources(s.id);if(sources.length&&sources.every(x=>x.closed===2))store.run("UPDATE sessions SET status='finished' WHERE id=?",s.id);
     }
@@ -339,6 +348,7 @@ async function createManagedApp(options,runtime) {
     await waveformClosed;
     await preparationClosed;
     await deletionsClosed;
+    await startupRecovery;
     await media.waitForSaves();
     await Promise.allSettled([...media.probes,...media.enqueues,...media.previews.values()].map(operation=>operation.done));
     await httpClosed;
@@ -348,15 +358,33 @@ async function createManagedApp(options,runtime) {
     store.close();
     await runtime.release();
   })();}};
+  startupRecovery=(async()=>{
+    // Publish the workbench before inspecting historical output files. A bad
+    // task must not keep the native window on the startup failure page.
+    try{
+      diagnostics.record('数据恢复','开始恢复上次任务',{important:true});
+      await media.recoverPendingSaves();
+      if(!closing)await media.recoverInterruptedExports();
+    }catch(error){store.recovery.error='部分旧任务恢复未完成，可以重新导出；原文件已保留。';diagnostics.record('任务恢复',error,{level:'警告',important:true});}
+    finally{store.recovery.recovering=false;}
+    if(!closing){ingestor.start();void media.work();if(options.preparation!==false)preparation.start();maintain();}
+  })();
+  app.startupRecovery=startupRecovery;
   return app;
 }
+
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  const app=await createApp({noRecorder:process.env.NO_RECORDER==='1'});
+  const app=await createApp({noRecorder:process.env.NO_RECORDER==='1',onStartup:phase=>console.log(`[${new Date().toISOString()}] [启动阶段] ${phase}`)});
   const close=app.close.bind(app);
   // Only the standalone backend owns this process. After every tracked task,
   // database and server has closed, release its executable as well: unrelated
   // keep-alive handles must not hold an idle installation open indefinitely.
   app.close=async()=>{await close();process.exit(0);};
   console.log(`录播机已启动：http://127.0.0.1:${app.port}\n素材目录：${app.root}`);
-  for(const event of ['SIGINT','SIGTERM'])process.once(event,async()=>{await app.close();process.exit(0);});
+  // Recovery uses the same durable shutdown as an explicit desktop quit:
+  // suspend exports and stop recording before releasing this process.
+  for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{
+    app.diagnostics.record('后台恢复',`收到 ${event} 停止请求；保存任务状态后安全退出`,{important:true});
+    void app.desktopExit.request(true).catch(error=>app.diagnostics.record('后台恢复',error,{level:'错误',important:true}));
+  });
 }

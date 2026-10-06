@@ -243,14 +243,18 @@ export class Media {
   }
   async recoverPendingSaves() {
     for(const row of this.store.all("SELECT id,data FROM jobs WHERE status IN ('failed','saving','save_failed','finalizing','running','interrupted')")) {
-      const job=JSON.parse(row.data);
+      if(this.closed)break;
+      const job=this.store.jobDetails(row);if(job.recoveryInvalid)continue;
+      try {
       const pending=await this.publication.discover(row.id);
+      if(this.closed)break;
       if(!pending) {
-        if(await this.publication.verifyPublished(job))this.completeSave(job);
+        if(await this.publication.verifyPublished(job)&&!this.closed)this.completeSave(job);
         continue;
       }
       job.pendingPublication=pending;job.canRetrySave=true;
       this.store.run("UPDATE jobs SET status='save_failed',progress=.98,data=?,error=? WHERE id=?",JSON.stringify(job),'视频已处理完成，请重试保存。',row.id);
+      }catch(error){if(!this.closed){this.store.run("UPDATE jobs SET status='failed',error=? WHERE id=?",'恢复未完成，原文件已保留：'+error.message,row.id);this.store.diagnostics?.record('任务恢复',error,{level:'警告'});}}
     }
   }
   suspendForExit(){
@@ -270,7 +274,9 @@ export class Media {
   }
   async recoverInterruptedExports(){
     for(const row of this.store.all("SELECT * FROM jobs WHERE status IN ('interrupted','save_failed')")){
-      const job=JSON.parse(row.data);
+      if(this.closed)break;
+      const job=this.store.jobDetails(row);
+      if(job.recoveryInvalid)continue;
       if(job.resumeOnLaunch!==true)continue;
       if(!this.store.session(job.session)){
         delete job.resumeOnLaunch;
@@ -287,8 +293,9 @@ export class Media {
           Object.assign(job.output,{namingVersion:2,sidecars:false});
           if(job.mode!=='clean')job.output.danmakuFile=clipFile(job.output.file,'danmaku');
         }
+        if(this.closed)break;
         this.store.run("UPDATE jobs SET status='queued',progress=0,error='',data=?,file=? WHERE id=?",JSON.stringify(job),job.mode==='danmaku'?job.output.danmakuFile:job.output.file,row.id);
-      }catch(error){delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET status='failed',error=?,data=? WHERE id=?",error.message,JSON.stringify(job),row.id);}
+      }catch(error){if(this.closed)break;delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET status='failed',error=?,data=? WHERE id=?",error.message,JSON.stringify(job),row.id);}
     }
   }
   async retrySave(id,input={}) {

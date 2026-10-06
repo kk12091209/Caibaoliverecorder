@@ -18,7 +18,7 @@ RESOURCES="$CONTENTS/Resources"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/live-editor" "$RESOURCES/runtime/node" "$RESOURCES/runtime/ffmpeg" "$RESOURCES/licenses"
 # Some Xcode Swift drivers trap with a non-ASCII TMPDIR. Node tests still use
 # the canonical project directory; only the compiler uses macOS's temp root.
-TMPDIR=/private/tmp TMP=/private/tmp TEMP=/private/tmp xcrun swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -module-cache-path "$ROOT/.tools/swift-module-cache" -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o "$CONTENTS/MacOS/CaiboDesktop"
+TMPDIR=/private/tmp TMP=/private/tmp TEMP=/private/tmp xcrun swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -module-cache-path "$ROOT/.tools/swift-module-cache" -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/ProcessOwnership.swift live-editor/desktop-macos/Repair.swift live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o "$CONTENTS/MacOS/CaiboDesktop"
 cp -R live-editor/server live-editor/shared live-editor/dist "$RESOURCES/live-editor/"
 cp live-editor/package.json "$RESOURCES/live-editor/"
 # Installed 0.1.6 Mac helpers require this field before replacing an app.

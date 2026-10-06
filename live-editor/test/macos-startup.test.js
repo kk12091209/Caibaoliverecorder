@@ -48,7 +48,7 @@ import Foundation
             try reset(); try change()
             var rejected = false
             do { try service.validateInterface() }
-            catch { rejected = error.localizedDescription.contains("界面文件缺失或损坏") }
+            catch { rejected = error is MissingComponent }
             guard rejected else { throw problem("未检测到故障：" + name) }
             guard try Data(contentsOf: sentinel) == recording else { throw problem("检查界面时改变了用户录像") }
             print("PASS " + name)
@@ -76,7 +76,7 @@ import Foundation
 `);
     const executable = path.join(root, 'checks');
     const env = { ...process.env, TMPDIR: '/private/tmp', TMP: '/private/tmp', TEMP: '/private/tmp' };
-    await run('xcrun', ['swiftc', '-swift-version', '5', '-module-cache-path', path.join(root, 'modules'), backend, source, '-o', executable], { env, timeout: 45000 });
+    await run('xcrun', ['swiftc', '-swift-version', '5', '-module-cache-path', path.join(root, 'modules'), fileURLToPath(new URL('../desktop-macos/ProcessOwnership.swift', import.meta.url)), backend, source, '-o', executable], { env, timeout: 45000 });
     const { stdout } = await run(executable, [root, `http://127.0.0.1:${server.address().port}`], { env, timeout: 10000 });
     assert.equal(stdout.match(/^PASS /gm)?.length, 10, stdout);
   } finally {

@@ -16,6 +16,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bili-save-retry-'));
 async function appFor(t, name) {
   const base = path.join(root, name);
   const app = await createApp({automaticClean:false,preparation:false, port: 0, data: path.join(base, 'data'), projectRoot: base, noRecorder: true, compact: false, ffmpeg: 'must-not-launch', ffprobe: 'must-not-launch' });
+  await app.startupRecovery;
   app.ingestor.stop();
   t.after(() => app.close());
   app.request = async (route, body, headers = {}) => {
