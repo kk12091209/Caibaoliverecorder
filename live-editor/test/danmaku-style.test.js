@@ -6,9 +6,9 @@ import os from 'node:os';
 import {createApp} from '../server/index.js';
 import {assText} from '../server/media.js';
 import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE} from '../shared/danmaku-style.js';
-import {layoutDanmaku} from '../src/danmaku-layout.js';
+import {layoutDanmaku,commentX} from '../src/danmaku-layout.js';
 import {scrollingTracks} from '../shared/danmaku-tracks.js';
-import {layoutComments} from '../server/render-plan.js';
+import {layoutComments,layoutCommentsAsync,commentSignature} from '../server/render-plan.js';
 
 test('0.6 preserves export size across source resolutions; every size fits its lanes inside the video',()=>{
   for(const height of [180,360,720,941,1080,2160]){
@@ -28,7 +28,7 @@ test('workbench export-style layout retains simultaneous bursts regardless of la
   const geometry=danmakuGeometry(720,{size:0.6,opacity:100});
   const layout=layoutDanmaku(messages,{width:1280,height:720,fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,measure:()=>120});
   assert.equal(layout.size,messages.length);assert.equal(new Set([...layout.values()].map(m=>m.lane)).size,geometry.lanes);
-  for(const m of layout.values()){assert.equal(m.end,6);assert.equal(m.speed,(1280+m.textWidth)/6);}
+  for(const m of layout.values()){assert.equal(m.end,6);assert.equal(m.speed,(1280+m.textWidth)/(6-m.entryDelay));}
 });
 test('sparse traffic uses both halves at every source size and preview font measurement cannot change exported positions',()=>{
   for(const height of [360,720,940,1080,2160])for(const size of DANMAKU_SIZE_STEPS){
@@ -58,6 +58,54 @@ test('dense scrolling retains every admitted message at all sizes and prefers cl
     const exported=layoutComments(messages,{rate,style:{size,opacity:100}});
     assert.equal(exported.length,rate);assert.deepEqual(exported.map(m=>m.id),messages.slice(0,rate).map(m=>m.id));
   }
+});
+test('simultaneous bursts spread entry and vertical positions without changing source time, duration, size or count',()=>{
+  for(const height of [360,720,940,1080,2160])for(const size of DANMAKU_SIZE_STEPS){
+    const style={size,opacity:100},g=danmakuGeometry(height,style),width=Math.round(height*16/9);
+    const raw=Array.from({length:50},(_,i)=>({id:String(i).padStart(2,'0'),type:'d',time:0,text:'蔡老师今天好可爱'}));
+    const layout=layoutComments(raw,{width,height,style,rate:50});
+    assert.equal(layout.length,50);assert.ok(new Set(layout.map(m=>m.y)).size>Math.min(20,g.lanes));
+    assert.equal(layout[0].entryDelay,0);assert.equal(layout.at(-1).entryDelay,.49);
+    for(const m of layout){
+      assert.equal(m.time,0);assert.equal(m.end,6);assert.ok(m.y>=0);assert.ok(m.y+g.size*1.4+4<=height+.001);
+      assert.equal(commentX(m,m.time,width),width);assert.ok(Math.abs(commentX(m,m.end,width)+m.textWidth)<1e-6);
+    }
+    assert.deepEqual(layoutComments(raw,{width,height,style,rate:50}),layout);
+  }
+});
+test('sustained high density has no accumulating delay; sparse traffic remains immediate and avoids catch-up',()=>{
+  const steady=Array.from({length:6000},(_,i)=>({id:String(i),type:'d',time:i/50,text:'短弹幕'}));
+  const layout=layoutComments(steady,{style:{size:2,opacity:100}});
+  assert.equal(layout.length,steady.length);assert.ok(layout.every(m=>m.entryDelay===0));
+  const boundary=Array.from({length:100},(_,i)=>({id:String(i).padStart(3,'0'),type:'d',time:i<50?.999:1,text:'边界涌入的弹幕'}));
+  const clustered=layoutComments(boundary,{style:{size:2,opacity:100}});
+  assert.equal(clustered.length,100);
+  for(let i=0;i<clustered.length;i++){const m=clustered[i];assert.equal(m.time,boundary[i].time);assert.equal(m.end,m.time+6);assert.ok(m.entryDelay>=0&&m.entryDelay<=.5);}
+  const raw=[{id:'a',type:'d',time:0,text:'短'},{id:'b',type:'d',time:.5,text:'长'.repeat(60)}];
+  const clear=layoutComments(raw,{width:640,height:360});assert.equal(clear[0].entryDelay,0);assert.equal(clear[1].entryDelay,0);assert.notEqual(clear[0].y,clear[1].y);
+});
+test('refreshing a sliding workbench window retains positions already on screen',()=>{
+  const raw=Array.from({length:300},(_,i)=>({id:String(i).padStart(3,'0'),time:i*.04,text:i%2?'短弹幕':'比较长的弹幕内容'.repeat(4)}));
+  const g=danmakuGeometry(720,{size:2,opacity:100}),options={width:1280,height:720,fontSize:g.size,lineHeight:g.lineHeight,top:g.top,maxLanes:g.lanes,exportLayout:true,measure:()=>10};
+  const before=layoutDanmaku(raw,options),window=raw.slice(80),after=layoutDanmaku(window,{...options,previous:before});
+  for(const m of window){assert.equal(after.get(m.id).y,before.get(m.id).y);assert.equal(after.get(m.id).speed,before.get(m.id).speed);}
+});
+test('ASS preserves intermediate positions and staggered motion, including clipped six-second tails',()=>{
+  const raw=Array.from({length:50},(_,i)=>({id:String(i).padStart(2,'0'),type:'d',time:0,text:'SAMPLE'}));
+  const style={size:2,opacity:100},layout=layoutComments(raw,{width:1280,height:720,style}),g=danmakuGeometry(720,style);
+  const m=layout.find(m=>Math.abs(m.y-(g.top+m.lane*g.lineHeight))>1);
+  assert.ok(m);const ass=assText([m],1280,720,null,style);
+  assert.ok(ass.includes(`,${m.y},${-m.textWidth},${m.y},${Math.round(m.entryDelay*1000)},6000)`));
+  const tail={...m,time:-2,end:4},text=assText([tail],1280,720,null,style);
+  const x=commentX(m,2,1280);assert.ok(text.includes(`move(${x},${m.y},${-m.textWidth},${m.y},0,4000)`));
+  assert.notEqual(commentSignature([m]),commentSignature([{...m,y:m.y+.1}]));
+  assert.notEqual(commentSignature([m]),commentSignature([{...m,entryDelay:m.entryDelay+.01}]));
+});
+test('long-recording asynchronous layout equals synchronous output and can be canceled between batches',async()=>{
+  const raw=Array.from({length:4000},(_,i)=>({id:String(i).padStart(4,'0'),type:'d',time:i/50,text:i%2?'短弹幕':'长文字'.repeat(30)})),options={style:{size:2,opacity:100},width:1920,height:1080};
+  assert.deepEqual(await layoutCommentsAsync(raw,options),layoutComments(raw,options));
+  const controller=new AbortController();setImmediate(()=>controller.abort());
+  await assert.rejects(layoutCommentsAsync(raw,{...options,signal:controller.signal}),{code:'PREP_CANCELLED'});
 });
 test('settings validate atomically, retain style across restart, invalidate preparation and snapshot each new export',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-style-test-'));

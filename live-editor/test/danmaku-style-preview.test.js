@@ -88,5 +88,21 @@ test('preview and real H264 export retain matching glyph positions across both i
     t.diagnostic(`size=${style.size}, opacity=${style.opacity}, font=${fontId?'imported':'default'}, bright mask overlap=${(overlap*100).toFixed(2)}%, mean glyph error=${(error/union).toFixed(2)}, lower-half pixels=${lower}`);
     assert.ok(union>100);assert.ok(lower>100);assert.ok(overlap>.94,`preview/export mask overlap ${overlap}`);assert.ok(error/union<12);
   }
+  // Exercise a real burst as well as the evenly spaced style examples. The
+  // original dialog ends at six seconds, and a clipped tail retains its phase.
+  const burstStyle={size:.6,opacity:100},burst=layoutComments(Array.from({length:50},(_,index)=>({id:String(index).padStart(2,'0'),type:'d',time:0,text:'STAGGER'})),{width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style:burstStyle});
+  const last=burst.at(-1);assert.equal(last.entryDelay,.49);
+  const burstPlan=await media.renderer.describe(session.id,{danmakuStyle:burstStyle,danmakuPerSecond:50,font:null});burstPlan.layout=[last];
+  const full=path.join(root,'staggered-full.mp4'),tail=path.join(root,'staggered-tail.mp4');
+  await media.renderer.renderVideo(burstPlan,burstPlan.sources[0],0,6,full);
+  await media.renderer.renderVideo(burstPlan,burstPlan.sources[0],2,2+1/60,tail);
+  assert.equal((await media.probe(full)).frames,360);
+  const at=time=>run(['-ss',String(time),'-i',full,'-frames:v','1','-f','rawvideo','-pix_fmt','gray','pipe:1']);
+  assert.equal(at(.25).some(value=>value>50),false,'burst follower stays outside before its entry');
+  assert.equal(at(.8).some(value=>value>50),true,'burst follower appears after its entry');
+  const whole=at(2),clipped=run(['-i',tail,'-frames:v','1','-f','rawvideo','-pix_fmt','gray','pipe:1']);
+  let union=0,intersection=0;for(let i=0;i<whole.length;i++){const a=whole[i]>50,b=clipped[i]>50;if(a||b){union++;if(a&&b)intersection++;}}
+  assert.ok(intersection/union>.94,`staggered full/tail mask overlap ${intersection/union}`);
+  t.diagnostic(`staggered 0.49s follower: full/tail overlap ${(intersection/union*100).toFixed(2)}%; duration 360 frames at 60 FPS`);
   assert.equal(media.children.size,0);assert.deepEqual(await fs.readdir(media.temporaryRoot),[]);
 });

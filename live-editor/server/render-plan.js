@@ -7,18 +7,34 @@ import { sourceStream, seekBase } from './ingest.js';
 import { preparedEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
 import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry } from '../shared/danmaku-style.js';
-import { scrollingTracks } from '../shared/danmaku-tracks.js';
+import { scrollingTracks, scrollingTrackEvents } from '../shared/danmaku-tracks.js';
 import {chatRate,validateChatRate} from './chat-rules.js';
 
-export const RENDER_VERSION = 5;
+export const RENDER_VERSION = 6;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export function layoutComments(messages,{rate=50,width=1280,height=720,style,font}={}) {
-  let second=-Infinity,count=0;
-  const eligible=messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !m.policyFiltered && !isStickerPlaceholder(m.text))
+function eligibleComments(messages, rate) {
+  let second = -Infinity, count = 0;
+  return messages.filter(m => m.type === 'd' && Number.isFinite(m.time) && !m.policyFiltered && !isStickerPlaceholder(m.text))
     .sort((a, b) => a.time - b.time || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .filter(message=>{const current=Math.floor(message.time);if(current!==second){second=current;count=0;}return count++<rate;});
-  return scrollingTracks(eligible,{width,...danmakuGeometry(height,style),font});
+    .filter(message => { const current = Math.floor(message.time); if (current !== second) { second = current; count = 0; } return count++ < rate; });
+}
+
+export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font } = {}) {
+  return scrollingTracks(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), font });
+}
+
+// Long recordings may contain hundreds of thousands of comments. Yield between
+// bounded batches so dense layout cannot block recording, cleanup or cancellation.
+export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font, signal } = {}) {
+  canceled(signal);
+  const result = [], events = scrollingTrackEvents(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), font });
+  for (const event of events) {
+    result.push(event);
+    if (result.length % 512 === 0) { await yieldTurn(); canceled(signal); }
+  }
+  canceled(signal);
+  return result;
 }
 
 export function visibleComments(layout, snapshot, from, to) {
@@ -82,7 +98,7 @@ export function balancedSpans(from,to) {
 }
 
 export function commentSignature(events) {
-  return hashRender(events.map(m => [m.id, m.time, m.text, m.lane, m.color]));
+  return hashRender(events.map(m => [m.id, m.time, m.text, m.lane, m.y, m.textWidth, m.speed, m.entryDelay, m.color]));
 }
 
 function canceled(signal) {
@@ -113,7 +129,7 @@ export class RenderPipeline {
       rows.push(...batch);cursor=batch.at(-1).rowid;await yieldTurn();
     }
     canceled(signal);
-    const messages=layoutComments(rows,{rate,...geometry});this.layouts.delete(id);this.layouts.set(id,{signature,messages});
+    const messages=await layoutCommentsAsync(rows,{rate,...geometry,signal});this.layouts.delete(id);this.layouts.set(id,{signature,messages});
     while(this.layouts.size>2)this.layouts.delete(this.layouts.keys().next().value);
     return messages;
   }
