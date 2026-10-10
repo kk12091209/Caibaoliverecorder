@@ -31,13 +31,13 @@ import Darwin
             value.startupLogs = NSButton()
             return value
         }
-        func until(timeout: TimeInterval = 1, _ check: () -> Bool) async throws {
+        func until(timeout: TimeInterval = 5, _ check: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(timeout)
             while Date() < deadline {
                 if check() { return }
                 try await Task.sleep(nanoseconds: 5_000_000)
             }
-            throw problem("Test state did not settle")
+            throw problem("Test state did not settle; recent events: \(logs.suffix(5))")
         }
         func state(_ child: Process, recoverable: Bool) throws {
             try JSONSerialization.data(withJSONObject: ["pid": Int(child.processIdentifier), "dataPath": data.path, "phase": "恢复待保存视频", "ready": false, "recoverable": recoverable, "updatedAt": ISO8601DateFormatter.caibo.string(from: Date())]).write(to: stateFile)
@@ -64,11 +64,17 @@ import Darwin
         guard !retry.startupDetail.stringValue.contains("503") && retry.startupDetail.stringValue.contains("正在等待本地服务响应") else { throw problem("Technical connection detail leaked into progress UI") }
         try? fm.removeItem(at: root.appendingPathComponent("blocked-request"))
         let initialChecks = logs.filter { $0.contains("开始检查后台连接") }.count
+        // Keep the first attempt blocked until the queued retry actually starts.
+        // Otherwise making the server healthy early can legitimately let the
+        // first attempt succeed, so there is no pending retry left to assert.
+        retry.backend.onDiagnostic = { [weak retry] message in
+            logs.append(message); retry?.logStartup(message, forward: false)
+            if message.contains("开始检查后台连接"), logs.filter({ $0.contains("开始检查后台连接") }).count - initialChecks == 2 { try? available(true) }
+        }
         let operation = Task { await retry.connect() }
         try await until { retry.backend.connecting && fm.fileExists(atPath: root.appendingPathComponent("blocked-request").path) }
         for _ in 0..<3 { retry.retryStartup() }
         guard retry.retryRequested && retry.startupTitle.stringValue == "正在尝试重新连接" && !retry.startupRetry.isEnabled else { throw problem("Retry click did not report progress") }
-        try available(true)
         await operation.value
         try await until { retry.ready && !retry.connectionInFlight }
         guard logs.filter({ $0.contains("开始检查后台连接") }).count - initialChecks == 2 else { throw problem("Retry clicks were not coalesced into one pending attempt") }

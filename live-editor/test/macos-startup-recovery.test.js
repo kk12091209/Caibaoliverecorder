@@ -15,9 +15,13 @@ test('Mac startup retry reports progress, recovers late backends, and limits own
   const sockets = new Set();
   const data = path.join(root, 'data'), editor = path.join(root, 'resources/live-editor');
   const endpoint = { protocol: 1, instance: 'a'.repeat(32), token: 'b'.repeat(64), pid: process.pid, dataPath: data };
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     if (req.url === '/internal/desktop') {
-      if (!existsSync(path.join(root, 'healthy'))) { writeFileSync(path.join(root, 'blocked-request'), '1'); return; }
+      let body = ''; for await (const chunk of req) body += chunk;
+      const action = body ? JSON.parse(body).action : undefined;
+      // Diagnostic posts must settle, as in production. Hanging those requests
+      // exhausts URLSession's connection pool before the queued heartbeat runs.
+      if (action !== 'diagnostic' && !existsSync(path.join(root, 'healthy'))) { writeFileSync(path.join(root, 'blocked-request'), '1'); return; }
       if (req.headers['x-caibo-instance'] !== endpoint.token) { res.writeHead(403); res.end('{}'); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       // Production responses do not contain the authentication token.
@@ -46,7 +50,7 @@ test('Mac startup retry reports progress, recovers late backends, and limits own
     const needle = 'lastStatus = try await backend.ensure();';
     assert.equal(original.split(needle).length, 2);
     // Only shorten the waiting deadline; all retry/recovery/UI code is original.
-    await fs.writeFile(path.join(root, 'App.swift'), original.split('@main struct CaiboMain {')[0].replace(needle, 'lastStatus = try await backend.ensure(timeout: 0.3);'));
+    await fs.writeFile(path.join(root, 'App.swift'), original.split('@main struct CaiboMain {')[0].replace(needle, 'lastStatus = try await backend.ensure(timeout: 1);'));
     const env = { ...process.env, TMPDIR: '/private/tmp', TMP: '/private/tmp', TEMP: '/private/tmp' };
     const executable = path.join(root, 'checks');
     await run('xcrun', ['swiftc', '-swift-version', '5', '-module-cache-path', path.join(root, 'modules'), fileURLToPath(new URL('../desktop-macos/ProcessOwnership.swift', import.meta.url)), fileURLToPath(new URL('../desktop-macos/Repair.swift', import.meta.url)), fileURLToPath(new URL('../desktop-macos/Backend.swift', import.meta.url)), path.join(root, 'App.swift'), fileURLToPath(new URL('./helpers/macos-startup-recovery.swift', import.meta.url)), '-o', executable], { env, timeout: 45000 });

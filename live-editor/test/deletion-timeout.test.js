@@ -89,12 +89,19 @@ test('断开或重复提交不取消已确认任务，不启动重叠删除',asy
 
 test('文件操作超时仍持锁，旧 unlink 结束后自动重试，成片及其他素材不受影响',async t=>{
   const app=await application(t),f=await material(app,{chunks:20}),other=await material(app),hold=deferred(),unlink=fs.unlink;
+  // Arm the short stall deadline only after the intended unlink batch starts.
+  // Setup, unrelated deletion and the retry must not race a 150 ms disk budget.
+  app.deletingSessions.idleMs=5000;
   let started=0,active=0,peak=0;
   const exported=path.join(app.root,'exports','clean.mp4');await fs.mkdir(path.dirname(exported),{recursive:true});await fs.writeFile(exported,'completed export');
   app.store.run('INSERT INTO jobs(id,session,status,mode,file,data) VALUES(?,?,?,?,?,?)','saved',f.session.id,'done','clean',exported,'{}');
   fs.unlink=async file=>{if(path.dirname(String(file))===f.folder){started++;active++;peak=Math.max(peak,active);await hold.promise;try{return await unlink(file);}finally{active--;}}return unlink(file);};
   try{
-    const response=await remove(app,f.session.id);assert.equal(response.status,408);
+    const responsePending=remove(app,f.session.id);
+    await until(()=>started===8);
+    const control=app.deletingSessions.tasks.get(f.session.id).control;
+    control.idleMs=30;control.progress();
+    const response=await responsePending;assert.equal(response.status,408);
     assert.equal(started,8);assert.equal(app.store.deletions.has(f.session.id),true);
     assert.equal((await remove(app,f.session.id)).status,400);
     assert.equal((await remove(app,other.session.id)).status,200);
