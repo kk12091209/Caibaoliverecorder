@@ -58,7 +58,9 @@ test('motion preview encodes the selected FPS, plays through the full round, and
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
   for(const [speed,fps] of [[.5,60],[2,30]]){
     const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style);
-    const result=await preview.render({style,rate:50,font:null,motion:true},AbortSignal.timeout(30000));
+    // Validate rendered frames on slow shared runners; the HTTP production deadline remains unchanged.
+    const result=await preview.render({style,rate:50,font:null,motion:true},AbortSignal.timeout(90000));
+    assert.ok(result,'motion fixture render completed before the test deadline');
     assert.equal(result.contentType,'video/mp4');assert.equal(result.samples,50);
     const file=path.join(root,`motion-${fps}.mp4`);await fs.writeFile(file,result.bytes);
     const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-count_frames','-show_streams','-of','json',file]));

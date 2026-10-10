@@ -1,4 +1,4 @@
-菜播·录包机 0.2.0 — macOS Apple Silicon 测试版
+菜播·录包机 0.2.1 — macOS Apple Silicon 测试版
 
 适用：M 系列芯片，macOS 14 或更新版本。尚未提供 Intel 包。
 打开 DMG，将“菜播·录包机”拖到旁边的 Applications（应用程序）。
