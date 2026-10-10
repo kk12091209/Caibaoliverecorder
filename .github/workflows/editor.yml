@@ -70,6 +70,10 @@ jobs:
           unzip -q .tools/downloads/ffprobe.zip -d .tools/runtime/ffmpeg
           chmod +x "$FFMPEG_PATH" "$FFPROBE_PATH"
           "$FFMPEG_PATH" -hide_banner -filters | grep ' ass '
+          # Hosted Macs expose an unreadable PingFangUI fallback. Use a pinned
+          # SIL-OFL Chinese font for motion validation instead of missing glyphs.
+          export CAIBO_TEST_FONT="$PWD/.tools/ci-fonts/NotoSansCJKsc-Regular.otf"
+          node live-editor/scripts/fetch-tool.mjs 'https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf' "$CAIBO_TEST_FONT" 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
           RID=osx-x64
           if [[ $(uname -m) == arm64 ]]; then RID=osx-arm64; fi
           dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r "$RID" -p:RuntimeIdentifiers="$RID" --self-contained true -o .tools/runtime/recorder

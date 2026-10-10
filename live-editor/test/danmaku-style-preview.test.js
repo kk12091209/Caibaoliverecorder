@@ -56,10 +56,14 @@ test('motion preview encodes the selected FPS, plays through the full round, and
   const assets=path.join(root,'assets');await fs.mkdir(assets);
   execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=black:size=1672x942','-vf','crop=1672:941:0:0:exact=1','-frames:v','1','-threads','1',path.join(assets,'danmaku-style-preview-test.png')]);
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
+  // Hosted macOS images may advertise an unreadable system CJK fallback.
+  // Exercise the same renderer with a real, pinned font when supplied by CI.
+  const font=process.env.CAIBO_TEST_FONT?await media.fonts.import(await fs.readFile(process.env.CAIBO_TEST_FONT),{select:false}):null;
+  const fontId=font?.id??null;
   for(const [speed,fps] of [[.5,60],[2,30]]){
-    const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style);
+    const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style,font);
     // Validate rendered frames on slow shared runners; the HTTP production deadline remains unchanged.
-    const result=await preview.render({style,rate:50,font:null,motion:true},AbortSignal.timeout(90000));
+    const result=await preview.render({style,rate:50,font:fontId,motion:true},AbortSignal.timeout(30000));
     assert.ok(result,'motion fixture render completed before the test deadline');
     assert.equal(result.contentType,'video/mp4');assert.equal(result.samples,50);
     const file=path.join(root,`motion-${fps}.mp4`);await fs.writeFile(file,result.bytes);
@@ -71,7 +75,7 @@ test('motion preview encodes the selected FPS, plays through the full round, and
     assert.equal(first.length,STYLE_MOTION_WIDTH*STYLE_MOTION_HEIGHT);assert.equal(last.length,first.length);
     assert.ok(!first.some(value=>value>50));assert.ok(middle.some(value=>value>50));assert.ok(!last.some(value=>value>50),'last sample has completely left the preview');
   }
-  const controller=new AbortController(),render=preview.render({style:{size:.6,opacity:100,speed:.5,fps:60},rate:50,font:null,motion:true},controller.signal);
+  const controller=new AbortController(),render=preview.render({style:{size:.6,opacity:100,speed:.5,fps:60},rate:50,font:fontId,motion:true},controller.signal);
   while(!media.children.size&&preview.busy)await new Promise(resolve=>setTimeout(resolve,10));
   controller.abort();assert.equal(await render,null);
   assert.equal(preview.busy,false);assert.equal(media.children.size,0);assert.deepEqual(await fs.readdir(media.temporaryRoot),[]);
