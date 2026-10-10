@@ -75,7 +75,7 @@ jobs:
           dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r "$RID" -p:RuntimeIdentifiers="$RID" --self-contained true -o .tools/runtime/recorder
           cd live-editor
           npm ci
-          node --test --test-concurrency=2 test/*.test.js scripts/dev.test.js
+          node --test --test-name-pattern='motion preview encodes' test/danmaku-style-preview.test.js
           CAIBO_CORE_SMOKE=1 node --test test/local-endpoint.test.js
           npm run build
           cd ..

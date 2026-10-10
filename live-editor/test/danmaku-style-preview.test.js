@@ -56,11 +56,14 @@ test('motion preview encodes the selected FPS, plays through the full round, and
   const assets=path.join(root,'assets');await fs.mkdir(assets);
   execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=black:size=1672x942','-vf','crop=1672:941:0:0:exact=1','-frames:v','1','-threads','1',path.join(assets,'danmaku-style-preview-test.png')]);
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
+  let renderLog='';const renderProcess=media.process.bind(media);
+  media.process=(args,options)=>renderProcess(['-loglevel','info','-stats',...args],{...options,progress:log=>{renderLog=log;}});
   for(const [speed,fps] of [[.5,60],[2,30]]){
     const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style);
     // Validate rendered frames on slow shared runners; the HTTP production deadline remains unchanged.
     const result=await preview.render({style,rate:50,font:null,motion:true},AbortSignal.timeout(90000));
-    assert.ok(result,'motion fixture render completed before the test deadline');
+    assert.ok(result,`motion fixture render completed before the test deadline: ${renderLog.slice(-12000)}`);
+    t.diagnostic(renderLog.slice(-1500));
     assert.equal(result.contentType,'video/mp4');assert.equal(result.samples,50);
     const file=path.join(root,`motion-${fps}.mp4`);await fs.writeFile(file,result.bytes);
     const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-count_frames','-show_streams','-of','json',file]));
