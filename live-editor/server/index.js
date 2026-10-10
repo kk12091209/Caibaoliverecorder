@@ -196,11 +196,11 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/danmaku-style/preview'&&req.method==='POST'){
         const input=await body(req),controller=new AbortController();res.once('close',()=>controller.abort());
-        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]);
+        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(input.motion===true?30000:15000)]);
         const result=await stylePreview.render(input,signal);
         if(!result){if(res.destroyed)return;throw new Error('样式预览超时，请重试。');}
-        const {bytes,samples}=result;
-        res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store','Content-Length':bytes.length,'X-Danmaku-Preview-Count':samples});return res.end(bytes);
+        const {bytes,samples,contentType}=result;
+        res.writeHead(200,{'Content-Type':contentType,'Cache-Control':'no-store','Content-Length':bytes.length,'X-Danmaku-Preview-Count':samples});return res.end(bytes);
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);

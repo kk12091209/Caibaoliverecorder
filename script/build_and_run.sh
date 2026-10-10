@@ -17,7 +17,15 @@ if [[ -f "$ROOT/.tools/macos-last-app.txt" ]]; then
   if [[ -d "$old" ]]; then
     osascript - "$old" <<'APPLESCRIPT'
 on run argv
-  tell application (item 1 of argv) to quit
+  if application (item 1 of argv) is running then
+    try
+      tell application (item 1 of argv) to quit
+    on error message number code
+      -- The desktop defers termination while it safely shuts down its backend.
+      -- macOS reports that asynchronous termination as "user cancelled".
+      if code is not -128 then error message number code
+    end try
+  end if
 end run
 APPLESCRIPT
   fi

@@ -1102,12 +1102,14 @@ svg { flex-shrink: 0; }
   .selection-controls { padding: 6px 0; }
 }
 
-.update-reminder { position: fixed; top: 78px; right: 20px; z-index: 12; width: min(390px, calc(100vw - 40px)); padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fff7f8; color: var(--text); box-shadow: 0 8px 30px #4a243233; font-size: 13px; }
+.notification-stack { position: fixed; top: 78px; right: 20px; z-index: 12; width: min(390px, calc(100vw - 40px)); display: grid; gap: 12px; pointer-events: none; }
+.notification-stack>* { pointer-events: auto; }
+.update-reminder { position: relative; width: 100%; padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fff7f8; color: var(--text); box-shadow: 0 8px 30px #4a243233; font-size: 13px; }
 .update-reminder p { margin: 8px 0 12px; color: var(--muted); line-height: 1.5; }
 .update-reminder-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-/* Playback expands in normal flow; controls remain reachable by scrolling. */
-.video-stage.preview-playing { width: min(100%, calc(min(58vh, 680px) * 16 / 9)); max-height: min(58vh, 680px); flex-shrink: 0; }
+/* A selected recording keeps its expanded preview through play, pause and seek. */
+.video-stage.preview-selected { width: min(100%, calc(min(58vh, 680px) * 16 / 9)); max-height: min(58vh, 680px); flex-shrink: 0; }
 .workspace { grid-template-rows: minmax(0, 1fr); }
 .editor { overscroll-behavior-y: contain; }
 @media (max-width: 960px) { .workspace:not(.danmaku-collapsed) { grid-template-rows: minmax(0,1fr) minmax(160px,280px); } }

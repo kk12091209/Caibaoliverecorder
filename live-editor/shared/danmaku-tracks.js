@@ -39,7 +39,7 @@ function horizontalConflict(before, time, textWidth, speed, width, gap) {
   return Math.max(.02, Math.min(1, peak / limit));
 }
 
-export function* scrollingTrackEvents(messages, { width, height, lanes, top, lineHeight, size, font, measure, previous = new Map() }) {
+export function* scrollingTrackEvents(messages, { width, height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map() }) {
   const active = [], gap = danmakuGap(size), rowOrder = trackOrder(lanes);
   const rowUses = Array(lanes).fill(0), glyphHeight = size * 1.4 + 4;
   // Dense traffic can use intermediate positions instead of stacking every
@@ -62,18 +62,19 @@ export function* scrollingTrackEvents(messages, { width, height, lanes, top, lin
     // Integer timestamps can put an entire second's messages on one instant.
     // Spread that burst by 10 ms per comment, capped at half a second. Keep
     // the original timestamp and end, so no delay backlog or extra video tail.
-    const entry = Math.min(message.time + .5, Math.max(message.time, previousEntry + .01));
+    const maxDelay = .5 * duration / DANMAKU_SECONDS, entryStep = .01 * duration / DANMAKU_SECONDS;
+    const entry = Math.min(message.time + maxDelay, Math.max(message.time, previousEntry + entryStep));
     const entryDelay = old && old.time === message.time && old.textWidth === textWidth &&
-      Number.isFinite(old.entryDelay) && old.entryDelay >= 0 && old.entryDelay <= .5 ? old.entryDelay : Number((entry - message.time).toFixed(3));
+      Math.abs(old.end - old.time - duration) < 1e-8 && Number.isFinite(old.entryDelay) && old.entryDelay >= 0 && old.entryDelay <= maxDelay ? old.entryDelay : Number((entry - message.time).toFixed(6));
     previousEntry = message.time + entryDelay;
-    const speed = (width + textWidth) / (DANMAKU_SECONDS - entryDelay);
+    const speed = (width + textWidth) / (duration - entryDelay);
     // Reuse already displayed positions before doing any collision scoring.
     // A sliding workbench window must not repeatedly rerasterize or reflow it.
     const fixedY = old && old.time === message.time && old.textWidth === textWidth && old.speed === speed &&
       (old.entryDelay || 0) === entryDelay && Number.isFinite(old.y) && old.y >= firstY - .001 && old.y <= lastY + .001 ? old.y : null;
     if (fixedY !== null) {
       const comment = { ...message, text, textWidth, paintWidth: painted ?? textWidth,
-        lane: Math.max(0, Math.min(lanes - 1, Math.round((fixedY - top) / lineHeight))), y: fixedY, entryDelay, speed, end: message.time + DANMAKU_SECONDS };
+        lane: Math.max(0, Math.min(lanes - 1, Math.round((fixedY - top) / lineHeight))), y: fixedY, entryDelay, speed, end: message.time + duration };
       rowUses[comment.lane]++; active.push(comment); yield comment; continue;
     }
     let remaining = 0;
@@ -110,7 +111,7 @@ export function* scrollingTrackEvents(messages, { width, height, lanes, top, lin
       lane = Math.min(lanes - 1, Math.round(slot / subdivisions));
     }
     const comment = { ...message, text, textWidth, paintWidth: painted ?? textWidth, lane,
-      y: Number(slotY(slot).toFixed(3)), entryDelay, speed, end: message.time + DANMAKU_SECONDS };
+      y: Number(slotY(slot).toFixed(3)), entryDelay, speed, end: message.time + duration };
     rowUses[comment.lane]++; active.push(comment); yield comment;
   }
 }

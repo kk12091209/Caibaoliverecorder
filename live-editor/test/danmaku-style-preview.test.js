@@ -8,7 +8,7 @@ import {execFileSync} from 'node:child_process';
 import {Store} from '../server/store.js';
 import {Media} from '../server/media.js';
 import {Ingestor} from '../server/ingest.js';
-import {DanmakuStylePreview,stylePreviewMessages,stylePreviewEvents,stylePreviewTime,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT} from '../server/danmaku-style-preview.js';
+import {DanmakuStylePreview,stylePreviewMessages,stylePreviewEvents,stylePreviewMotion,stylePreviewTime,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT,STYLE_MOTION_WIDTH,STYLE_MOTION_HEIGHT} from '../server/danmaku-style-preview.js';
 import {layoutComments} from '../server/render-plan.js';
 import {danmakuGeometry,DANMAKU_SIZE_STEPS} from '../shared/danmaku-style.js';
 import {videoGeometryFilter} from '../server/export-encoding.js';
@@ -32,6 +32,48 @@ test('all preset sizes and densities retain every chosen sample, including wide 
       for(const a of rects)assert.ok(a.right>a.left,`size ${size}, sample ${a.id} enters the preview`);
     }
   }
+});
+test('one-round motion preserves scrolling speed across frame rates and includes the last sample exiting',()=>{
+  for(const speed of [.5,1,2]){
+    const slow=stylePreviewMotion(50,{size:.6,opacity:100,speed,fps:30});
+    const smooth=stylePreviewMotion(50,{size:.6,opacity:100,speed,fps:60});
+    assert.deepEqual(slow.events,smooth.events);
+    assert.equal(slow.events.length,50);
+    for(const event of slow.events)assert.ok(Math.abs(event.end-event.time-6/speed)<1e-9);
+    for(const [motion,fps] of [[slow,30],[smooth,60]]){
+      const lastEnd=Math.max(...motion.events.map(event=>event.end));
+      assert.ok((motion.frames-1)/fps>=lastEnd);
+      assert.ok(motion.frames/fps<lastEnd+2/fps);
+    }
+  }
+});
+test('motion preview encodes the selected FPS, plays through the full round, and cleans up cancelled renders',async t=>{
+  const ffmpeg=process.env.FFMPEG_PATH,ffprobe=process.env.FFPROBE_PATH;
+  if(!ffmpeg||!ffprobe){t.skip('FFmpeg runtime is unavailable');return;}
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-style-motion-')),store=new Store(path.join(root,'data'));
+  const media=new Media(store,{ffmpeg,ffprobe});
+  t.after(async()=>{media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
+  const assets=path.join(root,'assets');await fs.mkdir(assets);
+  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=black:size=1672x942','-vf','crop=1672:941:0:0:exact=1','-frames:v','1','-threads','1',path.join(assets,'danmaku-style-preview-test.png')]);
+  const preview=new DanmakuStylePreview(media,{imageRoot:assets});
+  for(const [speed,fps] of [[.5,60],[2,30]]){
+    const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style);
+    const result=await preview.render({style,rate:50,font:null,motion:true},AbortSignal.timeout(30000));
+    assert.equal(result.contentType,'video/mp4');assert.equal(result.samples,50);
+    const file=path.join(root,`motion-${fps}.mp4`);await fs.writeFile(file,result.bytes);
+    const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-count_frames','-show_streams','-of','json',file]));
+    assert.equal(probe.streams.length,1);
+    const stream=probe.streams[0];assert.equal(stream.r_frame_rate,`${fps}/1`);assert.equal(Number(stream.nb_read_frames),plan.frames);
+    const frame=time=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-f','rawvideo','-pix_fmt','gray','pipe:1'],{maxBuffer:16*1024*1024});
+    const first=frame(0),middle=frame(3/speed),last=frame((plan.frames-1)/fps);
+    assert.equal(first.length,STYLE_MOTION_WIDTH*STYLE_MOTION_HEIGHT);assert.equal(last.length,first.length);
+    assert.ok(!first.some(value=>value>50));assert.ok(middle.some(value=>value>50));assert.ok(!last.some(value=>value>50),'last sample has completely left the preview');
+  }
+  const controller=new AbortController(),render=preview.render({style:{size:.6,opacity:100,speed:.5,fps:60},rate:50,font:null,motion:true},controller.signal);
+  while(!media.children.size&&preview.busy)await new Promise(resolve=>setTimeout(resolve,10));
+  controller.abort();assert.equal(await render,null);
+  assert.equal(preview.busy,false);assert.equal(media.children.size,0);assert.deepEqual(await fs.readdir(media.temporaryRoot),[]);
+  await assert.rejects(preview.render({style:{size:.6,opacity:100},rate:50,motion:'yes'}),/参数无效/);
 });
 test('preview uses actual export rendering, zero opacity preserves the exact background and temporary files are removed',async t=>{
   const ffmpeg=process.env.FFMPEG_PATH||path.resolve('../../程序组件/runtime/ffmpeg/ffmpeg.exe');

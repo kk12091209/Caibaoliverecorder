@@ -17,7 +17,7 @@ import { TemporaryWorkspaces } from './temp-workspaces.js';
 import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments } from './render-plan.js';
-import { danmakuGeometry, assOpacity, savedDanmakuStyle } from '../shared/danmaku-style.js';
+import { danmakuGeometry, assOpacity, savedDanmakuStyle, normalizedDanmakuStyle, danmakuDuration } from '../shared/danmaku-style.js';
 import { chatRate } from './chat-rules.js';
 import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
 
@@ -25,14 +25,15 @@ function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Ma
 export function assText(messages, width = 1280, height = 720, font = null, style) {
   const geometry=danmakuGeometry(height,style),{size,lineHeight,top,lanes:laneCount}=geometry,alpha=assOpacity(style),shadowAlpha=assOpacity(style,128);
   const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-  const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,font});
+  const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,duration:danmakuDuration(style),font});
   return head + planned.map(m => {
-    if(m.time+6<=0)return '';
+    const seconds=Number.isFinite(m.end)?m.end-m.time:danmakuDuration(style);
+    if(m.time+seconds<=0)return '';
     const lane=m.lane,content=danmakuText(m.text),xEnd=-m.textWidth,y=Number.isFinite(m.y)?m.y:top+lane*lineHeight;
-    const delay=m.entryDelay||0,elapsed=Math.max(0,-m.time),speed=(width+m.textWidth)/(6-delay);
+    const delay=m.entryDelay||0,elapsed=Math.max(0,-m.time),speed=(width+m.textWidth)/(seconds-delay);
     const startX=width-Math.max(0,elapsed-delay)*speed;
-    const movement=delay?`,${Math.round(Math.max(0,delay-elapsed)*1000)},${Math.round((6-elapsed)*1000)}`:'';
-    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+6)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})}${content}\n`;
+    const movement=delay?`,${Math.round(Math.max(0,delay-elapsed)*1000)},${Math.round((seconds-elapsed)*1000)}`:'';
+    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})}${content}\n`;
   }).join('');
 }
 
@@ -478,17 +479,18 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},from,to);
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base})),width,height,job.font,job.danmakuStyle));
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,job.font,job.danmakuStyle));
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=videoGeometryFilter(sourceInfo,width,height);
-        const overlayFilter=`fps=60,ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
+        const fps=normalizedDanmakuStyle(job.danmakuStyle).fps;
+        const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
         const compatibleFull=singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
         let copyClean=!bakedOnly&&compatibleFull;
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;
         const mux=singlePart?['-movflags','+faststart']:[];
         const encode=(map,file,baked=false)=>['-ss',String(Math.max(0,from-base)),'-t',String(to-from),'-map',map,'-map','0:a:0?',
-          ...encoderArguments(encoder,dual&&!copyClean),'-pix_fmt','yuv420p','-r',String(baked?60:info.fps),
+          ...encoderArguments(encoder,dual&&!copyClean),'-pix_fmt','yuv420p','-r',String(baked?fps:info.fps),
           ...(copyAudio?['-c:a','copy']:['-c:a','aac','-b:a','192k']),...mux,'-y',file];
         const copied=file=>['-t',String(to-from),'-map','0:v:0','-map','0:a:0?',
           ...(job.audioStreamCopyFallback?['-c:v','copy','-c:a','aac','-b:a','192k']:['-c','copy']),...mux,'-y',file];

@@ -31,8 +31,9 @@ import Darwin
             value.startupLogs = NSButton()
             return value
         }
-        func until(_ check: () -> Bool) async throws {
-            for _ in 0..<200 {
+        func until(timeout: TimeInterval = 1, _ check: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
                 if check() { return }
                 try await Task.sleep(nanoseconds: 5_000_000)
             }
@@ -118,9 +119,17 @@ import Darwin
         let script = "const fs=require('fs'),{spawn}=require('child_process');const child=spawn(process.argv[1],['-e',\"process.on('SIGINT',()=>{});require('fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)\",process.argv[3]],{stdio:'ignore'});const foreign=spawn('/bin/sleep',['20'],{stdio:'ignore'});process.on('SIGTERM',()=>{});setInterval(()=>{},1000);fs.writeFileSync(process.argv[2],JSON.stringify({child:child.pid,foreign:foreign.pid}));"
         parent.executableURL = URL(fileURLWithPath: CommandLine.arguments[2]); parent.arguments = ["-e", script, component.path, childrenFile.path, childReady.path]
         parent.standardOutput = FileHandle.nullDevice; parent.standardError = FileHandle.standardError; try parent.run()
-        do { try await until { fm.fileExists(atPath: childrenFile.path) && fm.fileExists(atPath: childReady.path) } } catch { throw problem("Tree did not start; parent running: \(parent.isRunning); pids: \((try? String(contentsOf: childrenFile)) ?? "none")") }
+        // A freshly copied executable can take several seconds to launch on macOS.
+        // This is fixture readiness only; production recovery deadlines stay unchanged.
+        // Install cleanup before waiting so a readiness failure cannot leak children.
+        defer {
+            if let bytes = try? Data(contentsOf: childrenFile), let pids = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Int32] {
+                for pid in pids.values { if let value = OwnedProcess.inspect(pid) { _ = value.signal(SIGKILL) } }
+            }
+            if parent.isRunning { Darwin.kill(parent.processIdentifier, SIGKILL); parent.waitUntilExit() }
+        }
+        do { try await until(timeout: 10) { fm.fileExists(atPath: childrenFile.path) && fm.fileExists(atPath: childReady.path) } } catch { throw problem("Tree did not start; parent running: \(parent.isRunning); pids: \((try? String(contentsOf: childrenFile)) ?? "none")") }
         let pids = try JSONSerialization.jsonObject(with: Data(contentsOf: childrenFile)) as! [String: Int32]
-        defer { for pid in pids.values { if let value = OwnedProcess.inspect(pid) { _ = value.signal(SIGKILL) } }; if parent.isRunning { parent.terminate() } }
         tree.backend.process = parent
         guard await tree.backend.recoverOwnedProcess(grace: 0.15), !parent.isRunning, OwnedProcess.inspect(pids["child"]!) == nil, OwnedProcess.inspect(pids["foreign"]!) != nil else { throw problem("Owned tree recovery failed or affected an unrelated child") }
         print("PASS owned child tree reclaimed and unrelated child preserved")

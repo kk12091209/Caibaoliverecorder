@@ -5,10 +5,33 @@ import path from 'node:path';
 import os from 'node:os';
 import {createApp} from '../server/index.js';
 import {assText} from '../server/media.js';
-import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE} from '../shared/danmaku-style.js';
+import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE,normalizedDanmakuStyle,DANMAKU_SPEED_STEPS,danmakuDuration} from '../shared/danmaku-style.js';
 import {layoutDanmaku,commentX} from '../src/danmaku-layout.js';
 import {scrollingTracks} from '../shared/danmaku-tracks.js';
 import {layoutComments,layoutCommentsAsync,commentSignature} from '../server/render-plan.js';
+
+test('legacy styles keep their appearance and default motion; speed steps and frame rates are strictly validated',()=>{
+  assert.deepEqual(validateDanmakuStyle({size:2.5,opacity:45}),{size:2.5,opacity:45,speed:1,fps:60});
+  assert.deepEqual(normalizedDanmakuStyle(undefined),DEFAULT_DANMAKU_STYLE);
+  for(const speed of DANMAKU_SPEED_STEPS)for(const fps of [30,60])assert.equal(validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,speed,fps}).speed,speed);
+  for(const speed of [.4,2.1,1.05,'1',null,NaN,Infinity])assert.throws(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,speed}));
+  for(const fps of [0,24,59.94,120,'30',null])assert.throws(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,fps}));
+});
+test('every speed uses the same wall-clock motion in preview and export at 30 and 60 fps, including slow clipped tails',()=>{
+  const raw=[{id:'a',type:'d',time:0,text:'SPEED'}],width=1280,height=720;
+  const baseline=layoutComments(raw)[0];
+  for(const speed of DANMAKU_SPEED_STEPS)for(const fps of [30,60]){
+    const style={...DEFAULT_DANMAKU_STYLE,speed,fps},g=danmakuGeometry(height,style);
+    const [event]=layoutComments(raw,{width,height,style});
+    assert.ok(Math.abs(event.speed-baseline.speed*speed)<1e-8);
+    assert.equal(event.end,6/speed);
+    const preview=layoutDanmaku(raw,{width,height,fontSize:g.size,lineHeight:g.lineHeight,top:g.top,maxLanes:g.lanes,exportLayout:true,duration:danmakuDuration(style)}).get('a');
+    assert.deepEqual(preview,event);
+    assert.ok(Math.abs(commentX(event,3/speed,width)-commentX(baseline,3,width))<1e-8);
+  }
+  const style={...DEFAULT_DANMAKU_STYLE,speed:.5},[slow]=layoutComments(raw,{style});
+  assert.match(assText([{...slow,time:-8,end:4}],width,height,null,style),/0:00:00\.00,0:00:04\.00/);
+});
 
 test('0.6 preserves export size across source resolutions; every size fits its lanes inside the video',()=>{
   for(const height of [180,360,720,941,1080,2160]){
@@ -123,8 +146,10 @@ test('settings validate atomically, retain style across restart, invalidate prep
   assert.equal(app.snapshot().danmakuPerSecond,50);
   assert.equal((await post({danmakuPerSecond:12,danmakuStyle:{size:1.5,opacity:50},danmakuFont:'f'.repeat(64)})).status,400);
   assert.deepEqual(app.snapshot().danmakuStyle,DEFAULT_DANMAKU_STYLE);assert.equal(app.snapshot().danmakuPerSecond,50);
-  const style={size:2.5,opacity:45};assert.equal((await post({danmakuStyle:style,danmakuPerSecond:12})).status,200);
+  const style={size:2.5,opacity:45,speed:1.7,fps:30};assert.equal((await post({danmakuStyle:style,danmakuPerSecond:12})).status,200);
   assert.deepEqual(invalidated,[session.id]);assert.deepEqual(app.snapshot().danmakuStyle,style);
+  await app.close();app=await open();app.ingestor.stop();app.media.work=async()=>{};url=`http://127.0.0.1:${app.port}`;
+  assert.deepEqual(app.snapshot().danmakuStyle,style);
   app.store.run('UPDATE sessions SET duration=20 WHERE id=?',session.id);
   const edit=app.store.edit(session.id);app.store.saveEdit(session.id,{...edit,ranges:[{start:0,end:5}]});
   const job=await app.media.enqueue(session.id,{mode:'danmaku',exportDirectory:path.join(root,'exports')});

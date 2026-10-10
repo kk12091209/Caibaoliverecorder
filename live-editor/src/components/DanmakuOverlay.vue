@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
-import { danmakuGeometry } from '../../shared/danmaku-style.js';
+import { danmakuGeometry, danmakuDuration, normalizedDanmakuStyle } from '../../shared/danmaku-style.js';
 
 const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
 const canvas = ref(null);
@@ -13,7 +13,7 @@ const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') ===
 let context, observer, raf = 0, videoFrame = 0, width = 0, height = 0, scale = 1;
 let layout = new Map(), boundVideo, motionPreference, buffering = false, disposed = false;
 let geometry=danmakuGeometry(720,props.style);
-let lastPaint = 0, lastMediaTime = 0;
+let lastPaint = 0, lastMediaTime = 0, nextFrameAt = 0;
 let stats = { frames: 0, drawMs: 0, maxDrawMs: 0, rasterMisses: 0, measuredMisses: 0, active: 0, lateFrames: 0, minClockStep: Infinity, maxClockStep: 0, since: performance.now() };
 const events = ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'loadedmetadata', 'loadeddata', 'resize', 'ratechange', 'ended', 'emptied', 'timeupdate'];
 
@@ -21,7 +21,7 @@ function rebuild(reset = false) {
   if (!context) return;
   context.font = font;
   layout = layoutDanmaku(props.messages, {
-    width, height, fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,previous: reset ? new Map() : layout,
+    width, height, fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,duration:danmakuDuration(props.style),previous: reset ? new Map() : layout,
     measure(text) {
       const existing = measured.get(text);
       if (existing !== undefined) return existing;
@@ -55,7 +55,7 @@ function isMoving() {
 }
 function resetClock() {
   clock.reset(boundVideo?.currentTime || 0, performance.now(), { running: isMoving(), rate: boundVideo?.playbackRate || 1 });
-  lastPaint = 0; lastMediaTime = 0;
+  lastPaint = 0; lastMediaTime = 0; nextFrameAt = 0;
 }
 function queueVideoFrame() {
   const player = boundVideo;
@@ -77,7 +77,7 @@ function reportMetrics(now, started, time, active) {
   stats.frames++; stats.drawMs += draw; stats.maxDrawMs = Math.max(stats.maxDrawMs, draw); stats.active = active;
   if (lastPaint && clock.running) {
     const step = time - lastMediaTime, interval = now - lastPaint;
-    stats.lateFrames += interval > 25 ? 1 : 0;
+    stats.lateFrames += interval > 1500 / normalizedDanmakuStyle(props.style).fps ? 1 : 0;
     stats.minClockStep = Math.min(stats.minClockStep, step); stats.maxClockStep = Math.max(stats.maxClockStep, step);
   }
   lastPaint = now; lastMediaTime = time;
@@ -95,11 +95,13 @@ function reportMetrics(now, started, time, active) {
 function paint(now) {
   raf = 0;
   if (!context || disposed) return;
+  const moving = isMoving(), interval = 1000 / normalizedDanmakuStyle(props.style).fps;
+  if(moving && now < nextFrameAt - 1){raf = requestAnimationFrame(paint);return;}
+  nextFrameAt = moving ? now + interval - (nextFrameAt ? Math.max(0, now - nextFrameAt) % interval : 0) : 0;
   const started = metricsEnabled ? performance.now() : 0;
   context.clearRect(0, 0, width, height);
   const player = boundVideo;
   if (!props.enabled || props.loading || !player || player.readyState < 2 || document.hidden) return;
-  const moving = isMoving();
   if (clock.running !== moving) resetClock();
   if (moving && !player.requestVideoFrameCallback) clock.sample(player.currentTime, now);
   const time = props.base + (moving ? clock.at(now) : player.currentTime);
@@ -163,7 +165,8 @@ async function changeFont(value){
   updateStyle();
 }
 watch(() => props.font?.id,()=>changeFont(props.font),{immediate:true});
-watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.font?.advanceRatio],updateStyle);
+watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.style?.speed,()=>props.font?.advanceRatio],updateStyle);
+watch(() => props.style?.fps, () => {resetClock();requestPaint();});
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());
 watch(() => [props.base, props.enabled, props.loading], () => { cancelVideoFrame(); resetClock(); requestPaint(); queueVideoFrame(); });

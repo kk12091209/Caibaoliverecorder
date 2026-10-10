@@ -6,7 +6,7 @@ import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { sourceStream, seekBase } from './ingest.js';
 import { preparedEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
-import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry } from '../shared/danmaku-style.js';
+import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry, danmakuDuration } from '../shared/danmaku-style.js';
 import { scrollingTracks, scrollingTrackEvents } from '../shared/danmaku-tracks.js';
 import {chatRate,validateChatRate} from './chat-rules.js';
 
@@ -21,14 +21,14 @@ function eligibleComments(messages, rate) {
 }
 
 export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font } = {}) {
-  return scrollingTracks(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), font });
+  return scrollingTracks(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font });
 }
 
 // Long recordings may contain hundreds of thousands of comments. Yield between
 // bounded batches so dense layout cannot block recording, cleanup or cancellation.
 export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font, signal } = {}) {
   canceled(signal);
-  const result = [], events = scrollingTrackEvents(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), font });
+  const result = [], events = scrollingTrackEvents(eligibleComments(messages, rate), { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font });
   for (const event of events) {
     result.push(event);
     if (result.length % 512 === 0) { await yieldTurn(); canceled(signal); }
@@ -39,11 +39,11 @@ export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, h
 
 export function visibleComments(layout, snapshot, from, to) {
   const excluded = snapshot.excluded instanceof Set ? snapshot.excluded : new Set(snapshot.excluded || []);
-  return layout.filter(m => m.time < to && m.time + 6 > from && !excluded.has(m.id) &&
+  return layout.filter(m => m.time < to && (m.end ?? m.time + 6) > from && !excluded.has(m.id) &&
     (snapshot.filterLottery === false || !m.lottery));
 }
 
-export function renderBlocks(sources, seconds = 60) {
+export function renderBlocks(sources, seconds = 60, fps = 60) {
   const result = [];
   for (const source of sources) {
     const start = Math.round(source.start * 1000), end = Math.round((source.start + source.duration) * 1000);
@@ -51,7 +51,7 @@ export function renderBlocks(sources, seconds = 60) {
       const to = Math.min(end, from + seconds * 1000);
       // Keep existing cache boundaries. A rounded zero-frame tail contributes
       // no output frames and must not become an impossible encoding task.
-      if (frameSpan(from / 1000, to / 1000).frames) result.push({ source, startMs: from, endMs: to });
+      if (frameSpan(from / 1000, to / 1000, fps).frames) result.push({ source, startMs: from, endMs: to });
     }
   }
   return result;
@@ -88,12 +88,12 @@ export function frameSpan(from, to, fps = 60) {
   return { from: start / fps, to: end / fps, frames: Math.max(0, end - start), duration: Math.max(0, end - start) / fps };
 }
 
-export function balancedSpans(from,to) {
-  const span=frameSpan(from,to);if(!span.frames)return [];
-  const count=Math.max(span.duration>=60?2:1,Math.ceil(span.duration/60)),first=Math.round(span.from*60);
+export function balancedSpans(from,to,fps=60) {
+  const span=frameSpan(from,to,fps);if(!span.frames)return [];
+  const count=Math.max(span.duration>=60?2:1,Math.ceil(span.duration/60)),first=Math.round(span.from*fps);
   return Array.from({length:count},(_,index)=>({
-    from:(first+Math.round(span.frames*index/count))/60,
-    to:(first+Math.round(span.frames*(index+1)/count))/60
+    from:(first+Math.round(span.frames*index/count))/fps,
+    to:(first+Math.round(span.frames*(index+1)/count))/fps
   }));
 }
 
@@ -152,8 +152,8 @@ export class RenderPipeline {
     // background preparation follows the current settings.
     const danmakuStyle=(Object.hasOwn(snapshot,'danmakuStyle')||Object.hasOwn(snapshot,'mode'))?normalizedDanmakuStyle(snapshot.danmakuStyle):savedDanmakuStyle(this.store);
     const danmakuPerSecond=validateChatRate(snapshot.danmakuPerSecond??chatRate(this.store));
-    const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:60,encoder:selected,arguments:preparedEncoderArguments(selected)};
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds)};
+    const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:preparedEncoderArguments(selected)};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps)};
   }
   async sourceFingerprint(source,from,to) {
     const current=this.store.get('SELECT * FROM sources WHERE id=?',source.id);
@@ -176,7 +176,7 @@ export class RenderPipeline {
     return hashRender([metadata,files]);
   }
   async spec(plan,block) {
-    const span=frameSpan(block.startMs/1000,block.endMs/1000);
+    const span=frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps);
     const events=visibleComments(plan.layout,plan.snapshot,span.from,span.to);
     return {sessionId:plan.id,sourceId:block.source.id,startMs:block.startMs,endMs:block.endMs,
       sourceFingerprint:await this.sourceFingerprint(block.source,span.from,span.to),profileHash:plan.profileHash,assHash:commentSignature(events),version:1};
@@ -188,7 +188,7 @@ export class RenderPipeline {
     return info;
   }
   async renderVideo(plan,source,from,to,file,options={}) {
-    const m=this.media,span=frameSpan(from,to);if(!span.frames)throw new Error('选段不足一帧。');
+    const m=this.media,span=frameSpan(from,to,plan.profile?.fps);if(!span.frames)throw new Error('选段不足一帧。');
     const readFrom=Math.max(source.start,span.from-6),base=seekBase(this.store,source.id,readFrom);
     if(base===undefined)throw new Error('正在等待可解码关键帧。');
     const workDir=await m.temporaryDirectory('bili-export-',plan.id);
@@ -199,9 +199,9 @@ export class RenderPipeline {
       const fontDirectory=await m.fonts.stage(plan.font,workDir);
       const sourceInfo=source.id===plan.sources[0].id?plan.info:await m.probeSource(source,readFrom,options);
       const geometry=videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height);
-      const chain=[`setpts=PTS+${base}/TB`,geometry,'format=yuv420p','tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=60:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
+      const chain=[`setpts=PTS+${base}/TB`,geometry,'format=yuv420p','tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=${plan.profile.fps}:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
       await m.process(['-copyts','-fflags','+genpts','-threads','2','-f','flv','-i','pipe:0','-map','0:v:0','-an','-filter_threads','2','-vf',chain,
-        ...plan.profile.arguments,'-frames:v',String(span.frames),'-r','60','-movflags','+faststart','-y',file],
+        ...plan.profile.arguments,'-frames:v',String(span.frames),'-r',String(plan.profile.fps),'-movflags','+faststart','-y',file],
       {cwd:workDir,input:sourceStream(this.store,source.id,readFrom,span.to,{signal:options.signal}),signal:options.signal,background:options.background});
       canceled(options.signal);
       const info=await m.probe(file,options);
@@ -211,7 +211,7 @@ export class RenderPipeline {
     }finally{await m.temporaryWorkspaces.finish(workDir);}
   }
   async acquire(plan,block,options={}) {
-    const spec=await this.spec(plan,block),cache=this.media.renderCache,span=frameSpan(block.startMs/1000,block.endMs/1000);
+    const spec=await this.spec(plan,block),cache=this.media.renderCache,span=frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps);
     let lease=await cache.acquire(spec);if(lease)return lease;
     lease=await cache.build(spec,async(file,{signal}={})=>this.renderVideo(plan,block.source,block.startMs/1000,block.endMs/1000,file,{...options,signal:signal||options.signal}),
       {signal:options.signal,estimatedBytes:Math.ceil((block.endMs-block.startMs)/1000*2*1024*1024),verifySource:async()=>await this.sourceFingerprint(block.source,span.from,span.to)===spec.sourceFingerprint});
@@ -222,7 +222,7 @@ export class RenderPipeline {
     try {
       const plan=await this.describe(id,this.store.edit(id),null,{signal,background:true});
       let preparedSeconds=0,bytes=0,missing=null;
-      const seconds=block=>frameSpan(block.startMs/1000,block.endMs/1000).duration;
+      const seconds=block=>frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps).duration;
       const totalSeconds=plan.blocks.reduce((sum,b)=>sum+seconds(b),0);
       for(const block of plan.blocks) {
         canceled(signal);const lease=await this.media.renderCache.acquire(await this.spec(plan,block));
@@ -243,18 +243,18 @@ export class RenderPipeline {
     for(const segment of segments) {
       const partition=splitForCache(segment,plan.blocks);let hits=0;
       for(const part of partition) {
-        if(!part.complete||!frameSpan(part.from,part.to).frames)continue;
+        if(!part.complete||!frameSpan(part.from,part.to,plan.profile?.fps).frames)continue;
         const lease=await this.media.renderCache.acquire(await this.spec(plan,part));
         if(lease){leases.push(lease);part.file=lease.file;part.cached=true;hits++;}
       }
       // A completely cold interval can be balanced without disturbing the
       // canonical boundaries of any existing sixty-second cache blocks.
-      result.push(...(hits?partition:balancedSpans(segment.from,segment.to).map(span=>({...span,source:segment.source}))));
+      result.push(...(hits?partition:balancedSpans(segment.from,segment.to,plan.profile?.fps).map(span=>({...span,source:segment.source}))));
     }
-    return result.filter(part=>frameSpan(part.from,part.to).frames>0);
+    return result.filter(part=>frameSpan(part.from,part.to,plan.profile?.fps).frames>0);
   }
   async renderForegroundParts(plan,parts,workDir,{onProgress}={}) {
-    const prepared=parts.map((part,index)=>({...part,file:part.file||path.join(workDir,`part-${index}.mp4`),duration:frameSpan(part.from,part.to).duration}));
+    const prepared=parts.map((part,index)=>({...part,file:part.file||path.join(workDir,`part-${index}.mp4`),duration:frameSpan(part.from,part.to,plan.profile?.fps).duration}));
     const missing=prepared.filter(part=>!part.cached),cachedDuration=prepared.filter(part=>part.cached).reduce((sum,part)=>sum+part.duration,0);
     const parallel=plan.profile.encoder.hardware&&missing.length>1;let reported=0;
     const progress=value=>{reported=Math.max(reported,value);onProgress?.(reported);};
@@ -304,9 +304,9 @@ export class RenderPipeline {
     }
     const files=[];
     for(let i=0;i<segments.length;i++) {
-      const {source,from,to}=segments[i],span=frameSpan(from,to),name=`audio-${i}.flac`;
+      const {source,from,to}=segments[i],span=frameSpan(from,to,plan.profile?.fps),name=`audio-${i}.flac`;
       if(!span.frames)continue;
-      const samples=span.frames*800;
+      const samples=Math.round(span.duration*48000);
       if(infos[i].audioStreams===0) {
         await this.media.process(['-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t',String(span.duration),'-c:a','flac','-compression_level','0','-y',name],{cwd:workDir});
       } else {
@@ -324,7 +324,7 @@ export class RenderPipeline {
   async cleanVideos(segments,plan,encoder,workDir,job) {
     const files=[];
     for(let i=0;i<segments.length;i++) {
-      const {source,from,to}=segments[i],span=frameSpan(from,to),base=seekBase(this.store,source.id,from),name=`part-${i}-danmaku.mp4`;
+      const {source,from,to}=segments[i],span=frameSpan(from,to,plan.profile?.fps),base=seekBase(this.store,source.id,from),name=`part-${i}-danmaku.mp4`;
       const info=source.id===plan.sources[0].id?plan.info:await this.media.probeSource(source,from);
       if(canCopyFullSource(job,plan.sources,info,base)) {
         await this.media.process(['-copyts','-f','flv','-i','pipe:0','-map','0:v:0','-an','-c:v','copy','-movflags','+faststart','-y',name],
@@ -349,7 +349,7 @@ export class RenderPipeline {
     const m=this.media,plan=await this.describe(job.session,job,encoder),segments=exportSegments(plan.sources,job.ranges,job.scope);
     const workDir=await m.temporaryDirectory('bili-export-',job.session),leases=[];
     try {
-      const total=segments.reduce((sum,item)=>sum+frameSpan(item.from,item.to).duration,0);
+      const total=segments.reduce((sum,item)=>sum+frameSpan(item.from,item.to,plan.profile?.fps).duration,0);
       const parts=await this.foregroundParts(plan,segments,leases);
       if(!parts.length)throw new Error('选段中没有完整视频帧。');
       const {files,reused,serialRetry}=await this.renderForegroundParts(plan,parts,workDir,{onProgress:processed=>

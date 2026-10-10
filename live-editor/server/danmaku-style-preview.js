@@ -4,13 +4,14 @@ import {Writable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {assText} from './media.js';
 import {validateChatRate} from './chat-rules.js';
-import {validateDanmakuStyle,danmakuGeometry} from '../shared/danmaku-style.js';
+import {validateDanmakuStyle,danmakuGeometry,danmakuDuration} from '../shared/danmaku-style.js';
 import {danmakuTextWidth} from '../shared/danmaku-tracks.js';
 import {DANMAKU_SAMPLES} from '../shared/danmaku-samples.js';
 import {layoutComments} from './render-plan.js';
 import {videoGeometryFilter} from './export-encoding.js';
 
 export const STYLE_PREVIEW_WIDTH=1672,STYLE_PREVIEW_HEIGHT=940,STYLE_PREVIEW_TIME=4.65;
+export const STYLE_MOTION_WIDTH=836,STYLE_MOTION_HEIGHT=470;
 export function stylePreviewTime(style,font){
   const {size}=danmakuGeometry(STYLE_PREVIEW_HEIGHT,style);
   // Very large fonts can have left the screen at the default sample time.
@@ -18,7 +19,7 @@ export function stylePreviewTime(style,font){
   // still readable. Density changes retain that same frame and placement.
   const width=Math.max(...DANMAKU_SAMPLES.slice(0,2).map(text=>danmakuTextWidth(text,size,font)));
   // 50 ms aligns both 60 fps frames and ASS's centisecond timestamps.
-  return Math.min(STYLE_PREVIEW_TIME,Math.floor(STYLE_PREVIEW_WIDTH*6/(STYLE_PREVIEW_WIDTH+width)*20)/20);
+  return Math.min(STYLE_PREVIEW_TIME*danmakuDuration(style)/6,Math.floor(STYLE_PREVIEW_WIDTH*danmakuDuration(style)/(STYLE_PREVIEW_WIDTH+width)*20)/20);
 }
 export function stylePreviewMessages(rate,style,font){
   validateChatRate(rate);
@@ -32,12 +33,19 @@ export function stylePreviewEvents(rate,style,font){
     .filter(event=>event.time<=time&&event.end>time)
     .map(event=>({...event,time:event.time-time,end:event.end-time}));
 }
-// One bounded single-frame render at a time. The same ASS generator, font file,
+export function stylePreviewMotion(rate,style,font){
+  validateChatRate(rate);style=validateDanmakuStyle(style);
+  const events=layoutComments(stylePreviewMessages(rate,style,font),{rate,width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style,font});
+  // Include a final empty frame so even the last sample fully leaves the image.
+  const frames=Math.ceil(Math.max(...events.map(event=>event.end))*style.fps)+1;
+  return {events,frames};
+}
+// One bounded render at a time. The same ASS generator, font file,
 // libass renderer and source coordinates are used by the video exports.
 export class DanmakuStylePreview{
   constructor(media,{imageRoot=fileURLToPath(new URL('../dist/assets/',import.meta.url))}={}){this.media=media;this.busy=false;this.imageRoot=imageRoot;}
   async render(input,signal){
-    if(!input||Object.keys(input).some(key=>!['style','rate','font'].includes(key)))throw new Error('样式预览参数无效。');
+    if(!input||Object.keys(input).some(key=>!['style','rate','font','motion'].includes(key))||('motion' in input&&typeof input.motion!=='boolean'))throw new Error('样式预览参数无效。');
     const style=validateDanmakuStyle(input.style),rate=validateChatRate(input.rate);
     if(this.busy)throw Object.assign(new Error('正在更新预览，请稍后重试。'),{status:409});
     this.busy=true;let work;
@@ -49,15 +57,24 @@ export class DanmakuStylePreview{
       const background=path.join(this.imageRoot,images[0]),stat=await fs.lstat(background);
       if(!stat.isFile()||stat.isSymbolicLink()||stat.size>8*1024*1024)throw new Error('预览背景文件无效。');
       work=await this.media.temporaryDirectory('bili-export-','style-preview');
-      const events=stylePreviewEvents(rate,style,font);
+      const motion=input.motion?stylePreviewMotion(rate,style,font):null;
+      const events=motion?.events||stylePreviewEvents(rate,style,font);
       await fs.writeFile(path.join(work,'part-0.ass'),assText(events,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT,font,style));
       const fonts=await this.media.fonts.stage(font,work),chunks=[];let bytes=0;
       const output=new Writable({write(chunk,_encoding,done){bytes+=chunk.length;if(bytes>16*1024*1024)return done(new Error('样式预览超过大小限制。'));chunks.push(chunk);done();}});
-      const geometry=videoGeometryFilter({width:1672,height:941,sampleAspectRatio:'1:1'},STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT);
-      await this.media.process(['-i',background,'-filter_threads','1','-vf',`${geometry},format=yuv420p,ass=part-0.ass${fonts?':fontsdir='+fonts:''}`,'-frames:v','1','-c:v','png','-threads','1','-f','image2pipe','pipe:1'],{cwd:work,signal,output,interactive:true});
+      // ASS retains the export coordinates; libass scales its glyphs and paths
+      // to the dialog-sized movie. The still image keeps its full resolution.
+      const geometry=videoGeometryFilter({width:1672,height:941,sampleAspectRatio:'1:1'},motion?STYLE_MOTION_WIDTH:STYLE_PREVIEW_WIDTH,motion?STYLE_MOTION_HEIGHT:STYLE_PREVIEW_HEIGHT);
+      // Decode/scale the still background once, then repeat the cached frame.
+      const source=motion?['-framerate',String(style.fps)]:[];
+      const repeat=motion?`,loop=loop=-1:size=1:start=0,setpts=N/(${style.fps}*TB)`:'';
+      const encoding=motion
+        ?['-frames:v',String(motion.frames),'-an','-c:v','libx264','-preset','veryfast','-crf','23','-threads','2','-pix_fmt','yuv420p','-g',String(style.fps),'-movflags','frag_keyframe+empty_moov','-f','mp4']
+        :['-frames:v','1','-c:v','png','-threads','1','-f','image2pipe'];
+      await this.media.process([...source,'-i',background,'-filter_threads','1','-vf',`${geometry},format=yuv420p${repeat},ass=part-0.ass${fonts?':fontsdir='+fonts:''}`,...encoding,'pipe:1'],{cwd:work,signal,output,interactive:true});
       if(signal?.aborted)return null;
       if(!bytes)throw new Error('未能生成样式预览。');
-      return {bytes:Buffer.concat(chunks),samples:events.length};
+      return {bytes:Buffer.concat(chunks),samples:events.length,contentType:motion?'video/mp4':'image/png'};
     }finally{try{if(work)await this.media.temporaryWorkspaces.finish(work);}finally{this.busy=false;}}
   }
 }

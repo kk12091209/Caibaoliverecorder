@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {renderBlocks,frameSpan,RenderPipeline} from '../server/render-plan.js';
+import {renderBlocks,frameSpan,balancedSpans,RenderPipeline} from '../server/render-plan.js';
+
+test('30 and 60 fps retain total frames across cache blocks and balanced foreground splits',()=>{
+  for(const fps of [30,60])for(let ms=0;ms<100;ms++){
+    const source={start:4000+ms/1000,duration:65.014},expected=frameSpan(source.start,source.start+source.duration,fps).frames;
+    const blocks=renderBlocks([source],60,fps);
+    assert.equal(blocks.reduce((sum,b)=>sum+frameSpan(b.startMs/1000,b.endMs/1000,fps).frames,0),expected);
+    const spans=balancedSpans(source.start,source.start+source.duration,fps);
+    assert.equal(spans.reduce((sum,s)=>sum+frameSpan(s.from,s.to,fps).frames,0),expected);
+    for(const span of spans)for(const edge of [span.from,span.to])assert.ok(Math.abs(edge*fps-Math.round(edge*fps))<1e-7);
+  }
+});
 
 test('real 60.014-second source at 4090.976 keeps its ready block and omits only the zero-frame tail',async()=>{
   const source={id:'recorded',start:4090.976,duration:60.014};

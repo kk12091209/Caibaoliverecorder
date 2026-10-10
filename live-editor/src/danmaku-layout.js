@@ -2,10 +2,10 @@ import { scrollingTracks } from '../shared/danmaku-tracks.js';
 // Legacy callers use one velocity; export-style callers prefer clear lanes
 // while retaining every comment admitted by the user's per-second limit.
 export const DANMAKU_FONT_SIZE = 22 * 2 / 3;
-export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, lineHeight = fontSize + 12, top = 18, maxLanes = 10, exportLayout = false, font, measure, previous = new Map() }) {
+export function layoutDanmaku(messages, { width, height, fontSize = DANMAKU_FONT_SIZE, lineHeight = fontSize + 12, top = 18, maxLanes = 10, exportLayout = false, font, measure, duration = 6, previous = new Map() }) {
   const speed = Math.max(100, width / 6);
   const laneCount = exportLayout ? Math.max(1, maxLanes) : Math.max(1, Math.min(maxLanes, Math.floor((height - top * 2) / lineHeight)));
-  if(exportLayout)return new Map(scrollingTracks(messages,{width,height,lanes:laneCount,top,lineHeight,size:fontSize,font,measure,previous}).map(message=>[message.id,message]));
+  if(exportLayout)return new Map(scrollingTracks(messages,{width,height,lanes:laneCount,top,lineHeight,size:fontSize,font,measure,duration,previous}).map(message=>[message.id,message]));
   const occupied = Array(laneCount).fill(-Infinity), result = new Map();
   const ordered = [...messages].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
   for (const message of ordered) {

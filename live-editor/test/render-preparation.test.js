@@ -9,7 +9,7 @@ import { Ingestor } from '../server/ingest.js';
 import { Media, assText } from '../server/media.js';
 import { RenderPipeline,layoutComments,visibleComments,commentSignature,frameSpan } from '../server/render-plan.js';
 import { clipFile } from '../server/output-names.js';
-import { DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
+import { DANMAKU_STYLE_SETTING, normalizedDanmakuStyle } from '../shared/danmaku-style.js';
 
 const runtime=path.resolve('..','..','程序组件','runtime','ffmpeg');
 const ffmpeg=process.env.FFMPEG_PATH||path.join(runtime,'ffmpeg.exe'),ffprobe=process.env.FFPROBE_PATH||path.join(runtime,'ffprobe.exe');
@@ -80,6 +80,35 @@ function brightCenter(bytes) {let sum=0,count=0;for(let y=15;y<48;y++)for(let x=
 function audio(file){return run(ffmpeg,['-v','error','-i',file,'-map','0:a:0','-ac','1','-ar','48000','-f','f32le','pipe:1']);}
 function longestQuiet(bytes,from,to) {let run=0,longest=0;for(let i=Math.round(from*48000);i<Math.min(bytes.length/4,Math.round(to*48000));i++){if(Math.abs(bytes.readFloatLE(i*4))<.001)longest=Math.max(longest,++run);else run=0;}return longest/48000;}
 
+test('30/60 fps ordinary and cached exports preserve slow motion, clipped tails and continuous audio',async t=>{
+  const f=await fixture(t,{duration:10.4,comments:[{time:.4,text:'EDGE'}]});
+  let previousHash,previousCenter;
+  for(const fps of [30,60]){
+    const style={size:.6,opacity:100,speed:.5,fps};f.store.setting(DANMAKU_STYLE_SETTING,style);f.media.invalidatePreparation(f.session.id);
+    const plan=await f.media.renderer.describe(f.session.id,f.store.edit(f.session.id));
+    assert.equal(plan.profile.fps,fps);assert.notEqual(plan.profileHash,previousHash);previousHash=plan.profileHash;
+    // Force the normal encoder first; then build and reuse the new profile.
+    const ordinaryJob=await f.media.enqueue(f.session.id,{scope:'full',mode:'dual',exportDirectory:path.join(f.root,'exports')});
+    await f.media.encodeJob(ordinaryJob,await f.media.renderer.encoder());
+    const ordinary=ordinaryJob.output.danmakuFile,ordinaryInfo=inspect(ordinary);
+    assert.equal(ordinaryInfo.streams.find(s=>s.codec_type==='video').r_frame_rate,`${fps}/1`);
+    assert.equal(inspect(ordinaryJob.output.file).streams.find(s=>s.codec_type==='video').r_frame_rate,'60/1','clean video retains source frame rate');
+    await prepare(f);
+    const whole=await exported(f,{scope:'full'});assert.ok(whole.job.preparedBlocks>0);
+    const info=inspect(whole.file),video=info.streams.find(s=>s.codec_type==='video');
+    assert.equal(video.r_frame_rate,`${fps}/1`);assert.equal(Number(video.nb_read_frames),Math.round(Number(video.duration)*fps));
+    const clip=await exported(f,{ranges:[{start:8.11,end:9.41}]});
+    assert.equal(inspect(clip.file).streams.find(s=>s.codec_type==='video').r_frame_rate,`${fps}/1`);
+    const aligned=frameSpan(8.11,9.41,fps),center=brightCenter(frame(whole.file,aligned.from+.4));
+    assert.ok(Math.abs(center-brightCenter(frame(clip.file,.4)))<2,'a comment older than six seconds survives the clip boundary');
+    assert.ok(Math.abs(brightCenter(frame(ordinary,8.5))-brightCenter(frame(whole.file,8.5)))<2,'ordinary and cached paths agree');
+    const sameTimeCenter=brightCenter(frame(whole.file,8.5));
+    if(previousCenter!==undefined)assert.ok(Math.abs(sameTimeCenter-previousCenter)<2,'frame rate does not change travel speed');
+    previousCenter=sameTimeCenter;
+    const pcm=audio(whole.file);for(const boundary of [2,4,6,8])assert.ok(longestQuiet(pcm,boundary-.05,boundary+.05)<.005);
+  }
+});
+
 test('style changes build a new cache profile while a queued export keeps its captured size and opacity',async t=>{
   const f=await fixture(t,{duration:4.4,comments:[{time:.4,text:'STYLE'}]});
   await prepare(f);const before=videoRenders(f.calls);
@@ -90,7 +119,7 @@ test('style changes build a new cache profile while a queued export keeps its ca
   const job=await f.media.enqueue(f.session.id,{scope:'full',mode:'danmaku',exportDirectory:path.join(f.root,'exports')});
   f.store.setting(DANMAKU_STYLE_SETTING,{size:0.6,opacity:0});
   const renders=videoRenders(f.calls),file=await f.media.exportJob(job);
-  assert.deepEqual(job.danmakuStyle,style);assert.equal(videoRenders(f.calls),renders);assert.ok(job.preparedBlocks>0);
+  assert.deepEqual(job.danmakuStyle,normalizedDanmakuStyle(style));assert.equal(videoRenders(f.calls),renders);assert.ok(job.preparedBlocks>0);
   const translucent=frame(file,1.2);assert.ok(Math.max(...translucent)>80);assert.ok(Math.max(...translucent)<190);
   const hidden=await exported(f,{scope:'full'});assert.ok(Math.max(...frame(hidden.file,1.2))<10);
 });
