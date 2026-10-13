@@ -6,6 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 export const UPDATE_REPOSITORY = 'kk12091209/Caibaoliverecorder';
 const RELEASE_API = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
 const DAY = 86400000, MAX_PACKAGE = 512 * 1024 * 1024;
+const CHECK_CACHE_MS = 60000, FAILED_CHECK_RETRY_MS = 10000;
+const RATE_LIMIT_MESSAGE = '更新服务暂时限制请求，请等待恢复后重试。';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw Object.assign(new Error(message),{updateError:true}); };
 export function releaseIdentity(value) {
@@ -46,7 +48,7 @@ export function validateUpdate(release, manifest, current, platform) {
 
 // Only the project's GitHub endpoint and GitHub's release CDN are contacted.
 // Redirects are inspected before following them; no URL comes from the UI.
-export async function githubFetch(url,{fetcher=fetch,signal}={}) {
+export async function githubFetch(url,{fetcher=fetch,signal,now=Date.now}={}) {
   for(let redirects=0;redirects<=5;redirects++){
     const address=new URL(url);
     const api=address.origin==='https://api.github.com'&&address.pathname===`/repos/${UPDATE_REPOSITORY}/releases/latest`;
@@ -58,7 +60,20 @@ export async function githubFetch(url,{fetcher=fetch,signal}={}) {
       const location=response.headers.get('location');await response.body?.cancel();
       if(!location)fail('更新下载跳转无效。');url=new URL(location,url).href;continue;
     }
-    if(!response.ok){await response.body?.cancel();fail(response.status===403||response.status===429?'检查更新过于频繁，请稍后重试。':'暂时无法获取更新，请检查网络后重试。');}
+    if(!response.ok){
+      const retry=response.headers.get('retry-after'),remaining=response.headers.get('x-ratelimit-remaining');
+      let limited=response.status===429||(response.status===403&&(remaining==='0'||retry!==null));
+      if(response.status===403&&!limited){
+        try{const message=JSON.parse((await boundedBytes(response,16384)).toString('utf8')).message||'';limited=/\brate limit\b|abuse detection/i.test(message);}catch{}
+      }else await response.body?.cancel();
+      if(limited){
+        const time=now(),after=retry!==null&&/^\d+$/.test(retry.trim())?time+Number(retry)*1000:Date.parse(retry??'');
+        const reset=remaining==='0'?Number(response.headers.get('x-ratelimit-reset'))*1000:NaN;
+        const deadlines=[after,reset].filter(value=>Number.isSafeInteger(value)&&value>time&&value<=8640000000000000);
+        throw Object.assign(new Error(RATE_LIMIT_MESSAGE),{updateError:true,retryAt:deadlines.length?Math.max(...deadlines):time+60000});
+      }
+      fail(response.status===403?'更新服务拒绝了请求（403），请稍后重试或检查网络。':'暂时无法获取更新，请检查网络后重试。');
+    }
     return response;
   }
   fail('更新下载跳转次数过多。');
@@ -76,10 +91,14 @@ export class Updates {
     Object.assign(this,{store,current,platform,fetcher,now,activity,checkTimeoutMs,downloadTimeoutMs,idleMs});
     this.root=path.join(store.root,'updates');this.status='idle';this.error='';this.candidate=null;this.ready=null;this.received=0;this.closed=false;
     this.checkedAt=store.setting('update-checked-at')||0;
+    const retryAt=store.setting('update-retry-at');
+    this.retryAt=Number.isSafeInteger(retryAt)&&retryAt>this.now()?retryAt:0;
+    this.checkNotice='';this.lastCheckSucceeded=false;
+    if(this.retryAt){this.status='error';this.error=RATE_LIMIT_MESSAGE;}
   }
   snapshot(){
     const deferred=this.store.setting('update-deferred');
-    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
+    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,checkNotice:this.checkNotice,retryAt:this.retryAt>this.now()?this.retryAt:0,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
   }
   start(){this.startTimer=setTimeout(()=>this.autoCheck(),5000);this.startTimer.unref?.();this.timer=setInterval(()=>this.autoCheck(),3600000);this.timer.unref?.();}
   autoCheck(){if(!this.closed&&this.snapshot().enabled&&this.now()-this.checkedAt>=DAY)void this.check().catch(()=>{});}
@@ -89,15 +108,20 @@ export class Updates {
     if(this.closed)fail('软件正在退出。');
     if(this.downloadTask)return Promise.resolve(this.snapshot());
     if(this.checkTask)return this.checkTask;
-    if(this.lastAttempt&&this.now()-this.lastAttempt<60000)return Promise.resolve(this.snapshot());
-    this.lastAttempt=this.now();this.status='checking';this.error='';
+    if(this.retryAt>this.now())return Promise.resolve(this.snapshot());
+    const interval=this.lastCheckSucceeded?CHECK_CACHE_MS:FAILED_CHECK_RETRY_MS;
+    if(this.lastAttempt!==undefined&&this.now()-this.lastAttempt<interval){
+      this.checkNotice=this.lastCheckSucceeded?'刚刚已检查，显示最近的检查结果。':'上次检查未成功，请过几秒再试。';
+      return Promise.resolve(this.snapshot());
+    }
+    this.lastAttempt=this.now();this.status='checking';this.error='';this.checkNotice='';
     this.checkController=new AbortController();
     return this.checkTask=this.checkRemote(AbortSignal.any([this.checkController.signal,AbortSignal.timeout(this.checkTimeoutMs)]))
-      .catch(error=>{if(!this.closed){this.error=error.updateError?error.message:'检查更新失败，请检查网络或稍后重试。';this.status=this.ready?'ready':this.candidate?'available':'error';}return this.snapshot();})
+      .catch(error=>{if(!this.closed){this.lastCheckSucceeded=false;this.retryAt=error.retryAt||0;this.store.setting('update-retry-at',this.retryAt);this.error=error.updateError?error.message:'检查更新失败，请检查网络或稍后重试。';this.status=this.ready?'ready':this.candidate?'available':'error';}return this.snapshot();})
       .finally(()=>{this.checkTask=null;});
   }
   async checkRemote(signal){
-    const request=url=>githubFetch(url,{fetcher:this.fetcher,signal});
+    const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
     const release=JSON.parse((await boundedBytes(await request(RELEASE_API),1024*1024)).toString('utf8'));
     if(release.draft||release.prerelease||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(release.tag_name))fail('更新渠道信息无效。');
     const asset=releaseAsset(release,'update-manifest.json');
@@ -112,6 +136,7 @@ export class Updates {
       try{await this.directory();const stat=await fs.lstat(file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.size===next.size)this.ready={...next,file};}catch{}
     }
     this.candidate=next;this.status=next?(this.ready?'ready':'available'):'current';this.checkedAt=this.now();
+    this.lastCheckSucceeded=true;this.retryAt=0;this.store.setting('update-retry-at',0);
     this.store.setting('update-checked-at',this.checkedAt);return this.snapshot();
   }
   async directory(){

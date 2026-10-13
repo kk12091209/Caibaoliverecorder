@@ -10,6 +10,38 @@ namespace BililiveRecorder.Core.UnitTests.Config
     [UsesVerify]
     public class ConfigTests
     {
+        [Theory]
+        [InlineData(@"{""version"":3,""global"":null,""rooms"":[]}")]
+        [InlineData(@"{""version"":3,""global"":{},""rooms"":null}")]
+        [InlineData(@"{""version"":3,""global"":{},""rooms"":[null]}")]
+        public void RejectsNullConfigContainers(string json)
+        {
+            Assert.Null(ConfigParser.LoadJson(json));
+        }
+
+        [Theory]
+        [InlineData(@"{""version"":3}")]
+        [InlineData(@"{""version"":3,""rooms"":[]}")]
+        public void MissingContainersUseDefaults(string json)
+        {
+            var config = ConfigParser.LoadJson(json)!;
+            Assert.NotNull(config);
+            Assert.NotNull(config.Global);
+            Assert.NotNull(config.Rooms);
+            Assert.Empty(config.Rooms);
+        }
+
+        [Fact]
+        public void OmittedFalseValueSurvivesSaveAndReload()
+        {
+            var config = new ConfigV3();
+            config.Rooms.Add(new RoomConfig { RoomId = 42, AutoRecord = false });
+            var restored = ConfigParser.LoadJson(ConfigParser.SaveJson(config)!)!;
+            Assert.True(restored.Rooms[0].HasAutoRecord);
+            Assert.False(restored.Rooms[0].AutoRecord);
+            Assert.Equal(42, restored.Rooms[0].RoomId);
+        }
+
         [Fact]
         public Task CanSerializeToJsonAsync()
         {

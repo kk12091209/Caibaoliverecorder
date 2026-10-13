@@ -91,6 +91,49 @@ test('桌面心跳与宽限期防止启动中退出，遗留后台在空闲后�
   pidAlive=false;assert.equal(runtime.shouldStop({busy:true}),false);assert.equal(runtime.shouldStop({busy:false}),true);
 });
 
+test('长时间心跳中断和桌面进程退出都不回收仍有监控的后台，取消监控后才回收',async t=>{
+  const root=await fixture(t);let time=0,pidAlive=true;
+  const runtime=await ServiceRuntime.acquire(root,appRoot,{managed:true,now:()=>time,isAlive:()=>pidAlive});t.after(()=>runtime.release());
+  runtime.heartbeat('a'.repeat(32),123);time=20*60*1000;
+  assert.equal(runtime.liveClients(),0);
+  assert.equal(runtime.shouldStop({busy:false,background:true}),false);
+  pidAlive=false;time+=60*60*1000;
+  assert.equal(runtime.shouldStop({busy:false,background:true}),false);
+  assert.equal(runtime.shouldStop({busy:false,background:false}),true);
+});
+
+for(const mode of ['exit','restart'])test(`监控保活不阻止明确的 ${mode} 请求，实际录制仍须先收尾`,async t=>{
+  const runtime=await ServiceRuntime.acquire(await fixture(t),appRoot,{managed:true});t.after(()=>runtime.release());
+  runtime.request(mode);
+  assert.equal(runtime.shouldStop({busy:false,background:true}),true);
+  assert.equal(runtime.shouldStop({busy:true,background:true}),false);
+});
+
+for(const platform of ['bilibili','douyin'])test(`${platform} 等待开播时心跳停顿二十分钟后仍使用同一后台，恢复心跳和停止监控正常`,async t=>{
+  let time=0;
+  const app=await application(t,{desktopManaged:true,updatesAutoCheck:false,runtimeOptions:{now:()=>time,isAlive:()=>true}});
+  await app.startupRecovery;
+  let room;
+  if(platform==='bilibili'){
+    room={roomId:42,autoRecord:true,recordingEnabled:true,recording:false,streaming:false};app.recorder.rooms=[room];
+  }else{
+    room=app.recorder.douyin.entry({webRid:'42',autoRecord:true,enabled:true});app.recorder.douyin.entries.set('42',room);
+  }
+  const heartbeat={action:'heartbeat',client:'a'.repeat(32),pid:process.pid};
+  const initial=await request(app,heartbeat);assert.equal(initial.body.background,true);assert.equal(initial.body.busy,false);
+  const check=t.mock.method(app.runtime,'shouldStop');
+  time=20*60*1000;
+  await until(()=>app.runtime.closed||check.mock.callCount()>=3);
+  assert.equal(app.runtime.closed,false);assert.equal(app.runtime.liveClients(),0);
+  const resumed=await request(app,heartbeat);
+  assert.equal(resumed.body.instance,initial.body.instance);assert.equal(resumed.body.background,true);assert.equal(app.runtime.liveClients(),1);
+  Object.assign(room,{autoRecord:false,recordingEnabled:false,enabled:false});time+=20*60*1000;
+  await until(()=>app.runtime.closed);
+  await app.close();
+  const log=await fs.readFile(path.join(app.root,'logs',app.diagnostics.day+'.txt'),'utf8');
+  assert.match(log,/后台退出判定.*无后台任务且桌面心跳已失效.*"background":false/);
+});
+
 test('更新请求等录制结束再切换，不中止素材写入',async t=>{
   const app=await application(t),session=app.store.createSession({title:'recording',status:'recording'});
   await request(app,{action:'restart'});await delay(40);
@@ -99,6 +142,8 @@ test('更新请求等录制结束再切换，不中止素材写入',async t=>{
   await until(()=>app.runtime.closed);
   await app.close();
   await assert.rejects(()=>fs.stat(app.runtime.file),{code:'ENOENT'});
+  const log=await fs.readFile(path.join(app.root,'logs',app.diagnostics.day+'.txt'),'utf8');
+  assert.match(log,/后台退出判定.*收到 restart 请求/);
 });
 
 test('导出、预处理和整理都会阻止更新，普通播放不构成后台任务',async t=>{

@@ -49,7 +49,8 @@ export class Recorder {
     this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch(error){this.failed(error);}finally{this.schedule();}},this.lifecycle.healthMs);
   }
   failed(error){
-    if(this.closed)return;
+    // A health request can finish after an intentional stop has begun.
+    if(this.closed||this.quitting)return;
     this.store.diagnostics?.record('B站录制核心',error,{level:'警告'});this.online=false;this.error=error.message;this.failures=Math.min(this.failures+1,16);
     this.retryAt=this.lifecycle.now()+Math.min(this.lifecycle.maxRetryMs,this.lifecycle.retryMs*2**(this.failures-1));
   }
@@ -132,7 +133,7 @@ export class Recorder {
       try{await fs.access(this.executable);}catch{
         throw new Error('找不到录制核心。请完整解压发布包并保留 runtime/recorder，或通过 RECORDER_PATH 指定录制核心。');
       }
-      this.assertOpen();this.childFailure=null;
+      this.assertOpen();this.childFailure=null;this.coreStopReason='';
       await this.roomState.prepareLaunch(this.directory,()=>this.assertOpen());this.assertOpen();
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
       const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1',BILILIVERECORDER_DISABLE_FILE_LOG:'1'}});
@@ -147,9 +148,14 @@ export class Recorder {
         this.childFailure=new Error(`录制核心无法启动：${e.message}。请检查运行组件是否完整。`);
         if(!this.starting)this.failed(this.childFailure);
       });
-      child.on('exit',code=>{
+      child.on('exit',(code,signal)=>{
         if(this.closed||this.process!==child)return;
-        this.childRunning=false;this.childFailure=new Error(`录制核心已退出 (${code})，正在尝试恢复。`);
+        const expected=!!this.coreStopReason;
+        this.childRunning=false;this.online=false;
+        this.store.diagnostics?.record('B站录制核心退出',JSON.stringify({pid:child.pid,code,signal:signal??null,expected,reason:this.coreStopReason||'非主动退出'}),
+          {level:expected&&(code===0||signal==='SIGINT')?'信息':'警告',important:true});
+        if(expected){this.childFailure=null;return;}
+        this.childFailure=new Error(`录制核心已退出 (${signal||code})，正在尝试恢复。`);
         if(!this.starting)this.failed(this.childFailure);
       });
       child.unref();
@@ -287,6 +293,18 @@ export class Recorder {
     const resume=rooms.filter(roomEnabled).map(room=>room.roomId);
     this.store.setting('recorder-resume-rooms',resume);
   }
+  async stopCore(endpoint,reason){
+    this.coreStopReason=reason;
+    this.store.diagnostics?.record('录制核心停止请求',JSON.stringify({pid:endpoint.pid,reason}),{important:true});
+    try{
+      const stopped=await this.lifecycle.stopProcess({...endpoint,report:event=>{
+        const normal=event.stage==='SIGINT'&&['sent','exited'].includes(event.outcome);
+        this.store.diagnostics?.record('录制核心退出',JSON.stringify({...event,reason}),{level:normal?'信息':'警告',important:true});
+      }});
+      if(!stopped)this.coreStopReason='';
+      return stopped;
+    }catch(error){this.coreStopReason='';throw error;}
+  }
   async stopForExit(rooms){
     this.quitting=true;this.monitoring=false;clearTimeout(this.timer);this.timer=null;
     let stopError;
@@ -304,7 +322,7 @@ export class Recorder {
       // stop only our verified core, keeping the recorded FLV/XML for recovery.
       const endpoint=this.ownedEndpoint??(this.process?.pid?{pid:this.process.pid,port:this.port,executable:this.executable,directory:this.directory}:await this.lifecycle.findOwned({executable:this.executable,directory:this.directory}));
       if(endpoint){
-        if(!await this.lifecycle.stopProcess({...endpoint,report:event=>this.store.diagnostics?.record('录制核心退出',JSON.stringify(event),{level:'警告'})}))throw new Error('录制核心未能退出。');
+        if(!await this.stopCore(endpoint,'用户请求退出'))throw new Error('录制核心未能退出。');
         this.store.setting('recorder-endpoint',null);this.ownedEndpoint=null;this.childRunning=false;
       }else if(this.childRunning)throw new Error('无法确认录制核心，已保留录像。');
     }
@@ -327,7 +345,7 @@ export class Recorder {
     const endpoint=this.ownedEndpoint;
     if(!endpoint)return false;
     this.quitting=true;clearTimeout(this.timer);this.timer=null;
-    const stopped=await this.lifecycle.stopProcess({...endpoint,report:event=>this.store.diagnostics?.record('录制核心退出',JSON.stringify(event),{level:'警告'})});
+    const stopped=await this.stopCore(endpoint,'后台空闲退出');
     if(stopped){this.store.setting('recorder-endpoint',null);return true;}
     this.quitting=false;this.schedule();return false;
   }

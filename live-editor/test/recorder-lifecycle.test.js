@@ -36,7 +36,7 @@ async function fixture(t,{available=false,healthMs=10,retryMs=15,maxRetryMs=60,s
       if(state.spawnFailures>0){state.spawnFailures--;queueMicrotask(()=>child.emit('error',new Error('simulated spawn failure')));return child;}
       child.pid=100+state.spawnCount;
       if(!state.keepPortClosed)state.available=true;
-      child.exit=()=>{state.available=false;child.emit('exit',137);};
+      child.exit=(code=137,signal=null)=>{state.available=false;child.emit('exit',code,signal);};
       return child;
     }
   };
@@ -56,6 +56,57 @@ test('核心退出后自动恢复，保留房间并重新应用采集配置，�
   children[0].exit();assert.equal(recorder.online,false);assert.match(recorder.error,/已退出/);
   await until(()=>state.spawnCount===2&&recorder.online,'core did not recover after child exit');
   assert.equal(recorder.error,'');assert.equal(state.globalWrites,2);assert.equal(state.roomWrites,2);assert.equal(recorder.rooms[0].roomId,42);
+});
+
+for(const [code,signal] of [[0,null],[null,'SIGKILL']])test(`非主动退出记录退出码和信号并恢复：${code}/${signal}`,async t=>{
+  const {recorder,state,children,store}=await fixture(t),events=[];
+  store.diagnostics={record:(...event)=>events.push(event),attach(){}};
+  assert.equal(await recorder.start(),true);children[0].exit(code,signal);
+  const event=events.find(([kind])=>kind==='B站录制核心退出');assert.ok(event);
+  assert.deepEqual(JSON.parse(event[1]),{pid:101,code,signal,expected:false,reason:'非主动退出'});
+  assert.equal(event[2].level,'警告');
+  await until(()=>state.spawnCount===2&&recorder.online,'unexpected exit must still recover');
+});
+
+for(const mode of ['idle','quit'])test(`主动 ${mode} 停止核心不误报崩溃、不触发重启`,async t=>{
+  const {recorder,state,children,store}=await fixture(t,{port:0,healthMs:10000}),events=[];
+  store.diagnostics={record:(...event)=>events.push(event),attach(){}};
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44003,isAlive:()=>state.available,
+    stopProcess:async({pid,report})=>{
+      report({pid,stage:'SIGINT',outcome:'sent',elapsedMs:0});children[0].exit(0);
+      report({pid,stage:'SIGINT',outcome:'exited',elapsedMs:1});return true;
+    }});
+  assert.equal(await recorder.start(),true);
+  let rejectHealth;
+  state.fetchOverride=async(url)=>{
+    const rooms=new URL(url).pathname==='/api/room';
+    if(rooms&&!rejectHealth)return new Promise((_resolve,reject)=>{rejectHealth=reject;});
+    return response(rooms?state.rooms:null);
+  };
+  const health=recorder.poll();await until(()=>rejectHealth,'health check did not start');
+  if(mode==='idle')assert.equal(await recorder.stopIdle(),true);else await recorder.stopForExit(await recorder.roomsForExit());
+  // A health request started before the stop may fail after the core exits.
+  rejectHealth(refused());await health;
+  assert.equal(recorder.online,false);assert.equal(recorder.childFailure,null);assert.equal(recorder.error,'');
+  assert.equal(events.some(([,message])=>String(message).includes('正在尝试恢复')),false);
+  const event=events.find(([kind])=>kind==='B站录制核心退出');assert.ok(event);assert.equal(event[2].level,'信息');
+  assert.equal(JSON.parse(event[1]).expected,true);assert.ok(JSON.parse(event[1]).reason);
+  assert.ok(events.filter(([kind])=>kind==='录制核心退出').every(([,message,options])=>options.level==='信息'&&JSON.parse(message).reason));
+  await recorder.poll();assert.equal(state.spawnCount,1);
+});
+
+test('主动停止超时和升级强制停止仍记警告，停止失败后继续监控',async t=>{
+  const {recorder,state,store}=await fixture(t,{port:0,healthMs:10000}),events=[];
+  store.diagnostics={record:(...event)=>events.push(event),attach(){}};
+  Object.assign(recorder.lifecycle,{findOwned:async()=>null,availablePort:async()=>44004,isAlive:()=>state.available,
+    stopProcess:async({pid,report})=>{
+      report({pid,stage:'SIGINT',outcome:'timeout',elapsedMs:8000});
+      report({pid,stage:'SIGKILL',outcome:'sent',elapsedMs:13000});return false;
+    }});
+  assert.equal(await recorder.start(),true);assert.equal(await recorder.stopIdle(),false);
+  assert.equal(recorder.quitting,false);assert.ok(recorder.timer);
+  const warnings=events.filter(([kind])=>kind==='录制核心退出');assert.equal(warnings.length,2);
+  assert.ok(warnings.every(([,message,options])=>options.level==='警告'&&JSON.parse(message).reason));
 });
 
 test('重连独立运行的核心后，即使没有子进程退出事件也能检测离线并自动恢复',async t=>{

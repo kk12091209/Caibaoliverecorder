@@ -23,7 +23,8 @@ test('界面恢复等待旧窗口退出，期间保持后台连接且不停止�
   t.after(()=>{if(child.exitCode===null)child.kill();});
   let launched;
   await recoverInterface({pid:child.pid,target:path.join(data,'菜播.app'),data,attempt:1},{platform:'darwin',keepAliveMs:20,launch:async(file,args)=>{
-    assert.notEqual(child.exitCode,null,'必须先释放旧窗口和进程');launched={file,args};
+    // Windows may report the OS process gone before Node delivers its exit event.
+    assert.throws(()=>process.kill(child.pid,0),{code:'ESRCH'},'必须先释放旧窗口和进程');launched={file,args};
   }});
   assert.equal(launched.file,'/usr/bin/open');
   assert.ok(launched.args.includes('CAIBO_UI_RECOVERY_ATTEMPT=1'));

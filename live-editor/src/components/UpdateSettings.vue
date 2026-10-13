@@ -19,11 +19,12 @@ async function action(name,input={}){
 
 <template>
   <section class="update-settings" aria-label="软件更新">
-    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.2.1' }}</span></div>
+    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.2.2' }}</span></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>自动检查更新并提醒</label>
     <p class="muted">后台每天检查 GitHub 发布页；由你确认下载和安装，不会强制中断录制或导出。</p>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>检查更新</button><small v-if="update.checkedAt">上次检查 {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
     <p role="status">{{ status }}</p>
+    <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
       <strong>{{ update.candidate.version }}</strong>
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
@@ -38,6 +39,7 @@ async function action(name,input={}){
       <p v-if="update.status==='ready'&&!isDesktop" class="muted">请回到桌面应用打开安装包。</p>
     </div>
     <p v-if="error||update.error" class="inline-warning" role="alert">{{ error||update.error }}</p>
+    <p v-if="update.retryAt" class="muted" role="status">更新服务预计在 {{ new Date(update.retryAt).toLocaleString() }} 后允许重试。</p>
     <p v-if="message" role="status">{{ message }}</p>
     <button v-if="update.hasCache" class="text-button" :disabled="working" @click="action('clear')">清理已下载的安装包</button>
   </section>

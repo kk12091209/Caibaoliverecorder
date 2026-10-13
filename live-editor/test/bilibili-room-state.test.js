@@ -8,6 +8,7 @@ import {EventEmitter} from 'node:events';
 import {Store} from '../server/store.js';
 import {Recorder} from '../server/recorder.js';
 import {MultiPlatformRecorder} from '../server/multi-platform-recorder.js';
+import {BilibiliRooms} from '../server/bilibili-rooms.js';
 
 async function fixture(t,{automatic=true,streaming=true,available=true}={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'bilibili-room-state-'));
@@ -15,7 +16,8 @@ async function fixture(t,{automatic=true,streaming=true,available=true}={}){
   const configFile=path.join(root,'originals','config.json'),calls=[];
   const state={available,rooms:[{roomId:42,name:'测试主播',title:'测试直播',autoRecord:automatic,autoRecordForThisSession:true,streaming,recording:automatic&&streaming}],spawnSnapshots:[],failConfig:false};
   let store=new Store(root),recorder;
-  const writeConfig=async()=>fs.writeFile(configFile,JSON.stringify({version:3,global:{keep:'untouched'},rooms:state.rooms.map(room=>({RoomId:{HasValue:true,Value:room.roomId},AutoRecord:{HasValue:true,Value:room.autoRecord},custom:'preserved'}))}));
+  // ConfigParser.SaveJson omits default values, including Optional<bool>.Value=false.
+  const writeConfig=async()=>fs.writeFile(configFile,JSON.stringify({version:3,global:{keep:'untouched'},rooms:state.rooms.map(room=>({RoomId:{HasValue:true,Value:room.roomId},AutoRecord:{HasValue:true,...(room.autoRecord?{Value:true}:{})},custom:'preserved'}))}));
   await fs.mkdir(path.dirname(configFile),{recursive:true});await writeConfig();
   const lifecycle={healthMs:60000,requestMs:1000,startupMs:1000,startupPollMs:1,
     findOwned:async()=>state.available?{pid:999999,port:45001,executable,directory:path.dirname(configFile)}:null,
@@ -47,7 +49,7 @@ async function fixture(t,{automatic=true,streaming=true,available=true}={}){
     },
     spawn(){
       const config=JSON.parse(readFileSync(configFile,'utf8'));state.spawnSnapshots.push(config);
-      state.rooms=config.rooms.map(room=>({roomId:room.RoomId.Value,name:'测试主播',title:'测试直播',autoRecord:room.AutoRecord.Value,autoRecordForThisSession:true,streaming,recording:room.AutoRecord.Value&&streaming}));
+      state.rooms=config.rooms.map(room=>({roomId:room.RoomId.Value,name:'测试主播',title:'测试直播',autoRecord:room.AutoRecord.Value??false,autoRecordForThisSession:true,streaming,recording:(room.AutoRecord.Value??false)&&streaming}));
       state.available=true;const child=new EventEmitter();child.pid=999999;child.unref=()=>{};return child;
     }
   };
@@ -66,7 +68,7 @@ test('B站手动停止持久保存，重开数据库与核心时已停止房间�
   f.recorder.rememberExitRooms(await f.recorder.roomsForExit());assert.deepEqual(f.store.setting('recorder-resume-rooms'),[]);
   await f.reopen();assert.equal(f.recorder.rooms.length,1);assert.equal(f.recorder.rooms[0].name,'测试主播');assert.equal(f.recorder.rooms[0].recordingEnabled,false);
   const before=f.calls.length;await f.recorder.start();
-  assert.equal(f.state.spawnSnapshots[0].rooms[0].AutoRecord.Value,false);
+  assert.equal(f.state.spawnSnapshots[0].rooms[0].AutoRecord.Value??false,false);
   assert.equal(f.state.rooms[0].recording,false);
   assert.equal(f.calls.slice(before).some(call=>call.route.endsWith('/42/start')),false);
   await f.recorder.startRoom(42);await f.recorder.poll();assert.equal(f.state.rooms[0].recording,true);assert.equal(f.recorder.rooms[0].recordingEnabled,true);
@@ -160,8 +162,70 @@ test('损坏录制配置先备份再恢复；保留录像与已停止的监控�
   await f.reopen();assert.equal(await f.recorder.start(),true);assert.deepEqual(await fs.readdir(recovery),backups);
 });
 
+test('核心省略 false 默认值的合法配置跨多次重启保持原样，不误报损坏或丢失设置',async t=>{
+  const f=await fixture(t);await f.recorder.start();await f.recorder.stopRoom(42);
+  const original=await fs.readFile(f.configFile,'utf8');
+  assert.deepEqual(JSON.parse(original).rooms[0].AutoRecord,{HasValue:true});
+  for(let attempt=0;attempt<3;attempt++){
+    await f.reopen();assert.equal(await f.recorder.start(),true);
+    assert.equal(f.store.recovery?.coreConfigRecovered,undefined);
+    assert.deepEqual(f.state.spawnSnapshots.at(-1),JSON.parse(original));
+    assert.equal(await fs.readFile(f.configFile,'utf8'),original);
+    assert.equal(f.recorder.rooms[0].recordingEnabled,false);
+    assert.equal(f.state.rooms[0].recording,false);
+    await assert.rejects(fs.stat(path.join(f.root,'recovery')),{code:'ENOENT'});
+  }
+});
+
+for(const [name,config] of [
+  ['global 为 null',{version:3,global:null,rooms:[]}],
+  ['rooms 为 null',{version:3,global:{},rooms:null}],
+  ['rooms 中含空项',{version:3,global:{},rooms:[null]}],
+  ['global 为标量',{version:3,global:42,rooms:[]}]
+])test(`结构损坏恢复：${name}；备份一次并保留启停意图`,async t=>{
+  const f=await fixture(t);await f.recorder.start();await f.recorder.stopRoom(42);await f.reopen();
+  const original=JSON.stringify(config),events=[];
+  f.store.diagnostics={record:(...event)=>events.push(event),attach(){}};
+  await fs.writeFile(f.configFile,original);
+  assert.equal(await f.recorder.start(),true);
+  const recovery=path.join(f.root,'recovery'),backups=await fs.readdir(recovery);
+  assert.equal(backups.length,1);assert.equal(await fs.readFile(path.join(recovery,backups[0]),'utf8'),original);
+  assert.equal(f.recorder.rooms[0].recordingEnabled,false);assert.equal(f.state.rooms[0].recording,false);
+  assert.ok(events.some(([kind,message])=>kind==='数据恢复'&&message.includes('结构异常')));
+  for(let attempt=0;attempt<2;attempt++){
+    await f.reopen();assert.equal(await f.recorder.start(),true);
+    assert.deepEqual(await fs.readdir(recovery),backups);assert.equal(f.store.recovery?.coreConfigRecovered,undefined);
+    assert.equal(f.state.rooms[0].recording,false);
+  }
+});
+
+test('核心允许省略默认容器，带 BOM 与自定义字段的合法配置不重写',async t=>{
+  const f=await fixture(t);
+  for(const config of [{version:3},{version:3,rooms:[]},{version:3,global:{Custom:'kept'}}]){
+    const original='\uFEFF'+JSON.stringify(config);await fs.writeFile(f.configFile,original);
+    await new BilibiliRooms(f.store).prepareLaunch(path.dirname(f.configFile),()=>{});
+    assert.equal(await fs.readFile(f.configFile,'utf8'),original);
+    await assert.rejects(fs.stat(path.join(f.root,'recovery')),{code:'ENOENT'});
+  }
+});
+
+test('恢复替换失败时保留损坏原件与备份，清除暂存文件；下次可恢复',async t=>{
+  const f=await fixture(t),original=JSON.stringify({version:3,global:null,rooms:[]});
+  await fs.writeFile(f.configFile,original);let checks=0;
+  await assert.rejects(new BilibiliRooms(f.store).prepareLaunch(path.dirname(f.configFile),()=>{
+    if(++checks===3)throw new Error('simulated shutdown before replacement');
+  }),/simulated shutdown/);
+  assert.equal(await fs.readFile(f.configFile,'utf8'),original);
+  const recovery=path.join(f.root,'recovery'),backups=await fs.readdir(recovery);
+  assert.equal(backups.length,1);assert.equal(await fs.readFile(path.join(recovery,backups[0]),'utf8'),original);
+  assert.equal((await fs.readdir(path.dirname(f.configFile))).some(name=>name.startsWith('.config-start-')),false);
+  await new BilibiliRooms(f.store).prepareLaunch(path.dirname(f.configFile),()=>{});
+  assert.notEqual(JSON.parse(await fs.readFile(f.configFile,'utf8')).global,null);
+});
+
 test('异常配置结构不会卡住；恢复后自动监控和手动录制按保存的开关分别恢复',async t=>{
-  for(const [raw,automatic] of [[JSON.stringify({version:3,rooms:[null]}),true],[JSON.stringify({version:3,global:[],rooms:[]}),false]]) {
+  const invalidBoolean=value=>JSON.stringify({version:3,rooms:[{RoomId:{HasValue:true,Value:42},AutoRecord:{HasValue:true,Value:value}}]});
+  for(const [raw,automatic] of [[JSON.stringify({version:3,rooms:[null]}),true],[JSON.stringify({version:3,global:[],rooms:[]}),false],[invalidBoolean('false'),true],[invalidBoolean(null),false]]) {
     const f=await fixture(t,{automatic});await f.recorder.start();if(!automatic)await f.recorder.startRoom(42);
     await f.reopen();await fs.writeFile(f.configFile,raw);
     assert.equal(await f.recorder.start(),true);assert.equal(f.state.rooms[0].recording,true);

@@ -91,6 +91,9 @@ export class ServiceRuntime {
   shouldStop(activity){
     if(this.closed||this.stopping||activity.busy)return false;
     if(this.pending)return true;
+    // Waiting for a stream is still background work, even without desktop heartbeats.
+    // Explicit exit/restart requests above retain their existing shutdown behavior.
+    if(activity.background)return false;
     return this.managed&&this.now()-this.started>=this.startupGraceMs&&this.liveClients()===0;
   }
   status(activity){return {protocol:SERVICE_PROTOCOL,instance:this.instance,build:this.build,dataPath:this.root,pid:process.pid,pending:this.pending,stopping:this.stopping,quitError:this.quitError||'',startupPhase:this.startupPhase||'',...activity};}

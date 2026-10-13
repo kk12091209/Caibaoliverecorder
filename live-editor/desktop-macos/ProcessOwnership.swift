@@ -26,7 +26,7 @@ struct OwnedProcess: Equatable {
     var unchanged: Bool { Self.inspect(pid) == self }
     func signal(_ value: Int32) -> Bool { pid != getpid() && unchanged && Darwin.kill(pid, value) == 0 }
 
-    static func command(_ executable: String, _ arguments: [String]) throws -> String {
+    static func command(_ executable: String, _ arguments: [String], timeout seconds: TimeInterval = 60) throws -> String {
         let task = Process(), output = Pipe()
         task.executableURL = URL(fileURLWithPath: executable); task.arguments = arguments
         task.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "en_US.UTF-8"]
@@ -39,7 +39,7 @@ struct OwnedProcess: Equatable {
                 if task.isRunning { _ = Darwin.kill(task.processIdentifier, SIGKILL) }
             }
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: timeout)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: timeout)
         defer { timeout.cancel() }
         let bytes = output.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
         guard task.terminationStatus == 0 else { throw problem("\(URL(fileURLWithPath: executable).lastPathComponent) 维护步骤未完成（退出码 \(task.terminationStatus)）。") }

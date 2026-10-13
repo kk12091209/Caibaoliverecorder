@@ -305,8 +305,11 @@ async function createManagedApp(options,runtime) {
   };
   const maintenanceTimer=setInterval(maintain,5000);
   const runtimeTimer=setInterval(()=>{
-    if(closing||!runtime.shouldStop(activity()))return;
+    if(closing)return;
+    const current=activity();if(!runtime.shouldStop(current))return;
     runtime.stopping=true;
+    diagnostics.record('后台退出判定',JSON.stringify({reason:runtime.pending?'收到 '+runtime.pending+' 请求':'无后台任务且桌面心跳已失效',
+      busy:current.busy,background:current.background,clients:runtime.liveClients()}),{important:true});
     void(async()=>{
       if(runtime.pending!=='restart'&&!options.noRecorder&&!await recorder.stopIdle()){runtime.stopping=false;return;}
       await app.close();

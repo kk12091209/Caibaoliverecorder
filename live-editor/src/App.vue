@@ -2,6 +2,7 @@
 import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import DanmakuOverlay from './components/DanmakuOverlay.vue';
 import UpdateSettings from './components/UpdateSettings.vue';
+import PowerSettings from './components/PowerSettings.vue';
 import DanmakuStyleSettings from './components/DanmakuStyleSettings.vue';
 import { applyUpdate } from './desktop.js';
 import TimelineSignals from './components/TimelineSignals.vue';
@@ -14,7 +15,7 @@ import { roomAvailable, roomRecordEnabled, roomStatus } from './room-status.js';
 import { formatVideoTime as format, displayedSpan, markPreviewPosition } from './video-time.js';
 import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecordingInput, recordingTimeBounds } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
-import { isDesktop, openAuthorPage, pickExportFolder } from './desktop.js';
+import { isDesktop, isMacDesktop, openAuthorPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
 import { previewStream } from './preview-stream.js';
 import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
@@ -589,6 +590,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
       </template>
       <template v-else-if="modal==='danmaku-style'"><h2><Settings :size="23"/>调整弹幕样式</h2><DanmakuStyleSettings :style="state.danmakuStyle" :font="state.danmakuFont" :rate="state.danmakuPerSecond??50" @changed="applyDanmakuSettings" @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>设置</h2><UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
+        <PowerSettings v-if="isMacDesktop"/>
         <section class="danmaku-style-entry"><div><strong>弹幕样式</strong><p>{{ state.danmakuFont?.family||'默认字体' }} · 字号 {{ state.danmakuStyle?.size??0.6 }} · 不透明度 {{ state.danmakuStyle?.opacity??100 }}% · 速度 {{ (state.danmakuStyle?.speed??1).toFixed(1) }} 倍 · {{ state.danmakuStyle?.fps??60 }} 帧</p></div><button class="button open-danmaku-style" :disabled="modalBusy" @click="modal='danmaku-style'"><Settings :size="16"/>调整弹幕样式</button></section>
         <fieldset v-if="isDesktop" class="export-versions" aria-label="关闭窗口时"><legend>关闭窗口时</legend><label v-for="choice in [{value:'ask',label:'每次询问'},{value:'exit',label:'退出'},{value:'background',label:'后台运行'}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
         <section class="preparation-settings" aria-label="自动预处理设置"><label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>录制完成后自动预处理<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label><p class="muted">提前处理弹幕视频，导出时复用结果。临时缓存会额外占用磁盘，预览和选段时继续，录制、导出和素材整理时暂缓。</p><p class="muted">仍可自由调整选段和弹幕，部分内容可能需要重新处理。预处理不会自动生成导出视频，需要时请手动导出。</p><p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p></section>

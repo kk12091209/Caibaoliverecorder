@@ -82,6 +82,11 @@ namespace BililiveRecorder.Core.Config
                         return ConfigMapper.Map2To3(v2);
 
                     case V3.ConfigV3 v3:
+                        if (v3.Global is null || v3.Rooms is null || v3.Rooms.Any(room => room is null))
+                        {
+                            logger.Error("设置结构异常：global、rooms 及房间条目不能为 null");
+                            return null;
+                        }
                         logger.Debug("读取到 config v3");
                         return v3;
 

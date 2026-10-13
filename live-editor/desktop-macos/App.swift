@@ -58,6 +58,59 @@ import IOKit.pwr_mgt
     }
 }
 
+// Read-only snapshots. A power assertion prevents idle sleep, not lid sleep.
+enum RecordingPowerStatus {
+    // Read the saved AC policy, not live overrides caused by this or other apps.
+    static func systemSleepAC(from output: String?) -> String {
+        guard let output else { return "unknown" }
+        var section = "", values: [String] = []
+        for raw in output.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasSuffix(":") { section = line; continue }
+            guard section == "AC Power:" else { continue }
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            guard fields.first == "sleep" else { continue }
+            guard fields.count == 2, fields[1].allSatisfy({ $0.isASCII && $0.isNumber }), let minutes = UInt(fields[1]) else { return "unknown" }
+            values.append(minutes == 0 ? "enabled" : "disabled")
+        }
+        return values.count == 1 ? values[0] : "unknown"
+    }
+    static func readSystemSleepAC() -> String {
+        systemSleepAC(from: try? OwnedProcess.command("/usr/bin/pmset", ["-g", "custom"], timeout: 3))
+    }
+    static func lidStatus(_ properties: [String: Any]?) -> String {
+        guard let properties else { return "unknown" }
+        let lid = properties["AppleClamshellState"], policy = properties["AppleClamshellCausesSleep"]
+        if lid == nil && policy == nil { return "not-applicable" }
+        guard let policy, CFGetTypeID(policy as CFTypeRef) == CFBooleanGetTypeID(), let sleeps = policy as? Bool else { return "unknown" }
+        return sleeps ? "disabled" : "enabled"
+    }
+    static func readLidStatus() -> String {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard service != 0 else { return "unknown" }
+        defer { IOObjectRelease(service) }
+        var properties: Unmanaged<CFMutableDictionary>?
+        guard IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+              let value = properties?.takeRetainedValue() as? [String: Any] else { return "unknown" }
+        return lidStatus(value)
+    }
+    static func protectionStatus(_ properties: [String: Any]?, requested: Bool, needed: Bool) -> String {
+        guard requested else { return needed ? "inactive" : "standby" }
+        guard let level = properties?[kIOPMAssertionLevelKey as String] as? NSNumber else { return "unknown" }
+        return level.intValue == Int(kIOPMAssertionLevelOn) ? "active" : "inactive"
+    }
+    static func snapshot(assertion: IOPMAssertionID?, needed: Bool, systemSleepAC: String) -> [String: Any] {
+        let properties = assertion.flatMap { IOPMAssertionCopyProperties($0)?.takeRetainedValue() as? [String: Any] }
+        return ["version": 2, "systemSleepAC": systemSleepAC, "protection": protectionStatus(properties, requested: assertion != nil, needed: needed),
+                "lid": readLidStatus(), "checkedAt": ISO8601DateFormatter().string(from: Date())]
+    }
+    static func settingsURLs(lid: String) -> [URL] {
+        // Fixed destinations only. A web message can never supply a URL or command.
+        let pane = lid == "not-applicable" ? "com.apple.preference.energysaver" : "com.apple.preference.battery"
+        return [URL(string: "x-apple.systempreferences:\(pane)")!, URL(fileURLWithPath: "/System/Applications/System Settings.app")]
+    }
+}
+
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var web: WKWebView!
@@ -627,6 +680,32 @@ import IOKit.pwr_mgt
             return
         }
         if input["action"] as? String == "openExternal", input["url"] as? String == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!); return }
+        if let action = input["action"] as? String, ["powerStatus", "openPowerSettings"].contains(action),
+           let id = input["id"] as? String, !id.isEmpty, id.count <= 100 {
+            var reply: [String: Any] = ["id": id]
+            if action == "powerStatus" {
+                let origin = backend.endpoint?.origin
+                Task { @MainActor [weak self] in
+                    let systemSleepAC = await Task.detached { RecordingPowerStatus.readSystemSleepAC() }.value
+                    guard let self, !self.terminating, self.backend.endpoint?.origin == origin, self.trusted(self.web.url) else { return }
+                    let value = RecordingPowerStatus.snapshot(assertion: self.hasSleepAssertion ? self.sleepAssertion : nil,
+                        needed: self.lastStatus["background"] as? Bool == true && self.lastStatus["stopping"] as? Bool != true,
+                        systemSleepAC: systemSleepAC)
+                    if let bytes = try? JSONSerialization.data(withJSONObject: ["id": id, "value": value]), let json = String(data: bytes, encoding: .utf8) {
+                        self.web.evaluateJavaScript("window.dispatchEvent(new CustomEvent('caibo-native',{detail:\(json)}))", completionHandler: nil)
+                    }
+                }
+                return
+            } else {
+                let opened = RecordingPowerStatus.settingsURLs(lid: RecordingPowerStatus.readLidStatus()).contains { NSWorkspace.shared.open($0) }
+                if opened { reply["value"] = true }
+                else { reply["error"] = "无法打开系统设置，请从苹果菜单进入“系统设置”的“电池”或“节能”。" }
+            }
+            if let bytes = try? JSONSerialization.data(withJSONObject: reply), let json = String(data: bytes, encoding: .utf8) {
+                web.evaluateJavaScript("window.dispatchEvent(new CustomEvent('caibo-native',{detail:\(json)}))", completionHandler: nil)
+            }
+            return
+        }
         if input["action"] as? String == "applyUpdate", let id = input["id"] as? String, id.count <= 100, !choosing {
             choosing = true
             Task { @MainActor in

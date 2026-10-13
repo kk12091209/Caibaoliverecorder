@@ -13,10 +13,18 @@ export function defaultCoreConfig(rooms=[]) {
     // Never start recording before restoring the saved user intent through the API.
     rooms:rooms.map(room=>({RoomId:{HasValue:true,Value:room.roomId},AutoRecord:{HasValue:true,Value:false}}))};
 }
-function readableConfig(config) {
-  return object(config)&&config.version===3&&(config.global==null||object(config.global))&&Array.isArray(config.rooms)&&config.rooms.every(room=>
+function configProblem(config) {
+  if(!object(config))return '顶层必须为对象';
+  if(config.version!==3)return '不支持的配置版本';
+  // Missing containers use the core defaults; explicit null overrides those
+  // defaults and would crash the core before it can expose its HTTP API.
+  if(Object.hasOwn(config,'global')&&!object(config.global))return '全局配置 global 结构异常';
+  if(Object.hasOwn(config,'rooms')&&!Array.isArray(config.rooms))return '房间列表 rooms 结构异常';
+  // The core omits default values when saving: {HasValue:true} is a valid false.
+  if(!(config.rooms??[]).every(room=>
     object(room)&&(room.RoomId==null||object(room.RoomId)&&(!room.RoomId.HasValue||validId(room.RoomId.Value)))&&
-    (room.AutoRecord==null||object(room.AutoRecord)&&(!room.AutoRecord.HasValue||typeof room.AutoRecord.Value==='boolean')));
+    (room.AutoRecord==null||object(room.AutoRecord)&&(!room.AutoRecord.HasValue||!Object.hasOwn(room.AutoRecord,'Value')||typeof room.AutoRecord.Value==='boolean'))))return '房间条目结构异常';
+  return '';
 }
 
 // User intent survives core exits. The core's AutoRecordForThisSession does not.
@@ -72,9 +80,10 @@ export class BilibiliRooms {
     // Persisted stops also win when a preceding HTTP stop/config request failed.
     const file=path.join(directory,'config.json'),stat=await fs.lstat(file);
     if(!stat.isFile()||stat.isSymbolicLink())throw new Error('录制核心配置文件异常，已保留原文件。');
-    const original=await fs.readFile(file);let config;
-    try{config=JSON.parse(original.toString('utf8').replace(/^\uFEFF/,''));}catch(error){if(!(error instanceof SyntaxError))throw error;}
-    if(!readableConfig(config)) {
+    const original=await fs.readFile(file);let config,problem;
+    try{config=JSON.parse(original.toString('utf8').replace(/^\uFEFF/,''));problem=configProblem(config);}
+    catch(error){if(!(error instanceof SyntaxError))throw error;problem='JSON 无法解析';}
+    if(problem) {
       const recovery=path.join(this.store.root,'recovery');
       await fs.mkdir(recovery,{recursive:true,mode:0o700});
       const recoveryStat=await fs.lstat(recovery);
@@ -88,13 +97,13 @@ export class BilibiliRooms {
         assertOpen();await fs.rename(temporary,file);
       } finally {await fs.rm(temporary,{force:true});}
       this.store.recovery??={};this.store.recovery.coreConfigRecovered=true;
-      this.store.diagnostics?.record('数据恢复','旧录制配置无法读取，已备份并恢复；录像保留，沿用保存的录制开关',{level:'警告',important:true});
+      this.store.diagnostics?.record('数据恢复',`录制配置已备份并恢复（${problem}）；录像保留，沿用保存的录制开关`,{level:'警告',important:true});
       return;
     }
     let changed=false;
-    for(const raw of config.rooms){
+    for(const raw of config.rooms??[]){
       const id=raw.RoomId?.Value,room=this.get(id);
-      if(room&&(!room.enabled||!room.autoRecord)&&!(raw.AutoRecord?.HasValue===true&&raw.AutoRecord.Value===false)){
+      if(room&&(!room.enabled||!room.autoRecord)&&!(raw.AutoRecord?.HasValue===true&&raw.AutoRecord.Value!==true)){
         raw.AutoRecord={HasValue:true,Value:false};changed=true;
       }
     }

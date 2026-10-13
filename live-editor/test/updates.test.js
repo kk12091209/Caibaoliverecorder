@@ -62,14 +62,76 @@ test('仅联系固定 GitHub 仓库及发布 CDN，拒绝跳转到本机和其�
   const response=await githubFetch(`https://github.com/${UPDATE_REPOSITORY}/releases/download/v0.1.6/test`,{fetcher:async()=>++calls===1?new Response(null,{status:302,headers:{location:'https://release-assets.githubusercontent.com/file?signature=test'}}):new Response('ok')});
   assert.equal(await response.text(),'ok');assert.equal(calls,2);
 });
-test('检查合并并发请求并限制频率；稍后提醒针对具体修订持久保存',async t=>{
+test('检查合并并发请求并复用近期成功结果；稍后提醒针对具体修订持久保存',async t=>{
   let now=200000;const f=await fixture(t,{now:()=>now});
   await Promise.all([f.updates.check(),f.updates.check()]);assert.equal(f.calls.length,2);
   assert.equal(f.updates.snapshot().candidate.revision,3);
   assert.equal(f.updates.defer().deferred,true);
   await f.updates.check();assert.equal(f.calls.length,2);
+  assert.match(f.updates.snapshot().checkNotice,/最近的检查结果/);
   now+=86400001;assert.equal(f.updates.snapshot().deferred,false);
   await f.updates.check();assert.equal(f.calls.length,4);
+});
+test('正常连续点击不报频繁、不重复访问 GitHub，也不伪造新的检查时间',async t=>{
+  for(const platform of ['win32-x64','darwin-arm64']){
+    let now=200000;const f=await fixture(t,{platform,now:()=>now});
+    const first=await f.updates.check();
+    for(let i=0;i<12;i++){
+      now+=2000;const result=await f.updates.check();
+      assert.equal(result.status,'available');assert.equal(result.error,'');assert.equal(result.checkedAt,first.checkedAt);assert.equal(result.candidate.key,first.candidate.key);
+    }
+    assert.equal(f.calls.length,2);
+    now=260000;const refreshed=await f.updates.check();
+    assert.equal(f.calls.length,4);assert.equal(refreshed.checkedAt,now);assert.equal(refreshed.checkNotice,'');
+  }
+});
+test('普通网络失败十秒后即可重试，等待期间不把失败当成最新版本',async t=>{
+  let now=200000,attempts=0;const f=await fixture(t,{now:()=>now});
+  f.updates.fetcher=async(...args)=>{if(attempts++===0)throw Error('network unavailable');return f.fetcher(...args);};
+  await f.updates.check();assert.equal(f.updates.status,'error');assert.equal(f.updates.checkedAt,0);
+  now+=9999;const waiting=await f.updates.check();assert.equal(attempts,1);assert.equal(waiting.status,'error');assert.match(waiting.checkNotice,/几秒/);
+  now++;const recovered=await f.updates.check();assert.equal(attempts,3);assert.equal(recovered.status,'available');assert.equal(recovered.error,'');
+});
+test('普通 403 不误报频繁；真正限流按照响应头确定重试时间',async()=>{
+  const url=`https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`,now=1700000000000;
+  const cases=[
+    {status:403,headers:{},message:'Forbidden',expected:0},
+    {status:403,headers:{'x-ratelimit-remaining':'0','x-ratelimit-reset':String((now+120000)/1000)},expected:now+120000},
+    {status:403,headers:{},message:'You have exceeded a secondary rate limit.',expected:now+60000},
+    {status:429,headers:{'retry-after':'20'},expected:now+20000},
+    {status:429,headers:{'retry-after':new Date(now+90000).toUTCString()},expected:now+90000},
+    {status:429,headers:{'retry-after':'invalid','x-ratelimit-remaining':'0','x-ratelimit-reset':'NaN'},expected:now+60000},
+    {status:403,headers:{'retry-after':'30','x-ratelimit-remaining':'0','x-ratelimit-reset':String((now+120000)/1000)},expected:now+120000}
+  ];
+  for(const c of cases)await assert.rejects(githubFetch(url,{now:()=>now,fetcher:async()=>Response.json({message:c.message||'limit'},{status:c.status,headers:c.headers})}),error=>{
+    assert.equal(error.retryAt||0,c.expected);assert.equal(error.updateError,true);
+    assert.match(error.message,c.expected?/更新服务暂时限制/:/拒绝了请求/);assert.doesNotMatch(error.message,/过于频繁/);return true;
+  });
+});
+test('响应头已确认限流时立即取消响应流，不等待错误正文',async()=>{
+  const url=`https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`,now=1700000000000;
+  for(const status of [403,429]){
+    let canceled=false;
+    const body=new ReadableStream({cancel(){canceled=true;}});
+    await assert.rejects(githubFetch(url,{now:()=>now,fetcher:async()=>new Response(body,{status,headers:{'retry-after':'60'}})}),error=>error.retryAt===now+60000);
+    assert.equal(canceled,true);
+  }
+});
+test('服务器限流期间不重复请求，重启后保留等待时间，到期手动检查可恢复',async t=>{
+  let now=1700000000000,calls=0;const f=await fixture(t,{now:()=>now});
+  f.updates.fetcher=async()=>{calls++;return Response.json({message:'API rate limit exceeded'},{status:403,headers:{'x-ratelimit-remaining':'0','x-ratelimit-reset':String((now+120000)/1000)}});};
+  const limited=await f.updates.check();assert.equal(limited.retryAt,now+120000);assert.equal(limited.status,'error');assert.equal(limited.checkedAt,0);
+  for(let i=0;i<10;i++)await f.updates.check();assert.equal(calls,1);
+  await f.updates.close();
+  const restarted=new Updates(f.store,{current,platform:'win32-x64',now:()=>now,fetcher:f.fetcher});t.after(()=>restarted.close());
+  assert.equal((await restarted.check()).retryAt,limited.retryAt);assert.equal(f.calls.length,0);
+  now=limited.retryAt;const recovered=await restarted.check();assert.equal(f.calls.length,2);assert.equal(recovered.status,'available');assert.equal(recovered.retryAt,0);assert.equal(recovered.error,'');
+});
+test('再次检查遭遇服务器限流仍保留已验证的可用更新和安装包',async t=>{
+  let now=200000;const f=await fixture(t,{now:()=>now});await downloaded(f);const ready=f.updates.ready,checkedAt=f.updates.checkedAt;
+  now+=60000;f.updates.fetcher=async()=>new Response(null,{status:429,headers:{'retry-after':'60'}});
+  const state=await f.updates.check();assert.equal(state.status,'ready');assert.equal(state.candidate.key,ready.key);assert.equal(state.checkedAt,checkedAt);
+  assert.equal(await f.updates.installPath(),ready.file);
 });
 test('关闭自动检查仍允许手动检查；网络超时不会永久保持检查中',async t=>{
   const f=await fixture(t,{checkTimeoutMs:20});f.updates.setEnabled(false);f.updates.autoCheck();assert.equal(f.calls.length,0);

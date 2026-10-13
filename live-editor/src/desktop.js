@@ -3,6 +3,7 @@ let counter = 0;
 const bridge=window.chrome?.webview;
 const macBridge=window.webkit?.messageHandlers?.caibo;
 export const isDesktop = !!(bridge||macBridge);
+export const isMacDesktop = !!macBridge;
 function receive(event) {
   const message = event.data??event.detail, request = pending.get(message?.id);
   if (!request) return;
@@ -33,3 +34,13 @@ export function applyUpdate() {
     pending.set(id,{resolve,reject,timer});post({id,action:'applyUpdate'});
   });
 }
+
+function powerRequest(action) {
+  if(!isMacDesktop)return Promise.reject(new Error('请在 Mac 桌面应用中查看休眠状态。'));
+  return new Promise((resolve,reject)=>{
+    const id=String(++counter),timer=setTimeout(()=>{pending.delete(id);reject(new Error('未能读取桌面回复，请重新检测；旧版桌面组件可能尚不支持此功能。'));},5000);
+    pending.set(id,{resolve,reject,timer});post({id,action});
+  });
+}
+export const getPowerStatus=()=>powerRequest('powerStatus');
+export const openPowerSettings=()=>powerRequest('openPowerSettings');

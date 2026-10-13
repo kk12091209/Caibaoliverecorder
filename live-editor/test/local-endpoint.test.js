@@ -67,3 +67,37 @@ test('真实录制核心自动启动、编辑器重启复用，完整退出清�
   await app.desktopExit.completion;await until(()=>app.runtime.closed,'full exit did not settle');await app.close();
   assert.equal(alive(owned.pid),false);assert.equal(app.runtime.pending,'quit');
 });
+
+test('global:null 配置恢复后真实核心可连接，再次冷启动不重复恢复或误报退出',{skip:process.env.CAIBO_CORE_SMOKE!=='1',timeout:60000},async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-real-config-'));
+  const original=JSON.stringify({version:3,global:null,rooms:[]}),directory=path.join(root,'originals');
+  await fs.mkdir(directory);await fs.writeFile(path.join(directory,'config.json'),original);
+  const options={data:root,port:0,recorderPort:0,preparation:false,compact:false,updatesAutoCheck:false};
+  let app,backups;
+  t.after(async()=>{
+    const owned=app?.recorder.ownedEndpoint;await app?.close();
+    if(owned&&alive(owned.pid))assert.equal(await stopOwnedCore(owned),true);
+    await fs.rm(root,{recursive:true,force:true});
+  });
+  for(let attempt=0;attempt<2;attempt++){
+    app=await createApp(options);
+    const deadline=Date.now()+20000;
+    while(!app.recorder.online&&Date.now()<deadline)await delay(50);
+    assert.equal(app.recorder.online,true,app.recorder.error);
+    assert.deepEqual(await app.recorder.api('room'),[]);
+    const current=await fs.readdir(path.join(root,'recovery'));
+    if(attempt===0){
+      backups=current;assert.equal(backups.length,1);
+      assert.equal(await fs.readFile(path.join(root,'recovery',backups[0]),'utf8'),original);
+      assert.equal(app.store.recovery.coreConfigRecovered,true);
+    }else{
+      assert.deepEqual(current,backups);assert.ok(!app.store.recovery.coreConfigRecovered);
+    }
+    const pid=app.recorder.ownedEndpoint.pid;
+    const result=await app.desktopExit.request(false);assert.equal(result.quitAccepted,true);
+    await app.desktopExit.completion;await app.close();assert.equal(alive(pid),false);
+    const log=await fs.readFile(path.join(root,'logs',app.diagnostics.day+'.txt'),'utf8');
+    assert.doesNotMatch(log,/NullReferenceException|录制核心已退出 .*正在尝试恢复/);
+    assert.match(log,/B站录制核心退出.*"code":0.*"expected":true/);
+  }
+});
