@@ -98,6 +98,11 @@ test('global:null 配置恢复后真实核心可连接，再次冷启动不重�
     await app.desktopExit.completion;await app.close();assert.equal(alive(pid),false);
     const log=await fs.readFile(path.join(root,'logs',app.diagnostics.day+'.txt'),'utf8');
     assert.doesNotMatch(log,/NullReferenceException|录制核心已退出 .*正在尝试恢复/);
-    assert.match(log,/B站录制核心退出.*"code":0.*"expected":true/);
+    const exits=[...log.matchAll(/B站录制核心退出：(\{[^\n]+\})/g)].map(match=>JSON.parse(match[1]));
+    const exit=exits.findLast(event=>event.pid===pid);
+    assert.equal(exit?.expected,true);assert.equal(exit.reason,'用户请求退出');
+    // Windows taskkill reports unsigned -1 after an intentional process stop;
+    // macOS's SIGINT path lets the core return zero. Neither may trigger recovery.
+    assert.ok((process.platform==='win32'?[0,4294967295]:[0]).includes(exit.code),JSON.stringify(exit));
   }
 });
