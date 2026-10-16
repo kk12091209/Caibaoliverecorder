@@ -142,6 +142,10 @@ enum RecordingPowerStatus {
     var pageReadySince: Date?
     var pageGeneration = 0, pageRetries = 0
     let authorURL = "https://space.bilibili.com/5162836"
+    let studioURL = "https://www.caibao.media/"
+    func publicURL(_ value: String?) -> URL? {
+        guard let value, [authorURL, studioURL].contains(value) else { return nil }; return URL(string: value)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -633,11 +637,11 @@ enum RecordingPowerStatus {
     }
     func trusted(_ url: URL?) -> Bool { guard let url, let origin = backend.origin else { return false }; return url.scheme == "http" && url.host == "127.0.0.1" && url.port == origin.port }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if navigationAction.request.url?.absoluteString == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!); decisionHandler(.cancel) }
+        if let url = publicURL(navigationAction.request.url?.absoluteString) { NSWorkspace.shared.open(url); decisionHandler(.cancel) }
         else { decisionHandler(trusted(navigationAction.request.url) ? .allow : .cancel) }
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if navigationAction.request.url?.absoluteString == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!) }; return nil
+        if let url = publicURL(navigationAction.request.url?.absoluteString) { NSWorkspace.shared.open(url) }; return nil
     }
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
         guard webView === web, frame.isMainFrame, trusted(frame.request.url), trusted(webView.url), !choosing, !terminating else { completionHandler(nil); return }
@@ -679,7 +683,7 @@ enum RecordingPowerStatus {
             }
             return
         }
-        if input["action"] as? String == "openExternal", input["url"] as? String == authorURL { NSWorkspace.shared.open(URL(string: authorURL)!); return }
+        if input["action"] as? String == "openExternal", let url = publicURL(input["url"] as? String) { NSWorkspace.shared.open(url); return }
         if let action = input["action"] as? String, ["powerStatus", "openPowerSettings"].contains(action),
            let id = input["id"] as? String, !id.isEmpty, id.count <= 100 {
             var reply: [String: Any] = ["id": id]

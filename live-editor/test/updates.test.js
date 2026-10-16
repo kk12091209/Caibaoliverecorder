@@ -21,7 +21,7 @@ function publication(platform='win32-x64',revision=3,version='0.1.6'){
 async function fixture(t,options={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-updates-')),store=new Store(root),published=publication(options.platform),calls=[];
   const fetcher=async(url,init)=>{calls.push(url);if(url.includes('api.github.com'))return Response.json(published.release);if(url.endsWith('update-manifest.json'))return new Response(published.manifestBytes);return new Response(published.bytes);};
-  const updates=new Updates(store,{current,platform:'win32-x64',fetcher,...options});
+  const updates=new Updates(store,{current,platform:'win32-x64',fetcher,mirror:false,...options});
   t.after(async()=>{await updates.close();store.close();await fs.rm(root,{recursive:true,force:true});});
   return {root,store,updates,published,calls,fetcher};
 }
@@ -123,7 +123,7 @@ test('服务器限流期间不重复请求，重启后保留等待时间，到�
   const limited=await f.updates.check();assert.equal(limited.retryAt,now+120000);assert.equal(limited.status,'error');assert.equal(limited.checkedAt,0);
   for(let i=0;i<10;i++)await f.updates.check();assert.equal(calls,1);
   await f.updates.close();
-  const restarted=new Updates(f.store,{current,platform:'win32-x64',now:()=>now,fetcher:f.fetcher});t.after(()=>restarted.close());
+  const restarted=new Updates(f.store,{current,mirror:false,platform:'win32-x64',now:()=>now,fetcher:f.fetcher});t.after(()=>restarted.close());
   assert.equal((await restarted.check()).retryAt,limited.retryAt);assert.equal(f.calls.length,0);
   now=limited.retryAt;const recovered=await restarted.check();assert.equal(f.calls.length,2);assert.equal(recovered.status,'available');assert.equal(recovered.retryAt,0);assert.equal(recovered.error,'');
 });
@@ -183,7 +183,7 @@ test('拒绝更新缓存符号链接，保留链接外的文件',async t=>{
 });
 test('重启后可复用已校验安装包；清理更新缓存保留其他数据',async t=>{
   const f=await fixture(t);await downloaded(f);await f.updates.close();
-  const next=new Updates(f.store,{current,platform:'win32-x64',fetcher:f.fetcher});t.after(()=>next.close());
+  const next=new Updates(f.store,{current,mirror:false,platform:'win32-x64',fetcher:f.fetcher});t.after(()=>next.close());
   await next.check();assert.equal(next.status,'ready');await fs.writeFile(path.join(f.root,'user-video.flv'),'keep');
   await next.clearCache();assert.equal(next.snapshot().hasCache,false);assert.equal(await fs.readFile(path.join(f.root,'user-video.flv'),'utf8'),'keep');
 });
@@ -193,7 +193,7 @@ test('已安装相同修订不提醒，历史下载缓存仍可手动清理',asy
 test('安装路径仅通过授权桌面通道提供；Web 更新接口不接受路径或任意 URL',async t=>{
   const next=packageInfo.version.split('.').map(Number);next[2]++;
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',1,next.join('.'));
-  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('update-manifest.json')?p.manifestBytes:p.bytes)}});
+  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{mirror:false,platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('update-manifest.json')?p.manifestBytes:p.bytes)}});
   app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
   const post=(route,body={},headers={})=>fetch(app.runtime.origin+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   assert.equal((await post('/internal/desktop',{action:'prepareUpdate'})).status,403);

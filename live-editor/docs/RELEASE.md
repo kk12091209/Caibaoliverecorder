@@ -104,3 +104,16 @@ node live-editor/scripts/create-update-manifest.mjs release.json windows-build.j
 5. 从公开地址测试清单和两端安装包。已安装相同版本不提醒，较新的产品版本才提示更新。更新器只连接本仓库正式发布和 GitHub 发布 CDN，不需要自建更新服务器。
 
 更新器仅下载到内部数据目录的 `updates`，下载与安装均需用户点击。安装会等待当前任务空闲，Windows 在原安装目录静默升级，Mac 校验并替换应用，失败时恢复原程序；安装后自动重新打开。临时签名、公证和系统安全提示仍按原发布要求处理，哈希校验不等同于代码签名或公证。
+
+
+## 0.2.3 起的双渠道内置更新
+
+客户端优先读取 `https://caibao.media/releases/caibo-recorder-update.json`，主源失败后读取原 GitHub Release 和 `update-manifest.json`。主源更新包失败后，备用下载仍绑定同一版本、文件大小与 SHA-256；用户取消或退出不继续备用下载。更新文件继续由应用后台准备，等待任务空闲后自动覆盖并重启，不执行卸载。
+
+两端验证完成并上传全部附件后，先用原有 `create-update-manifest.mjs` 生成旧客户端兼容清单，再用下列命令生成新渠道附件：
+
+```sh
+CAIBAO_UPDATE_SIGNING_KEY_FILE='<release-machine-private-key.pem>' node live-editor/scripts/create-caibao-update.mjs update-manifest.json caibao-update.json
+```
+
+发布附件必须同时包含 `update-manifest.json` 与 `caibao-update.json`。签名私钥只保存在发布机器，不提交源码、不传到客户端或同步服务器。客户端公钥固定在 `server/update-trust.js`。菜包同步程序从 GitHub 获取签名附件，核对签名、同一源码提交与两端安装包，所有文件公开下载验证成功后才原子发布稳定更新入口。旧客户端先通过原有渠道升级一次，之后使用主备渠道。

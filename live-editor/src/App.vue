@@ -15,7 +15,7 @@ import { roomAvailable, roomRecordEnabled, roomStatus } from './room-status.js';
 import { formatVideoTime as format, displayedSpan, markPreviewPosition } from './video-time.js';
 import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecordingInput, recordingTimeBounds } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
-import { isDesktop, isMacDesktop, openAuthorPage, pickExportFolder } from './desktop.js';
+import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
 import { previewStream } from './preview-stream.js';
 import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
@@ -487,7 +487,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <div v-if="!state.sessions.length" class="rail-empty">录制开始后，素材会出现在这里。</div>
           <button v-for="session in state.sessions" :key="session.id" class="session-item" :class="{selected:selected===session.id}" :aria-pressed="selected===session.id" @click="choose(session.id)" @contextmenu.prevent="showContext($event,session)" @keydown.shift.f10.prevent="showContext($event,session)" @keydown.context-menu.prevent="showContext($event,session)" :title="selected===session.id?'再次点击取消选中；右键管理素材':'点击选择素材；右键管理素材'"><Film :size="20"/><span><strong>{{ session.title }}</strong><small>{{ date(session.created) }}</small><span class="session-meta"><i v-if="session.status==='recording'" class="live-dot online"/>{{ statusText(session.status) }} · {{ format(session.duration) }}</span></span></button>
         </section>
-        <footer class="library-credit"><p>软件作者：瞌睡小菜包</p><p>技术支持：藤椒麦旋风</p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">联系我们</a></p></footer>
+        <footer class="library-credit"><p>软件作者：瞌睡小菜包</p><p>技术支持：藤椒麦旋风</p><p>菜包宇宙：<a href="https://www.caibao.media/" @click.prevent="openStudioPage">www.caibao.media</a></p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">联系我们</a></p></footer>
       </aside>
       <main class="editor">
         <div class="editor-heading"><div><Film :size="21"/><h1>{{ activeSession?.title||'直播剪辑工作台' }}</h1><span v-if="activeSession?.status==='recording'" class="recording-label"><i class="live-dot online"/>录制中</span></div></div>

@@ -162,7 +162,7 @@ internal sealed class MainWindow : Form
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             web.CoreWebView2.Settings.IsZoomControlEnabled = false;
             web.CoreWebView2.NavigationStarting += (_, e) => { if (!IsLocal(e.Uri)) e.Cancel = true; };
-            web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; if (IsAuthorPage(e.Uri)) OpenAuthorPage(e.Uri); };
+            web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; if (IsExternalPage(e.Uri)) OpenExternalPage(e.Uri); };
             web.CoreWebView2.WebMessageReceived += OnWebMessage;
             web.CoreWebView2.ProcessFailed += async (_, e) => {
                 if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited ||
@@ -201,14 +201,15 @@ internal sealed class MainWindow : Form
     }
 
     private bool IsLocal(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.GetLeftPart(UriPartial.Authority) == backend.Origin;
-    private static bool IsAuthorPage(string? value)
+    private static bool IsExternalPage(string? value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return false;
         return uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
-            && uri.Host.Equals("space.bilibili.com", StringComparison.OrdinalIgnoreCase)
-            && uri.AbsolutePath.TrimEnd('/') == "/5162836";
+            && uri.IsDefaultPort && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0
+            && ((uri.Host.Equals("space.bilibili.com", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.TrimEnd('/') == "/5162836")
+                || (uri.Host.Equals("www.caibao.media", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath == "/"));
     }
-    private static void OpenAuthorPage(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    private static void OpenExternalPage(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     private void RestoreWindow()
     {
         if (closing) return;
@@ -347,7 +348,7 @@ internal sealed class MainWindow : Form
             if (actionName == "openExternal")
             {
                 var url = request.TryGetValue("url", out var rawUrl) ? rawUrl as string : null;
-                if (IsAuthorPage(url)) OpenAuthorPage(url!);
+                if (IsExternalPage(url)) OpenExternalPage(url!);
                 return;
             }
             if (id is null || id.Length > 100) return;

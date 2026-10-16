@@ -2,9 +2,13 @@ import { alive } from './update-helper.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { readSignedManifest, UPDATE_PUBLIC_KEY } from './update-trust.js';
 
 export const UPDATE_REPOSITORY = 'kk12091209/Caibaoliverecorder';
 const RELEASE_API = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
+export const CAIBAO_UPDATE_URL = 'https://caibao.media/releases/caibo-recorder-update.json';
+const DOWNLOAD_ORIGIN = 'https://download.caibao.media';
+const COS_ORIGIN = 'https://caibao-releases-1393257344.cos.ap-singapore.myqcloud.com';
 const DAY = 86400000, MAX_PACKAGE = 512 * 1024 * 1024;
 const CHECK_CACHE_MS = 60000, FAILED_CHECK_RETRY_MS = 10000;
 const RATE_LIMIT_MESSAGE = '更新服务暂时限制请求，请等待恢复后重试。';
@@ -44,6 +48,38 @@ export function validateUpdate(release, manifest, current, platform) {
   if(asset.digest!==`sha256:${item.sha256}`||asset.size!==item.size)fail('安装包与更新清单不一致，请稍后检查。');
   if(!Array.isArray(manifest.notes)||manifest.notes.length>12||manifest.notes.some(note=>typeof note!=='string'||note.length>500))fail('更新说明无效。');
   return {key,version:manifest.version,revision:manifest.revision??1,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
+}
+
+export function validateMirrorUpdate(envelope, current, platform, publicKey = UPDATE_PUBLIC_KEY) {
+  const manifest = readSignedManifest(envelope, publicKey);
+  releaseIdentity(manifest);
+  const assets = ['win32-x64', 'darwin-arm64'].map(id => {
+    const item = manifest.platforms?.[id];
+    if (!item || item.name !== packageName(manifest.version, id) || !/^[a-f0-9]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || item.size <= 0 || item.size > MAX_PACKAGE) fail('菜包更新文件信息无效。');
+    return { ...item, state: 'uploaded', digest: `sha256:${item.sha256}`, browser_download_url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${manifest.version}/${item.name}` };
+  });
+  const next = validateUpdate({ tag_name: `v${manifest.version}`, draft: false, prerelease: false, assets }, manifest, current, platform);
+  return next && { ...next, url: `${DOWNLOAD_ORIGIN}/caibo-recorder/${next.version}/${next.name}`, fallbackUrl: next.url };
+}
+
+export async function caibaoFetch(url, { fetcher = fetch, signal } = {}) {
+  const start = new URL(url);
+  const packagePath = /^\/caibo-recorder\/\d{1,5}\.\d{1,5}\.\d{1,5}\/(?:BiliLiveEditor-[\d.]+-win-x64-setup\.exe|Caibo-[\d.]+-macos-arm64\.dmg)$/;
+  if (url !== CAIBAO_UPDATE_URL && (start.origin !== DOWNLOAD_ORIGIN || !packagePath.test(start.pathname))) fail('菜包更新地址不受信任。');
+  const expectedPath = start.pathname;
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const address = new URL(url);
+    if (address.username || address.password || address.search || address.hash || (url !== CAIBAO_UPDATE_URL && (![DOWNLOAD_ORIGIN, COS_ORIGIN].includes(address.origin) || address.pathname !== expectedPath))) fail('菜包更新跳转不受信任。');
+    const response = await fetcher(url, { redirect: 'manual', signal, headers: { 'User-Agent': 'Caibo-Updater', Accept: 'application/octet-stream' } });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location'); await response.body?.cancel();
+      if (!location || start.href === CAIBAO_UPDATE_URL) fail('菜包更新跳转无效。');
+      url = new URL(location, url).href; continue;
+    }
+    if (!response.ok) { await response.body?.cancel(); fail('菜包更新源暂时不可用。'); }
+    return response;
+  }
+  fail('菜包更新跳转次数过多。');
 }
 
 // Only the project's GitHub endpoint and GitHub's release CDN are contacted.
@@ -86,9 +122,9 @@ async function boundedBytes(response,limit) {
 }
 
 export class Updates {
-  constructor(store,{current,platform=`${process.platform}-${process.arch}`,fetcher=fetch,now=Date.now,activity=()=>({}),checkTimeoutMs=15000,downloadTimeoutMs=1800000,idleMs=45000}={}) {
+  constructor(store,{current,platform=`${process.platform}-${process.arch}`,fetcher=fetch,now=Date.now,activity=()=>({}),checkTimeoutMs=15000,downloadTimeoutMs=1800000,idleMs=45000,mirror=true,mirrorTimeoutMs=5000,mirrorPublicKey=UPDATE_PUBLIC_KEY}={}) {
     releaseIdentity(current);
-    Object.assign(this,{store,current,platform,fetcher,now,activity,checkTimeoutMs,downloadTimeoutMs,idleMs});
+    Object.assign(this,{store,current,platform,fetcher,now,activity,checkTimeoutMs,downloadTimeoutMs,idleMs,mirror,mirrorTimeoutMs,mirrorPublicKey});
     this.root=path.join(store.root,'updates');this.status='idle';this.error='';this.candidate=null;this.ready=null;this.received=0;this.closed=false;
     this.checkedAt=store.setting('update-checked-at')||0;
     const retryAt=store.setting('update-retry-at');
@@ -98,7 +134,7 @@ export class Updates {
   }
   snapshot(){
     const deferred=this.store.setting('update-deferred');
-    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,checkNotice:this.checkNotice,retryAt:this.retryAt>this.now()?this.retryAt:0,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
+    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,checkNotice:this.checkNotice,retryAt:this.retryAt>this.now()?this.retryAt:0,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,fallbackUrl,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
   }
   start(){this.startTimer=setTimeout(()=>this.autoCheck(),5000);this.startTimer.unref?.();this.timer=setInterval(()=>this.autoCheck(),3600000);this.timer.unref?.();}
   autoCheck(){if(!this.closed&&this.snapshot().enabled&&this.now()-this.checkedAt>=DAY)void this.check().catch(()=>{});}
@@ -108,7 +144,7 @@ export class Updates {
     if(this.closed)fail('软件正在退出。');
     if(this.downloadTask)return Promise.resolve(this.snapshot());
     if(this.checkTask)return this.checkTask;
-    if(this.retryAt>this.now())return Promise.resolve(this.snapshot());
+    if(!this.mirror&&this.retryAt>this.now())return Promise.resolve(this.snapshot());
     const interval=this.lastCheckSucceeded?CHECK_CACHE_MS:FAILED_CHECK_RETRY_MS;
     if(this.lastAttempt!==undefined&&this.now()-this.lastAttempt<interval){
       this.checkNotice=this.lastCheckSucceeded?'刚刚已检查，显示最近的检查结果。':'上次检查未成功，请过几秒再试。';
@@ -121,15 +157,18 @@ export class Updates {
       .finally(()=>{this.checkTask=null;});
   }
   async checkRemote(signal){
-    const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
-    const release=JSON.parse((await boundedBytes(await request(RELEASE_API),1024*1024)).toString('utf8'));
-    if(release.draft||release.prerelease||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(release.tag_name))fail('更新渠道信息无效。');
-    const asset=releaseAsset(release,'update-manifest.json');
-    if(asset.size>65536)fail('更新清单过大。');
-    const bytes=await boundedBytes(await request(asset.browser_download_url),65536);
-    if(bytes.length!==asset.size||`sha256:${digest(bytes)}`!==asset.digest)fail('更新清单校验失败。');
-    const next=validateUpdate(release,JSON.parse(bytes.toString('utf8')),this.current,this.platform);
-    if(this.candidate?.key!==next?.key||this.candidate?.sha256!==next?.sha256)this.ready=null;
+    let next;
+    if (this.mirror) {
+      try {
+        const primarySignal = AbortSignal.any([signal, AbortSignal.timeout(this.mirrorTimeoutMs)]);
+        const response = await caibaoFetch(CAIBAO_UPDATE_URL, { fetcher: this.fetcher, signal: primarySignal });
+        next = validateMirrorUpdate(JSON.parse((await boundedBytes(response, 131072)).toString('utf8')), this.current, this.platform, this.mirrorPublicKey);
+      } catch (error) {
+        if (signal.aborted || this.closed) throw error;
+        next = await this.githubCandidate(signal);
+      }
+    } else next = await this.githubCandidate(signal);
+    this.acceptCandidate(next);
     const saved=this.store.setting('update-download');
     if(next&&saved?.key===next.key&&saved.sha256===next.sha256&&saved.name===next.name){
       const file=path.join(this.root,next.name);
@@ -138,6 +177,20 @@ export class Updates {
     this.candidate=next;this.status=next?(this.ready?'ready':'available'):'current';this.checkedAt=this.now();
     this.lastCheckSucceeded=true;this.retryAt=0;this.store.setting('update-retry-at',0);
     this.store.setting('update-checked-at',this.checkedAt);return this.snapshot();
+  }
+  acceptCandidate(next){
+    if(this.candidate?.key!==next?.key||this.candidate?.sha256!==next?.sha256)this.ready=null;
+  }
+  async githubCandidate(signal){
+    if (this.retryAt > this.now()) throw Object.assign(new Error(RATE_LIMIT_MESSAGE), { updateError: true, retryAt: this.retryAt });
+    const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
+    const release=JSON.parse((await boundedBytes(await request(RELEASE_API),1024*1024)).toString('utf8'));
+    if(release.draft||release.prerelease||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(release.tag_name))fail('更新渠道信息无效。');
+    const asset=releaseAsset(release,'update-manifest.json');
+    if(asset.size>65536)fail('更新清单过大。');
+    const bytes=await boundedBytes(await request(asset.browser_download_url),65536);
+    if(bytes.length!==asset.size||`sha256:${digest(bytes)}`!==asset.digest)fail('更新清单校验失败。');
+    return validateUpdate(release,JSON.parse(bytes.toString('utf8')),this.current,this.platform);
   }
   async directory(){
     // The update cache is fixed under app data; never follow redirected folders.
@@ -161,13 +214,22 @@ export class Updates {
     return this.snapshot();
   }
   async downloadFile(candidate,cancelSignal){
+    const urls = [...new Set([candidate.url, candidate.fallbackUrl].filter(Boolean))];
+    for (let index = 0; index < urls.length; index++) {
+      try { await this.downloadAttempt(candidate, urls[index], cancelSignal); return; }
+      catch (error) { if (cancelSignal.aborted || this.closed || index === urls.length - 1) throw error; }
+    }
+  }
+  async downloadAttempt(candidate,url,cancelSignal){
     const directory=await this.directory(),temporary=path.join(directory,randomUUID()+'.part'),file=path.join(directory,candidate.name);
     const idle=new AbortController();let idleTimer;
-    const pulse=()=>{clearTimeout(idleTimer);idleTimer=setTimeout(()=>idle.abort(),this.idleMs);idleTimer.unref?.();};
+    this.received = 0;
+    const primary = new URL(url).origin === DOWNLOAD_ORIGIN;
+    const pulse=()=>{clearTimeout(idleTimer);idleTimer=setTimeout(()=>idle.abort(),primary?Math.min(this.idleMs,15000):this.idleMs);idleTimer.unref?.();};
     const signal=AbortSignal.any([cancelSignal,idle.signal,AbortSignal.timeout(this.downloadTimeoutMs)]);
     let handle;
     try{
-      pulse();const response=await githubFetch(candidate.url,{fetcher:this.fetcher,signal});
+      pulse();const response=await (primary?caibaoFetch:githubFetch)(url,{fetcher:this.fetcher,signal});
       this.store.setting('update-partial',path.basename(temporary));
       handle=await fs.open(temporary,'wx',0o600);const hash=createHash('sha256');
       for await(const bytes of response.body){

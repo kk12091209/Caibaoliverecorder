@@ -14,10 +14,12 @@ if(bridge)bridge.addEventListener('message',receive);
 if(macBridge)window.addEventListener('caibo-native',receive);
 function post(message){if(bridge)bridge.postMessage(message);else macBridge?.postMessage(message);}
 const authorPage = 'https://space.bilibili.com/5162836';
-export function openAuthorPage() {
-  if (isDesktop) { post({ action: 'openExternal', url: authorPage }); return; }
-  window.open(authorPage, '_blank', 'noopener');
+function openPublicPage(url) {
+  if (isDesktop) { post({ action: 'openExternal', url }); return; }
+  window.open(url, '_blank', 'noopener');
 }
+export const openAuthorPage = () => openPublicPage(authorPage);
+export const openStudioPage = () => openPublicPage('https://www.caibao.media/');
 export function pickExportFolder(initial) {
   if (!isDesktop) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
