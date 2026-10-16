@@ -40,7 +40,7 @@
   -AppRoot '<最新 live-editor 源码目录>' `
   -DesktopRoot '<desktop/package 目录>' `
   -RuntimeRoot '<包含 node 与 recorder 的 runtime 目录>' `
-  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.2.2'
+  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.2.3'
 ```
 
 输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。默认输出 ZIP、安装包、体积/哈希报告及未压缩工作目录，额外传入 `-Include7z` 才生成 7z。`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256。安装版额外加入安装器许可、卸载程序与卸载快捷方式。安装器脚本与中文翻译许可位于 `installer`。
@@ -101,7 +101,7 @@ node live-editor/scripts/create-update-manifest.mjs release.json windows-build.j
 脚本要求 Release 的 `target_commitish`、两端构建记录源码提交和版本完全一致，且安装包均已上传并有 GitHub SHA-256。Mac 构建记录需包含 `version`、`applicationSourceRevision`、`releaseRevision`、`nodeTests` 及 `localChecks.dmgManifest/zipManifest`。使用实际验证结果，不能填造通过记录。
 
 4. **最后上传 `update-manifest.json`**，核对清单中的安装包大小/哈希与 GitHub 附件一致，再公开 Release 并设为最新。不可在公开发布中逐个替换附件，让用户取得混合版本。
-5. 从公开地址测试清单和两端安装包。已安装相同版本不提醒，较新的产品版本才提示更新。更新器只连接本仓库正式发布和 GitHub 发布 CDN，不需要自建更新服务器。
+5. 从公开地址测试清单和两端安装包。已安装相同版本不提醒，较新的产品版本才提示更新。0.2.2 及更早更新器只连接本仓库正式发布和 GitHub 发布 CDN；0.2.3 起优先使用下述菜包签名渠道。
 
 更新器仅下载到内部数据目录的 `updates`，下载与安装均需用户点击。安装会等待当前任务空闲，Windows 在原安装目录静默升级，Mac 校验并替换应用，失败时恢复原程序；安装后自动重新打开。临时签名、公证和系统安全提示仍按原发布要求处理，哈希校验不等同于代码签名或公证。
 
