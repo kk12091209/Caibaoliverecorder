@@ -44,15 +44,23 @@ function event(target, success, signal, action) {
     try { action?.(); } catch (error) { clean(); reject(error); }
   });
 }
-export function previewStream(endpoint, {onError = () => {}, agent = navigator.userAgent, Media = globalThis.MediaSource} = {}) {
+export function previewStream(endpoint, {onError = () => {}, agent = navigator.userAgent, Media = globalThis.MediaSource, client, sequence} = {}) {
+  let disposed=false;
+  if(client)endpoint+=`${endpoint.includes('?')?'&':'?'}client=${encodeURIComponent(client)}&sequence=${sequence}`;
+  const stop=()=>{
+    if(disposed)return;disposed=true;
+    // Also release native WebView2 requests; pause() alone does not end HTTP.
+    // The sequence fence makes a delayed stop harmless to newer destinations.
+    if(client)void fetch(`/api/previews/${encodeURIComponent(client)}/stop`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence}),keepalive:true}).catch(()=>{});
+  };
   const webkit = /AppleWebKit/.test(agent) && !/(?:Chrome|Chromium|Edg|OPR)\//.test(agent);
-  if (!webkit || !Media) return {url: endpoint, dispose() {}, start() {}};
+  if (!webkit || !Media) return {url: endpoint, dispose:stop, start() {}};
   const source = new Media(), controller = new AbortController(), {signal} = controller;
   const url = URL.createObjectURL(source);
   let started = false;
   return {
     url,
-    dispose() { controller.abort(); URL.revokeObjectURL(url); },
+    dispose() { if(disposed)return;controller.abort();URL.revokeObjectURL(url);stop(); },
     start() {
       if (started) return; started = true;
       void (async () => {

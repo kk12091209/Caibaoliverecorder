@@ -20,6 +20,7 @@ import { RenderPipeline, visibleComments } from './render-plan.js';
 import { danmakuGeometry, assOpacity, savedDanmakuStyle, normalizedDanmakuStyle, danmakuDuration } from '../shared/danmaku-style.js';
 import { chatRate } from './chat-rules.js';
 import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
+import { PreviewRequests } from './preview-requests.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
 export function assText(messages, width = 1280, height = 720, font = null, style) {
@@ -40,6 +41,7 @@ export function assText(messages, width = 1280, height = 720, font = null, style
 export class Media {
   exportContext = new AsyncLocalStorage();
   exportOperations = new Map();
+  previewRequests = new PreviewRequests();
   exportSignal(signal) {
     const jobSignal=this.exportContext?.getStore()?.controller.signal;
     return jobSignal?(signal?AbortSignal.any([signal,jobSignal]):jobSignal):signal;
@@ -82,9 +84,10 @@ export class Media {
   assertSessionAvailable(id) {if(this.closed)throw new Error('视频服务已关闭。');if(this.blockedSessions.has(id)||this.store.deletions?.has(id))throw new Error('素材正在删除，请稍后再试。');if(!this.store.session(id))throw new Error('找不到录像，素材不存在或已删除。');}
   async cancelPreviews(id) {
     this.blockedSessions.set(id,(this.blockedSessions.get(id)||0)+1);
+    const queued=this.previewRequests?.cancelSession(id);
     const active=[...this.previews.values()].filter(item=>item.sessionId===id);
     for(const item of [...active,...this.probes].filter(item=>item.sessionId===id))item.controller?.abort();
-    await Promise.allSettled([...active,...[...this.enqueues,...this.probes].filter(item=>item.sessionId===id)].map(item=>item.done));
+    await Promise.allSettled([queued,...[...active,...[...this.enqueues,...this.probes].filter(item=>item.sessionId===id)].map(item=>item.done)]);
   }
   allowSession(id) {const count=this.blockedSessions.get(id)||0;if(count>1)this.blockedSessions.set(id,count-1);else this.blockedSessions.delete(id);}
   temporaryDirectory(prefix, sessionId) { return this.temporaryWorkspaces.create(prefix, sessionId); }
@@ -159,15 +162,29 @@ export class Media {
     }catch(e){if(e.code==='ENOENT')throw new Error('内部素材片段缺失，无法读取视频信息。请恢复该素材的内部文件后再导出。');throw e;}
     finally{await this.temporaryWorkspaces.finish(dir);}
   }
-  async preview(sessionId, start, response, signal) {
+  async preview(sessionId, start, response, signal, {client,sequence}={}) {
+    if(client)return this.previewRequests.run(client,sequence,sessionId,signal,activeSignal=>this.previewInternal(sessionId,start,response,activeSignal));
+    return this.previewInternal(sessionId,start,response,signal);
+  }
+  async previewInternal(sessionId, start, response, signal) {
+    if(signal?.aborted)throw Object.assign(new Error('预览已取消。'),{code:'PREVIEW_CANCELLED',status:409});
     this.assertSessionAvailable(sessionId);
     if(!this.store.session(sessionId))throw new Error('素材不存在或已删除。');
-    if (this.previews.size >= 3) throw new Error('同时预览数量已达上限，请关闭其他预览窗口。');
+    while(this.previews.size>=3){
+      const draining=[...this.previews.values()].filter(item=>item.signal?.aborted||item.controller?.signal?.aborted);
+      if(!draining.length)throw new Error('同时预览数量已达上限，请关闭其他预览窗口。');
+      // A reload has a new page identity, but its old disconnected producer
+      // still must finish. Do not mistake those draining jobs for open windows.
+      await (this.previewRequests??=new PreviewRequests()).waitForRelease(Promise.race(draining.map(item=>item.done)),signal||new AbortController().signal);
+      this.assertSessionAvailable(sessionId);
+      if(signal?.aborted)throw Object.assign(new Error('预览已取消。'),{code:'PREVIEW_CANCELLED',status:409});
+    }
     const source = this.store.sources(sessionId).find(s => s.start <= start + .05 && s.start+s.duration >= start-.05);
     if (!source) throw new Error('所选位置暂未录到画面，或处于直播断流区间。');
     const base = seekBase(this.store,source.id,start); if(base===undefined) throw new Error('正在等待关键帧。');
     const token=randomUUID(),controller=new AbortController(),active={sessionId,controller,done:null};
     signal=signal?AbortSignal.any([signal,controller.signal]):controller.signal;
+    active.signal=signal;
     this.previews.set(token,active);
     try {
       response.writeHead(200, {'Content-Type':'video/mp4','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
@@ -567,5 +584,5 @@ export class Media {
       await this.temporaryWorkspaces.finish(workDir);
     }
   }
-  close(){this.closed=true;for(const active of this.previews.values())active.controller.abort();for(const child of this.children)stopChild(child);}
+  close(){this.closed=true;this.previewRequests?.close();for(const active of this.previews.values())active.controller.abort();for(const child of this.children)stopChild(child);}
 }

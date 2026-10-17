@@ -34,3 +34,22 @@ test('seeking away before sourceopen aborts without fetching a stale preview',as
   transport.start();transport.dispose();media.dispatchEvent(new Event('sourceopen'));
   await new Promise(resolve=>setImmediate(resolve));assert.equal(requests,0);assert.equal(revoked,1);
 });
+
+test('native Windows cancellation explicitly stops only its own preview, even before the GET arrives',async t=>{
+  const sent=[];t.mock.method(globalThis,'fetch',async(url,options)=>{sent.push({url,...options});return {ok:true};});
+  const transport=previewStream('/api/sessions/a/preview?start=1',{agent:'Chrome/130.0.0.0',client:'preview-window-0001',sequence:8});
+  assert.match(transport.url,/client=preview-window-0001&sequence=8$/);
+  transport.dispose();transport.dispose();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,1);assert.equal(sent[0].url,'/api/previews/preview-window-0001/stop');
+  assert.equal(sent[0].method,'POST');assert.equal(sent[0].keepalive,true);assert.deepEqual(JSON.parse(sent[0].body),{sequence:8});
+});
+
+test('WebKit cancellation aborts fetch, revokes once and sends a sequence-scoped stop',async t=>{
+  const sent=[];let revoked=0;
+  class FakeMedia extends EventTarget{constructor(){super();this.readyState='closed';}}
+  t.mock.method(URL,'createObjectURL',()=> 'blob:preview');t.mock.method(URL,'revokeObjectURL',()=>{revoked++;});
+  t.mock.method(globalThis,'fetch',async(url,options)=>{sent.push({url,...options});return {ok:true};});
+  const transport=previewStream('/preview',{agent:'AppleWebKit/605.1.15',Media:FakeMedia,client:'preview-window-0001',sequence:9});
+  transport.start();transport.dispose();transport.dispose();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(revoked,1);assert.equal(sent.length,1);assert.deepEqual(JSON.parse(sent[0].body),{sequence:9});
+});

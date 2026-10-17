@@ -274,7 +274,12 @@ async function createManagedApp(options,runtime) {
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/preview$/.exec(p))&&req.method==='GET'){
         const start=Number(url.searchParams.get('start')||0);if(!Number.isFinite(start)||start<0)throw new Error('播放位置无效。');
-        const abort=new AbortController();res.on('close',()=>abort.abort());await media.preview(match[1],start,res,abort.signal);return;
+        const client=url.searchParams.get('client'),sequence=Number(url.searchParams.get('sequence'));
+        if(!client&&url.searchParams.has('sequence'))throw new Error('预览请求标识无效。');
+        const abort=new AbortController();res.on('close',()=>abort.abort());await media.preview(match[1],start,res,abort.signal,{client,sequence});return;
+      }
+      if((match=/^\/api\/previews\/([a-zA-Z0-9_-]+)\/stop$/.exec(p))&&req.method==='POST'){
+        const input=await body(req);media.previewRequests.stop(match[1],input?.sequence);return json(res,{ok:true});
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/export$/.exec(p))&&req.method==='POST')return json(res,await media.enqueue(match[1],await body(req)));
       if((match=/^\/api\/jobs\/([\w-]+)\/retry-save$/.exec(p))&&req.method==='POST')return json(res,await media.retrySave(match[1],await body(req)));
@@ -287,7 +292,7 @@ async function createManagedApp(options,runtime) {
       if(!target.startsWith(dist+path.sep)&&target!==dist)return json(res,{error:'无效路径。'},403);
       if(p==='/'||!path.extname(target))target=path.join(dist,'index.html');
       return await sendFile(req,res,target);
-    }catch(e){diagnostics.record('请求处理',e,{level:'错误'});if(!res.headersSent)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else res.destroy();}
+    }catch(e){if(e.code!=='PREVIEW_CANCELLED')diagnostics.record('请求处理',e,{level:'错误'});if(!res.headersSent&&!res.destroyed)json(res,{error:e.code==='ENOENT'?'文件不存在，请检查路径或先构建界面。':e.message},e.status||400);else if(!res.writableEnded)res.destroy();}
   });
   await runtime.startup('连接本地界面服务');
   try{port=await listenLocal(server,port);}

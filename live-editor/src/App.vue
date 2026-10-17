@@ -34,6 +34,7 @@ const recoveryNoticeKey=computed(()=>{const r=state.value.recovery||{};return JS
 const roomChoice=shallowRef(null),roomChoicePlatform=ref(''),roomChoiceError=ref('');
 const video=ref(null),previewUrl=ref(''),position=ref(0),previewBase=ref(0),isPlaying=ref(false),loading=ref(false),previewEnded=ref(false),scrubbing=ref(false);
 let previewTransport;
+const previewClient=crypto.randomUUID();
 const previewVolume=ref(1),previewMuted=ref(false);
 try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
 let previewVolumeHold=previewVolume.value>0?previewVolume.value:1;
@@ -382,7 +383,7 @@ async function playFrom(time,play=true){
   }
   previewBase.value=target;position.value=target;loading.value=true;previewEnded.value=false;isPlaying.value=play;void loadOverlay();
   previewTransport?.dispose();
-  previewTransport=previewStream(`/api/sessions/${selected.value}/preview?start=${target.toFixed(4)}&v=${version}`,{onError(error){if(version===generation){loading.value=false;isPlaying.value=false;previewEnded.value=true;tell(error.message);}}});
+  previewTransport=previewStream(`/api/sessions/${selected.value}/preview?start=${target.toFixed(4)}&v=${version}`,{client:previewClient,sequence:version,onError(error){if(version===generation){loading.value=false;isPlaying.value=false;previewEnded.value=true;tell(error.message);}}});
   previewUrl.value=previewTransport.url;
   await nextTick();if(version!==generation)return;
   video.value.load();applyPreviewAudio();previewTransport.start();
@@ -400,6 +401,7 @@ function closePreviewVolume(){previewVolumeOpen.value=false;const active=documen
 function previewVolumeDown(){previewVolumeDragging=true;previewVolumeAtDrag=previewVolume.value>0?previewVolume.value:previewVolumeHold;}
 function previewVolumeUp(){if(!previewVolumeDragging)return;previewVolumeDragging=false;if(!previewVolumeInside)closePreviewVolume();}
 function pausePreview(){isPlaying.value=false;video.value?.pause();}
+function releasePagePreview(){previewTransport?.dispose();generation++;pausePreview();loading.value=false;previewEnded.value=true;}
 async function togglePlay(){if(isPlaying.value){pausePreview();return;}if(!previewUrl.value||previewEnded.value){await playFrom(position.value,true);return;}const version=generation;isPlaying.value=true;await video.value.play().catch(e=>{if(version===generation&&e.name!=='AbortError'){isPlaying.value=false;tell('暂时无法播放，请重新定位后重试。');}});}
 function played(){isPlaying.value=!!video.value&&!video.value.paused;}
 function loaded(){loading.value=false;applyPreviewAudio();if(!isPlaying.value)video.value?.pause();}
@@ -454,6 +456,8 @@ function onKey(e){if(e.key==='Escape'){const jobId=jobMenu.value?.id;closeContex
 watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(true);});
 watch(timelineWindow,()=>{invalidateSignals();signalsError.value='';queueWindowSignals(!timelineDragging.value);},{flush:'sync'});
 onMounted(async()=>{await refresh();if(disposing)return;eventSource=new EventSource('/api/events');eventSource.onmessage=e=>{applyState(JSON.parse(e.data));connected.value=true;};eventSource.onerror=()=>connected.value=false;timer=setInterval(refresh,2500);messageTimer=setInterval(()=>{void loadMessages(true);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);});
+onMounted(()=>window.addEventListener('pagehide',releasePagePreview));
+onBeforeUnmount(()=>window.removeEventListener('pagehide',releasePagePreview));
 onBeforeUnmount(()=>{previewTransport?.dispose();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();eventSource?.close();clearInterval(timer);clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);});
 onMounted(()=>{panelBreakpoint.addEventListener('change',updatePanelBreakpoint);compactBreakpoint.addEventListener('change',updatePanelBreakpoint);});
 onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBreakpoint);compactBreakpoint.removeEventListener('change',updatePanelBreakpoint);});
