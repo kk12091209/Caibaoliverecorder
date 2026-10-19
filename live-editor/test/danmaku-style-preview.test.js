@@ -61,7 +61,7 @@ test('motion preview encodes the selected FPS, plays through the full round, and
   const font=process.env.CAIBO_TEST_FONT?await media.fonts.import(await fs.readFile(process.env.CAIBO_TEST_FONT),{select:false}):null;
   const fontId=font?.id??null;
   for(const [speed,fps] of [[.5,60],[2,30]]){
-    const style={size:.6,opacity:100,speed,fps},plan=stylePreviewMotion(50,style,font);
+    const style={size:.6,opacity:100,speed,fps,areaTop:1/3,areaHeight:1/3},plan=stylePreviewMotion(50,style,font);
     // Validate rendered frames on slow shared runners; the HTTP production deadline remains unchanged.
     const result=await preview.render({style,rate:50,font:fontId,motion:true},AbortSignal.timeout(30000));
     assert.ok(result,'motion fixture render completed before the test deadline');
@@ -74,6 +74,8 @@ test('motion preview encodes the selected FPS, plays through the full round, and
     const first=frame(0),middle=frame(3/speed),last=frame((plan.frames-1)/fps);
     assert.equal(first.length,STYLE_MOTION_WIDTH*STYLE_MOTION_HEIGHT);assert.equal(last.length,first.length);
     assert.ok(!first.some(value=>value>50));assert.ok(middle.some(value=>value>50));assert.ok(!last.some(value=>value>50),'last sample has completely left the preview');
+    assert.ok(!middle.subarray(0,STYLE_MOTION_WIDTH*Math.floor(STYLE_MOTION_HEIGHT/3)).some(value=>value>50),'motion stays below the area top');
+    assert.ok(!middle.subarray(STYLE_MOTION_WIDTH*Math.ceil(STYLE_MOTION_HEIGHT*2/3)).some(value=>value>50),'motion stays above the area bottom');
   }
   const controller=new AbortController(),render=preview.render({style:{size:.6,opacity:100,speed:.5,fps:60},rate:50,font:fontId,motion:true},controller.signal);
   while(!media.children.size&&preview.busy)await new Promise(resolve=>setTimeout(resolve,10));
@@ -116,7 +118,7 @@ test('preview and real H264 export retain matching glyph positions across both i
   let imported=null;
   const fontPath=process.platform==='darwin'?'/System/Library/Fonts/Supplemental/Arial.ttf':path.join(process.env.WINDIR||'C:\\Windows','Fonts','arial.ttf');
   try{imported=await media.fonts.import(await fs.readFile(fontPath),'Arial.ttf',{select:false});}catch{}
-  const scenarios=[{size:.6,opacity:100,font:null},{size:1.5,opacity:60,font:null},{size:2,opacity:100,font:null},{size:5,opacity:100,font:null},...(imported?[{size:.6,opacity:100,font:imported.id}]:[])];
+  const scenarios=[{size:.6,opacity:100,font:null},{size:1.5,opacity:60,font:null},{size:2,opacity:100,font:null},{size:5,opacity:100,font:null},{size:.6,opacity:100,font:null,areaTop:1/3,areaHeight:1/3},{size:5,opacity:100,font:null,areaTop:1/3,areaHeight:1/3},...(imported?[{size:.6,opacity:100,font:imported.id}]:[])];
   for(const scenario of scenarios){
     const {font:fontId,...style}=scenario,rate=50,font=await media.fonts.selection(fontId);
     const plan=await media.renderer.describe(session.id,{danmakuStyle:style,danmakuPerSecond:rate,font});
@@ -135,6 +137,12 @@ test('preview and real H264 export retain matching glyph positions across both i
     const overlap=intersection/union;
     t.diagnostic(`size=${style.size}, opacity=${style.opacity}, font=${fontId?'imported':'default'}, bright mask overlap=${(overlap*100).toFixed(2)}%, mean glyph error=${(error/union).toFixed(2)}, lower-half pixels=${lower}`);
     assert.ok(union>100);assert.ok(lower>100);assert.ok(overlap>.94,`preview/export mask overlap ${overlap}`);assert.ok(error/union<12);
+    if(style.areaHeight){
+      for(const pixels of [expected,actual]){
+        assert.ok(!pixels.subarray(0,STYLE_PREVIEW_WIDTH*Math.floor(STYLE_PREVIEW_HEIGHT*style.areaTop)).some(value=>value>50));
+        assert.ok(!pixels.subarray(STYLE_PREVIEW_WIDTH*Math.ceil(STYLE_PREVIEW_HEIGHT*(style.areaTop+style.areaHeight))).some(value=>value>50));
+      }
+    }
   }
   // Exercise a real burst as well as the evenly spaced style examples. The
   // original dialog ends at six seconds, and a clipped tail retains its phase.

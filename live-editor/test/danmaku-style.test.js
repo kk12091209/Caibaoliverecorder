@@ -5,17 +5,61 @@ import path from 'node:path';
 import os from 'node:os';
 import {createApp} from '../server/index.js';
 import {assText} from '../server/media.js';
-import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE,normalizedDanmakuStyle,DANMAKU_SPEED_STEPS,danmakuDuration} from '../shared/danmaku-style.js';
+import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE,normalizedDanmakuStyle,DANMAKU_SPEED_STEPS,danmakuDuration,MIN_DANMAKU_AREA_HEIGHT,adjustDanmakuArea} from '../shared/danmaku-style.js';
 import {layoutDanmaku,commentX} from '../src/danmaku-layout.js';
 import {scrollingTracks} from '../shared/danmaku-tracks.js';
 import {layoutComments,layoutCommentsAsync,commentSignature} from '../server/render-plan.js';
 
 test('legacy styles keep their appearance and default motion; speed steps and frame rates are strictly validated',()=>{
-  assert.deepEqual(validateDanmakuStyle({size:2.5,opacity:45}),{size:2.5,opacity:45,speed:1,fps:60});
+  assert.deepEqual(validateDanmakuStyle({size:2.5,opacity:45}),{...DEFAULT_DANMAKU_STYLE,size:2.5,opacity:45});
   assert.deepEqual(normalizedDanmakuStyle(undefined),DEFAULT_DANMAKU_STYLE);
   for(const speed of DANMAKU_SPEED_STEPS)for(const fps of [30,60])assert.equal(validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,speed,fps}).speed,speed);
   for(const speed of [.4,2.1,1.05,'1',null,NaN,Infinity])assert.throws(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,speed}));
   for(const fps of [0,24,59.94,120,'30',null])assert.throws(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,fps}));
+});
+test('display area validates one-third to full screen and clamps both resize edges and movement',()=>{
+  for(const area of [{areaTop:0,areaHeight:1},{areaTop:2/3,areaHeight:1/3},{areaTop:.25,areaHeight:.5}])
+    assert.deepEqual(validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,...area}),{...DEFAULT_DANMAKU_STYLE,...area});
+  for(const area of [{areaTop:-.1},{areaHeight:0},{areaHeight:.33},{areaHeight:1.01},{areaTop:.6,areaHeight:.5},{areaTop:'0'},{areaHeight:null},{areaTop:NaN},{areaHeight:Infinity}])
+    assert.throws(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,...area}));
+  const initial={areaTop:.25,areaHeight:.5};
+  assert.deepEqual(adjustDanmakuArea(initial,'move',10),{areaTop:.5,areaHeight:.5});
+  assert.deepEqual(adjustDanmakuArea(initial,'move',-10),{areaTop:0,areaHeight:.5});
+  assert.deepEqual(adjustDanmakuArea(initial,'top',-10),{areaTop:0,areaHeight:.75});
+  assert.deepEqual(adjustDanmakuArea(initial,'bottom',10),{areaTop:.25,areaHeight:.75});
+  for(const action of ['top','bottom']){
+    const area=adjustDanmakuArea(initial,action,action==='top'?10:-10);
+    assert.equal(area.areaHeight,MIN_DANMAKU_AREA_HEIGHT);
+    if(action==='top')assert.equal(area.areaTop+area.areaHeight,.75);else assert.equal(area.areaTop,.25);
+  }
+  let area=initial;
+  for(let i=0;i<1000;i++){
+    area=adjustDanmakuArea(area,['move','top','bottom'][i%3],Math.sin(i)*.07);
+    assert.doesNotThrow(()=>validateDanmakuStyle({...DEFAULT_DANMAKU_STYLE,...area}));
+  }
+});
+test('restricted areas reflow at unchanged size and count, with identical browser/export positions including single-row overflow',()=>{
+  const raw=Array.from({length:50},(_,i)=>({id:String(i).padStart(2,'0'),type:'d',time:0,text:'SAMPLE'}));
+  for(const height of [180,360,720,940,1080,2160])for(const size of DANMAKU_SIZE_STEPS)for(const areaTop of [0,1/3,2/3]){
+    const style={...DEFAULT_DANMAKU_STYLE,size,areaTop,areaHeight:1/3},g=danmakuGeometry(height,style),width=Math.round(height*16/9);
+    const exported=layoutComments(raw,{width,height,style});
+    const preview=layoutDanmaku(raw,{width,height,clipTop:g.clipTop,clipBottom:g.clipBottom,fontSize:g.size,lineHeight:g.lineHeight,top:g.top,maxLanes:g.lanes,exportLayout:true});
+    assert.equal(exported.length,50);assert.deepEqual([...preview.values()],exported);
+    assert.equal(g.size,danmakuGeometry(height,{...style,areaTop:0,areaHeight:1}).size);
+    for(const message of exported){
+      assert.ok(message.y>=g.clipTop-.001&&message.y<g.clipBottom);
+      if(g.size*1.4+4<=g.clipBottom-g.clipTop)assert.ok(message.y+g.size*1.4+4<=g.clipBottom+.01);
+      assert.equal(message.end,6);assert.equal(message.speed,(width+message.textWidth)/(6-message.entryDelay));
+    }
+    const ass=assText(exported,width,height,null,style);
+    assert.ok(ass.includes(`\\clip(0,${Math.ceil(g.clipTop)},${width},${Math.floor(g.clipBottom)})`));
+  }
+  // A smaller area uses fewer full-size lanes, not squeezed original baselines.
+  const style={...DEFAULT_DANMAKU_STYLE,areaTop:1/3,areaHeight:1/3},g=danmakuGeometry(720,style);
+  const sparse=layoutComments(raw.slice(0,4),{style});
+  for(let i=0;i<sparse.length;i++)for(let j=i+1;j<sparse.length;j++)assert.ok(Math.abs(sparse[i].y-sparse[j].y)>=g.size*1.4+4);
+  const full=layoutComments(raw.slice(0,4));
+  assert.ok(sparse.some((event,i)=>Math.abs(event.y-(240+full[i].y/3))>1));
 });
 test('every speed uses the same wall-clock motion in preview and export at 30 and 60 fps, including slow clipped tails',()=>{
   const raw=[{id:'a',type:'d',time:0,text:'SPEED'}],width=1280,height=720;
@@ -146,7 +190,7 @@ test('settings validate atomically, retain style across restart, invalidate prep
   assert.equal(app.snapshot().danmakuPerSecond,50);
   assert.equal((await post({danmakuPerSecond:12,danmakuStyle:{size:1.5,opacity:50},danmakuFont:'f'.repeat(64)})).status,400);
   assert.deepEqual(app.snapshot().danmakuStyle,DEFAULT_DANMAKU_STYLE);assert.equal(app.snapshot().danmakuPerSecond,50);
-  const style={size:2.5,opacity:45,speed:1.7,fps:30};assert.equal((await post({danmakuStyle:style,danmakuPerSecond:12})).status,200);
+  const style={size:2.5,opacity:45,speed:1.7,fps:30,areaTop:.25,areaHeight:.5};assert.equal((await post({danmakuStyle:style,danmakuPerSecond:12})).status,200);
   assert.deepEqual(invalidated,[session.id]);assert.deepEqual(app.snapshot().danmakuStyle,style);
   await app.close();app=await open();app.ingestor.stop();app.media.work=async()=>{};url=`http://127.0.0.1:${app.port}`;
   assert.deepEqual(app.snapshot().danmakuStyle,style);

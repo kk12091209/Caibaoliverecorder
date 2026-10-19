@@ -21,7 +21,7 @@ function rebuild(reset = false) {
   if (!context) return;
   context.font = font;
   layout = layoutDanmaku(props.messages, {
-    width, height, fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,duration:danmakuDuration(props.style),previous: reset ? new Map() : layout,
+    width, height, clipTop:geometry.clipTop,clipBottom:geometry.clipBottom,fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,duration:danmakuDuration(props.style),previous: reset ? new Map() : layout,
     measure(text) {
       const existing = measured.get(text);
       if (existing !== undefined) return existing;
@@ -105,7 +105,7 @@ function paint(now) {
   if (clock.running !== moving) resetClock();
   if (moving && !player.requestVideoFrameCallback) clock.sample(player.currentTime, now);
   const time = props.base + (moving ? clock.at(now) : player.currentTime);
-  context.save();context.beginPath();context.rect(0,0,width,height);context.clip();context.globalAlpha=geometry.opacity;
+  context.save();context.beginPath();context.rect(0,geometry.clipTop,width,geometry.clipBottom-geometry.clipTop);context.clip();context.globalAlpha=geometry.opacity;
   let active = 0;
   for (const comment of timeline.at(time)) {
     if (props.excluded?.has(comment.id) || (motionPreference?.matches && time - comment.time > 4)) continue;
@@ -165,7 +165,7 @@ async function changeFont(value){
   updateStyle();
 }
 watch(() => props.font?.id,()=>changeFont(props.font),{immediate:true});
-watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.style?.speed,()=>props.font?.advanceRatio],updateStyle);
+watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.style?.speed,()=>props.style?.areaTop,()=>props.style?.areaHeight,()=>props.font?.advanceRatio],updateStyle);
 watch(() => props.style?.fps, () => {resetClock();requestPaint();});
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());

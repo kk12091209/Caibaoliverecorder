@@ -39,7 +39,7 @@ function horizontalConflict(before, time, textWidth, speed, width, gap) {
   return Math.max(.02, Math.min(1, peak / limit));
 }
 
-export function* scrollingTrackEvents(messages, { width, height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map() }) {
+export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, clipBottom = height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map() }) {
   const active = [], gap = danmakuGap(size), rowOrder = trackOrder(lanes);
   const rowUses = Array(lanes).fill(0), glyphHeight = size * 1.4 + 4;
   // Dense traffic can use intermediate positions instead of stacking every
@@ -47,8 +47,8 @@ export function* scrollingTrackEvents(messages, { width, height, lanes, top, lin
   const subdivisions = lanes > 1 ? Math.max(1, Math.floor(128 / (lanes - 1))) : 1;
   // Very small source videos may have only one nominal row at a large font.
   // Use the remaining vertical space there too, while keeping glyphs in-frame.
-  const firstY = lanes === 1 && Number.isFinite(height) ? Math.min(20, top) : top;
-  const lastY = lanes === 1 && Number.isFinite(height) ? Math.max(firstY, height - firstY - glyphHeight) : top + (lanes - 1) * lineHeight;
+  const firstY = lanes === 1 && Number.isFinite(clipBottom) ? Math.min(clipTop + 20, top) : top;
+  const lastY = lanes === 1 && Number.isFinite(clipBottom) ? Math.max(firstY, clipBottom - (firstY - clipTop) - glyphHeight) : top + (lanes - 1) * lineHeight;
   const slots = lanes > 1 ? (lanes - 1) * subdivisions + 1 : lastY > firstY ? 129 : 1;
   const slotOrder = trackOrder(slots), step = slots > 1 ? (lastY - firstY) / (slots - 1) : lineHeight;
   const slotY = slot => firstY + slot * step, rowSlot = lane => lanes > 1 ? lane * subdivisions : Math.round((slots - 1) / 2);

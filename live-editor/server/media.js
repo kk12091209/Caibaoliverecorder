@@ -25,6 +25,7 @@ import { PreviewRequests } from './preview-requests.js';
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
 export function assText(messages, width = 1280, height = 720, font = null, style) {
   const geometry=danmakuGeometry(height,style),{size,lineHeight,top,lanes:laneCount}=geometry,alpha=assOpacity(style),shadowAlpha=assOpacity(style,128);
+  const clip=geometry.clipTop>0||geometry.clipBottom<height?`\\clip(0,${Math.ceil(geometry.clipTop)},${width},${Math.floor(geometry.clipBottom)})`:'';
   const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
   const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,duration:danmakuDuration(style),font});
   return head + planned.map(m => {
@@ -34,7 +35,7 @@ export function assText(messages, width = 1280, height = 720, font = null, style
     const delay=m.entryDelay||0,elapsed=Math.max(0,-m.time),speed=(width+m.textWidth)/(seconds-delay);
     const startX=width-Math.max(0,elapsed-delay)*speed;
     const movement=delay?`,${Math.round(Math.max(0,delay-elapsed)*1000)},${Math.round((seconds-elapsed)*1000)}`:'';
-    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})}${content}\n`;
+    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})${clip}}${content}\n`;
   }).join('');
 }
 

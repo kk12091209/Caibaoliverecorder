@@ -239,18 +239,18 @@ test('successful full baked export settles failed or paused preparation across r
   await next.invalidate('exported');await next.tick();assert.equal(next.status('exported').status,'ready');assert.deepEqual(f.state.calls,['exported']);
 });
 
-test('a previous full export cannot satisfy preparation after speed or frame rate changes',async t=>{
+test('a previous full export cannot satisfy preparation after motion or display area changes',async t=>{
   const f=await fixture(t);f.add('motion');f.scheduler.enqueue('motion');
   const file=path.join(f.root,'motion.mp4');await fs.writeFile(file,'finished video');
   const data={scope:'full',ranges:[{start:0,end:120}],excluded:[],danmakuStyle:DEFAULT_DANMAKU_STYLE,output:{file,danmakuFile:file}};
   f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','motion','motion','done',file,'danmaku',JSON.stringify(data));
   await f.scheduler.tick();assert.equal(f.scheduler.status('motion').status,'exported');
-  for(const change of [{speed:.5},{fps:30}]){
+  for(const change of [{speed:.5},{fps:30},{areaTop:0,areaHeight:.5},{areaTop:.5,areaHeight:.5}]){
     f.store.setting(DANMAKU_STYLE_SETTING,{...DEFAULT_DANMAKU_STYLE,...change});
     await f.scheduler.invalidate('motion');await f.scheduler.tick();
     assert.equal(f.scheduler.status('motion').status,'ready');
   }
-  assert.deepEqual(f.state.calls,['motion','motion']);
+  assert.deepEqual(f.state.calls,['motion','motion','motion','motion']);
 });
 
 test('clean, clips, failed saves and missing baked files do not satisfy full baked preparation',async t=>{

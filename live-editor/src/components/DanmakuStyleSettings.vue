@@ -7,9 +7,11 @@ import {DANMAKU_SIZE_STEPS,normalizedDanmakuStyle} from '../../shared/danmaku-st
 const props=defineProps({style:Object,font:Object,rate:{type:Number,default:50}}),emit=defineEmits(['changed','busy','close']);
 const initial=normalizedDanmakuStyle(props.style),sizeIndex=ref(DANMAKU_SIZE_STEPS.indexOf(initial.size)),opacity=ref(initial.opacity),rate=ref(props.rate);
 const speed=ref(initial.speed),fps=ref(initial.fps),confirmFps=ref(false),cancelFps=ref(null),fps30=ref(null),fps60=ref(null);
+const areaTop=ref(initial.areaTop),areaHeight=ref(initial.areaHeight);
 const font=ref(props.font),error=ref(''),saving=ref(false),saved=ref(false),fontBusy=ref(false),previewReady=ref(false);
-const draft=computed(()=>({size:DANMAKU_SIZE_STEPS[sizeIndex.value],opacity:opacity.value,speed:speed.value,fps:fps.value}));
-watch(()=>[sizeIndex.value,opacity.value,speed.value,fps.value,rate.value,font.value?.id],()=>saved.value=false);
+const draft=computed(()=>({size:DANMAKU_SIZE_STEPS[sizeIndex.value],opacity:opacity.value,speed:speed.value,fps:fps.value,areaTop:areaTop.value,areaHeight:areaHeight.value}));
+function changeArea(area){areaTop.value=area.areaTop;areaHeight.value=area.areaHeight;}
+watch(()=>[sizeIndex.value,opacity.value,speed.value,fps.value,areaTop.value,areaHeight.value,rate.value,font.value?.id],()=>saved.value=false);
 watch(()=>saving.value||fontBusy.value,value=>emit('busy',value));
 async function selectFps(event){
   const value=Number(event.target.value);
@@ -26,7 +28,7 @@ async function persist(){
 }
 </script>
 <template><div class="danmaku-style-editor">
-  <DanmakuStylePreview :style="draft" :font="font" :rate="rate" @ready="previewReady=$event"/>
+  <DanmakuStylePreview :style="draft" :font="font" :rate="rate" :disabled="saving||fontBusy" @area-change="changeArea" @ready="previewReady=$event"/>
   <div class="style-sliders">
     <label class="style-control" for="style-rate"><span>每秒弹幕上限<output for="style-rate">{{ rate }} 条</output></span><input id="style-rate" v-model.number="rate" type="range" min="1" max="50" step="1" :style="{'--style-fill':((rate-1)/49*100)+'%'}" :disabled="saving||fontBusy"/><small>1 条<span>50 条</span></small></label>
     <label class="style-control" for="style-size"><span>弹幕字号<output for="style-size">{{ draft.size }}<small v-if="draft.size===0.6">默认</small></output></span><input id="style-size" v-model.number="sizeIndex" type="range" min="0" :max="DANMAKU_SIZE_STEPS.length-1" step="1" :style="{'--style-fill':(sizeIndex/(DANMAKU_SIZE_STEPS.length-1)*100)+'%'}" :aria-valuetext="String(draft.size)" :disabled="saving||fontBusy"/><small>0.4<span>5</span></small></label>
@@ -37,9 +39,9 @@ async function persist(){
     <fieldset class="style-frame-rate" :disabled="saving||fontBusy||confirmFps"><legend>弹幕帧率</legend><div><label><input ref="fps30" type="radio" name="danmaku-fps" value="30" :checked="fps===30" @change="selectFps"/>30 帧</label><label><input ref="fps60" type="radio" name="danmaku-fps" value="60" :checked="fps===60" @change="selectFps"/>60 帧（默认）</label></div><small>30 帧处理通常更快；60 帧滚动更流畅。帧率不改变滚动速度。</small></fieldset>
   </div>
   <div v-if="confirmFps" class="fps-confirm" role="alertdialog" aria-labelledby="fps-confirm-title" aria-describedby="fps-confirm-description" @keydown.esc.stop.prevent="finishFps(false)"><strong id="fps-confirm-title">切换为 60 帧？</strong><p id="fps-confirm-description">该操作可能会导致处理速度变慢，是否继续？</p><div><button ref="cancelFps" class="button" @click="finishFps(false)">取消，保留 30 帧</button><button class="button primary" @click="finishFps(true)">继续，使用 60 帧</button></div></div>
-  <p class="style-hint">弹幕在画面上下区域轮换显示。数量按每秒弹幕上限显示，放大字号不会自动减少弹幕。预览与导出使用同一套排布和字体渲染；可结合预览自行调整数量和字号。100% 为完全显示。</p>
+  <p class="style-hint">弹幕在选定区域内重新排布，优先避让已有弹幕。缩小区域不减少条数、不缩小字号；区域越小，弹幕越集中，极高密度时仍可能重叠。预览与导出使用同一套排布和字体渲染。</p>
   <FontSettings :font="font" draft :disabled="saving" @changed="font=$event" @busy="fontBusy=$event"/>
-  <p class="style-hint">点击「保存样式」后，字体、密度、字号、不透明度、速度与帧率一起应用于预览和新建导出。已创建的导出任务保留原设置。0.6 保持原有字号，1.0 倍保持原有滚动速度。</p>
+  <p class="style-hint">点击「保存样式」后，展示区域、字体、密度、字号、不透明度、速度与帧率一起应用于预览和新建导出。已创建的导出任务保留原设置。0.6 保持原有字号，1.0 倍保持原有滚动速度。</p>
   <p class="style-save-state" role="status">{{ saving?'正在保存…':saved?'样式已保存':'预览调整尚未保存' }}</p>
   <p v-if="error" class="inline-warning" role="alert">{{ error }}</p>
 <div class="style-actions"><button class="button" :disabled="saving||fontBusy" @click="emit('close')">返回设置</button><button class="button primary" :disabled="saving||fontBusy||!previewReady||confirmFps" @click="persist">{{ saving?'正在保存…':'保存样式' }}</button></div>
