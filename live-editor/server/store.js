@@ -39,6 +39,12 @@ export class Store {
         source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,time REAL NOT NULL,extra INTEGER NOT NULL,
         PRIMARY KEY(source,time));
       CREATE INDEX IF NOT EXISTS density_session ON danmaku_density(session);
+      CREATE TABLE IF NOT EXISTS linkmic_frames(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        time REAL NOT NULL,end REAL NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,time));
+      CREATE TABLE IF NOT EXISTS linkmic_people(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL,link_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(source,channel,link_id));
+      CREATE TABLE IF NOT EXISTS linkmic_avatars(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        hash TEXT NOT NULL,png BLOB NOT NULL,PRIMARY KEY(source,hash));
       CREATE TABLE IF NOT EXISTS edits(session TEXT PRIMARY KEY REFERENCES sessions(id), revision INTEGER,
         data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, session TEXT REFERENCES sessions(id), created TEXT,
@@ -52,6 +58,7 @@ export class Store {
     for (const name of ['purged_at','purge_started_at','purge_error']) if (!this.all('PRAGMA table_info(sessions)').some(c => c.name === name)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     if (!this.all('PRAGMA table_info(jobs)').some(c => c.name === 'mode')) this.db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'clean'");
     if (!this.all('PRAGMA table_info(source_storage)').some(c => c.name === 'eligible')) this.db.exec('ALTER TABLE source_storage ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0');
+    for(const name of ['avatar','avatar_key'])if(!this.all('PRAGMA table_info(linkmic_people)').some(c=>c.name===name))this.db.exec(`ALTER TABLE linkmic_people ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     this.recoveryCount=0;
     this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();
@@ -137,6 +144,7 @@ export class Store {
           this.run('DELETE FROM source_storage WHERE source=?',source.id);
           if(this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='waveform_blocks'"))this.run('DELETE FROM waveform_blocks WHERE source=?',source.id);
           this.run('DELETE FROM settings WHERE key=?','metadata:'+source.id);
+          this.run('DELETE FROM settings WHERE key IN (?,?)','linkmic-index:'+source.id,'linkmic-owner:'+source.id);
         }
         this.run('DELETE FROM danmaku_filters WHERE message IN (SELECT id FROM danmaku WHERE session=?)',id);
         this.run('DELETE FROM danmaku WHERE session=?',id);

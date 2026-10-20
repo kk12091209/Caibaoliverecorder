@@ -7,10 +7,12 @@ import { sourceStream, seekBase } from './ingest.js';
 import { preparedEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
 import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry, danmakuDuration } from '../shared/danmaku-style.js';
+import { linkmicAss } from './linkmic.js';
+import { avatarFilter } from './linkmic-avatars.js';
 import { scrollingTracks, scrollingTrackEvents } from '../shared/danmaku-tracks.js';
 import {chatRate,validateChatRate} from './chat-rules.js';
 
-export const RENDER_VERSION = 6;
+export const RENDER_VERSION = 8;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 function eligibleComments(messages, rate) {
@@ -152,8 +154,10 @@ export class RenderPipeline {
     // background preparation follows the current settings.
     const danmakuStyle=(Object.hasOwn(snapshot,'danmakuStyle')||Object.hasOwn(snapshot,'mode'))?normalizedDanmakuStyle(snapshot.danmakuStyle):savedDanmakuStyle(this.store);
     const danmakuPerSecond=validateChatRate(snapshot.danmakuPerSecond??chatRate(this.store));
+    if(!Object.hasOwn(snapshot,'linkmicEvents'))await this.store.linkmic?.ensure(id);
+    const linkmicEvents=snapshot.linkmicEvents??this.store.linkmic?.events(id)??[];
     const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:preparedEncoderArguments(selected)};
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),layout:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps)};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,layout:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps)};
   }
   async sourceFingerprint(source,from,to) {
     const current=this.store.get('SELECT * FROM sources WHERE id=?',source.id);
@@ -179,7 +183,7 @@ export class RenderPipeline {
     const span=frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps);
     const events=visibleComments(plan.layout,plan.snapshot,span.from,span.to);
     return {sessionId:plan.id,sourceId:block.source.id,startMs:block.startMs,endMs:block.endMs,
-      sourceFingerprint:await this.sourceFingerprint(block.source,span.from,span.to),profileHash:plan.profileHash,assHash:commentSignature(events),version:1};
+      sourceFingerprint:await this.sourceFingerprint(block.source,span.from,span.to),profileHash:plan.profileHash,assHash:hashRender([commentSignature(events),(plan.linkmicEvents||[]).filter(e=>e.source===block.source.id&&e.time<span.to&&e.end>span.from)]),version:1};
   }
   async inspect(file,options={}) {
     const previous=this.encodedInfo.get(file);if(previous)return previous;
@@ -199,7 +203,10 @@ export class RenderPipeline {
       const fontDirectory=await m.fonts.stage(plan.font,workDir);
       const sourceInfo=source.id===plan.sources[0].id?plan.info:await m.probeSource(source,readFrom,options);
       const geometry=videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height);
-      const chain=[`setpts=PTS+${base}/TB`,geometry,'format=yuv420p','tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=${plan.profile.fps}:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
+      const labels=(plan.linkmicEvents||[]).filter(e=>e.source===source.id&&e.time<span.to&&e.end>span.from&&e.participants.length);
+      if(labels.length)await fs.writeFile(path.join(workDir,'names.ass'),linkmicAss(labels,plan.profile.width,plan.profile.height,{from:span.from,to:span.to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height}));
+      const cards=await avatarFilter(this.store,labels,plan.profile.width,plan.profile.height,workDir,{from:span.from,to:span.to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height});
+      const chain=[`setpts=PTS+${base}/TB`,geometry,'format=yuv420p','tpad=stop_mode=clone:stop_duration=0.1',`fps=fps=${plan.profile.fps}:start_time=${span.from}:round=near`,`ass=part-0.ass${fontDirectory?':fontsdir='+fontDirectory:''}`,cards,labels.length?'ass=names.ass':'',`trim=start=${span.from}:end=${span.to}`,'setpts=PTS-STARTPTS'].filter(Boolean).join(',');
       await m.process(['-copyts','-fflags','+genpts','-threads','2','-f','flv','-i','pipe:0','-map','0:v:0','-an','-filter_threads','2','-vf',chain,
         ...plan.profile.arguments,'-frames:v',String(span.frames),'-r',String(plan.profile.fps),'-movflags','+faststart','-y',file],
       {cwd:workDir,input:sourceStream(this.store,source.id,readFrom,span.to,{signal:options.signal}),signal:options.signal,background:options.background});
@@ -326,14 +333,19 @@ export class RenderPipeline {
     for(let i=0;i<segments.length;i++) {
       const {source,from,to}=segments[i],span=frameSpan(from,to,plan.profile?.fps),base=seekBase(this.store,source.id,from),name=`part-${i}-danmaku.mp4`;
       const info=source.id===plan.sources[0].id?plan.info:await this.media.probeSource(source,from);
-      if(canCopyFullSource(job,plan.sources,info,base)) {
+      const labels=(plan.linkmicEvents||[]).filter(e=>e.source===source.id&&e.time<to&&e.end>from&&e.participants.length);
+      if(!labels.length&&canCopyFullSource(job,plan.sources,info,base)) {
         await this.media.process(['-copyts','-f','flv','-i','pipe:0','-map','0:v:0','-an','-c:v','copy','-movflags','+faststart','-y',name],
           {cwd:workDir,input:sourceStream(this.store,source.id,from,to)});
         files.push({file:path.join(workDir,name),duration:span.duration});continue;
       }
       const geometry=videoGeometryFilter(info,plan.profile.width,plan.profile.height);
+      const labelFile=`clean-names-${i}.ass`;
+      if(labels.length)await fs.writeFile(path.join(workDir,labelFile),linkmicAss(labels,plan.profile.width,plan.profile.height,{base,from,to,sourceWidth:info.width,sourceHeight:info.height}));
+      const cards=await avatarFilter(this.store,labels,plan.profile.width,plan.profile.height,workDir,{base,from,to,sourceWidth:info.width,sourceHeight:info.height});
+      const filters=[geometry,cards,labels.length?`ass=${labelFile}`:''].filter(Boolean).join(',');
       await this.media.process(['-copyts','-threads','2','-f','flv','-i','pipe:0','-ss',String(Math.max(0,span.from-base)),'-t',String(span.duration),'-map','0:v:0','-an',
-        ...(geometry?['-vf',geometry]:[]),...preparedEncoderArguments(encoder),'-r',String(plan.info.fps),'-movflags','+faststart','-y',name],
+        ...(filters?['-vf',filters]:[]),...preparedEncoderArguments(encoder),'-r',String(plan.info.fps),'-movflags','+faststart','-y',name],
         {cwd:workDir,input:sourceStream(this.store,source.id,from,to)});
       files.push({file:path.join(workDir,name),duration:span.duration});
     }

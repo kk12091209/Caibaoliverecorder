@@ -91,6 +91,7 @@ export class DouyinRecorder {
       room.actualRoom=metadata.roomId;
       const start=Math.max(0,session.duration,(Date.parse(wall)-Date.parse(session.created))/1000);
       source=this.store.addSource(session.id,file,start,wall);this.store.run('INSERT INTO source_storage(source,eligible) VALUES(?,1)',source.id);
+      this.store.setting('linkmic-owner:'+source.id,{id:metadata.ownerId||'',name:metadata.name,roomId:metadata.roomId});
       room.sourceId=source.id;
       xml=await fs.open(source.xml,'wx');
       await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="douyin" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);

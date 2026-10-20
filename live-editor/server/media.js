@@ -21,6 +21,8 @@ import { danmakuGeometry, assOpacity, savedDanmakuStyle, normalizedDanmakuStyle,
 import { chatRate } from './chat-rules.js';
 import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
 import { PreviewRequests } from './preview-requests.js';
+import { linkmicAss } from './linkmic.js';
+import { avatarFilter } from './linkmic-avatars.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
 export function assText(messages, width = 1280, height = 720, font = null, style) {
@@ -212,9 +214,12 @@ export class Media {
     const ranges=validateRanges(requested.filter(r=>r.selected!==false),session.duration);
     if(['includeDanmaku','burn','danmakuFps'].some(key=>key in input))throw new Error('不支持的导出选项，请使用纯净版、弹幕版或双文件模式。');
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
+    await this.store.linkmic?.ensure(id);
+    const linkmicEvents=this.store.linkmic?.events(id)||[];
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
     const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
+    for(const job of jobs)job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
     try {
       const outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
       for(const job of jobs){
@@ -411,7 +416,7 @@ export class Media {
     const first=sources.find(s=>s.start<job.ranges[0].end&&s.start+s.duration>job.ranges[0].start);
     if(!first)throw new Error('选段中没有已录制的画面。');
     const info=await this.probeSource(first,Math.max(first.start,job.ranges[0].start));
-    const copyClean=canCopyFullSource(job,sources,info,seekBase(this.store,first.id,job.ranges[0].start));
+    const copyClean=!job.linkmicEvents?.length&&canCopyFullSource(job,sources,info,seekBase(this.store,first.id,job.ranges[0].start));
     if(job.scope==='full'&&job.mode==='clean'){
       job.cleanStreamCopy=false;
       job.cleanStreamCopyEligible=copyClean;
@@ -501,10 +506,16 @@ export class Media {
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=videoGeometryFilter(sourceInfo,width,height);
+        const labels=(job.linkmicEvents||[]).filter(event=>event.source===source.id&&event.participants.length&&event.time<to&&event.end>from);
+        const labelFile=`names-${number}.ass`;
+        if(labels.length)await fs.writeFile(path.join(workDir,labelFile),linkmicAss(labels,width,height,{base,from,to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height}));
+        const cardOptions={base,from,to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height};
+        const withNames=async prefix=>[await avatarFilter(this.store,labels,width,height,workDir,{...cardOptions,prefix}),labels.length?`ass=${labelFile}`:''].filter(Boolean).join(',');
+        const labelFilter=await withNames('cleanmic'),danmakuLabelFilter=dual?await withNames('danmic'):labelFilter;
         const fps=normalizedDanmakuStyle(job.danmakuStyle).fps;
         const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
         const compatibleFull=singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
-        let copyClean=!bakedOnly&&compatibleFull;
+        let copyClean=!bakedOnly&&!labels.length&&compatibleFull;
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;
         const mux=singlePart?['-movflags','+faststart']:[];
         const encode=(map,file,baked=false)=>['-ss',String(Math.max(0,from-base)),'-t',String(to-from),'-map',map,'-map','0:a:0?',
@@ -515,12 +526,14 @@ export class Media {
         const command=()=>{
           let filters=[],outputs;
           if(dual) {
-            const graph=copyClean?`[0:v:0]${overlayFilter}[danmaku]`:`[0:v:0]${filter?filter+',':''}split=2[clean][overlay];[overlay]${overlayFilter}[danmaku]`;
+            const split=labelFilter?`split=2[plain][overlay];[plain]${labelFilter}[clean];[overlay]${overlayFilter},${danmakuLabelFilter}[danmaku]`
+              :`split=2[clean][overlay];[overlay]${overlayFilter}[danmaku]`;
+            const graph=copyClean?`[0:v:0]${overlayFilter}[danmaku]`:`[0:v:0]${filter?filter+',':''}${split}`;
             filters=['-filter_complex_threads','2','-filter_complex',graph];
             outputs=[...(copyClean?copied(out):encode('[clean]',out)),...encode('[danmaku]',`part-${number}-danmaku.mp4`,true)];
           } else if(copyClean)outputs=copied(out);
           else {
-            const chain=[filter,...(bakedOnly?[overlayFilter]:[])].filter(Boolean).join(',');
+            const chain=[filter,...(bakedOnly?[overlayFilter]:[]),labelFilter].filter(Boolean).join(',');
             if(chain)filters=['-filter_threads','2','-vf',chain];
             outputs=encode('0:v:0',out,bakedOnly);
           }

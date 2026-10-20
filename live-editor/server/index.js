@@ -27,6 +27,7 @@ import { DailyDiagnostics } from './diagnostics.js';
 import { savedDanmakuStyle, validateDanmakuStyle, DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
 import { listenLocal } from './local-endpoint.js';
 import { DanmakuStylePreview } from './danmaku-style-preview.js';
+import { LinkmicIndex } from './linkmic.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -58,6 +59,7 @@ async function createManagedApp(options,runtime) {
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  const linkmic=new LinkmicIndex(store,{resolver:recorder.douyin.resolver,ffmpeg});store.linkmic=linkmic;
   const clients=new Set(); let closing=false,app,closePromise,startupRecovery;
   store.recovery.recovering=true;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
@@ -235,6 +237,19 @@ async function createManagedApp(options,runtime) {
         for(const source of sources)if(!source.metadata&&source.duration>0){void media.probeSource(store.get('SELECT * FROM sources WHERE id=?',source.id)).catch(()=>{});}
         return json(res,{...session,sources,edit:store.edit(session.id),chunks:store.get('SELECT COUNT(*) AS count FROM chunks WHERE source IN (SELECT id FROM sources WHERE session=?)',session.id).count});
       }
+      if((match=/^\/api\/sessions\/([\w-]+)\/linkmic-avatars\/([\w-]+)\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){
+        const asset=store.session(match[1])&&store.get('SELECT a.png FROM linkmic_avatars a JOIN sources s ON s.id=a.source WHERE s.session=? AND a.source=? AND a.hash=?',match[1],match[2],match[3]);
+        if(!asset)return json(res,{error:'头像不存在。'},404);
+        res.writeHead(200,{'Content-Type':'image/png','Content-Length':asset.png.length,'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'});
+        return res.end(Buffer.from(asset.png));
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/linkmic$/.exec(p))&&req.method==='GET'){
+        const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
+        const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||from+60);
+        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from||to-from>120)throw new Error('名牌预览范围无效。');
+        linkmic.request(session.id);
+        return json(res,{events:linkmic.events(session.id,from,to)});
+      }
       if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
         const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
         const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort()]);
@@ -346,7 +361,7 @@ async function createManagedApp(options,runtime) {
   const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
   app={diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();
+    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();

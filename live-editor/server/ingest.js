@@ -36,6 +36,7 @@ export class Ingestor {
         try { await this.readSource(source); await this.readDanmaku(source); }
         catch (e) { if (e.code !== 'ENOENT') { this.store.run('UPDATE sources SET error=? WHERE id=?', e.message, source.id); this.store.run('UPDATE sessions SET error=? WHERE id=?', e.message, source.session); } }
       }
+      await this.store.linkmic?.tick(rows);
     } finally { this.busy = false; }
   }
   async readSource(source) {

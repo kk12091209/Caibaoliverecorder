@@ -45,6 +45,16 @@ test('highest compatible origin is preferred, audio-only and explicitly HEVC URL
  assert.equal(selectDouyinFlv(stream).quality,'origin');assert.equal(selectDouyinFlv({flv_pull_url:{SD1:cdn('low'),FULL_HD1:cdn('high')}}).url,cdn('high'));
  assert.equal(safeStreamUrl('https://localhost/private'),'');assert.equal(safeStreamUrl('https://pull-test.douyincdn.com:999/private'),'');
 });
+test('search and category live links accept one explicit room ID without loading recommendations',async()=>{
+ const options={request:async()=>assert.fail('the explicit room already identifies the target')};
+ for(const url of ['https://www.douyin.com/search/连麦?type=live&live_web_rid=118181154061&search_result_id=999',
+  'https://live.douyin.com/categorynew/4_101?anchor_id=1&live_web_rid=118181154061']){
+  assert.equal((await resolveDouyinLink(url,options)).url,'https://live.douyin.com/118181154061');
+ }
+ for(const value of ['','abc','1&live_web_rid=2','123456789012345678901'])
+  await assert.rejects(resolveDouyinLink('https://www.douyin.com/search/连麦?type=live&live_web_rid='+value,options),/编号无效/);
+ await assert.rejects(resolveDouyinLink('https://www.douyin.com.evil.test/search/连麦?type=live&live_web_rid=1',options),/链接/);
+});
 test('anonymous visitor is refreshed once, unknown API status is an error rather than offline',async()=>{
  let visitors=0,status=2;const resolver=new DouyinResolver({request:async url=>{
   if(String(url)==='https://live.douyin.com/'){visitors++;return new Response('page',{headers:{'set-cookie':'ttwid=guest; Secure'}});}

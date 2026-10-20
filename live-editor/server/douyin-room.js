@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import {BlockList,isIP} from 'node:net';
 import { signRoomQuery } from './douyin-signing.js';
+import { parsePlatformJson } from './linkmic-sei.js';
+import { labelText } from '../shared/linkmic-labels.js';
+import { avatarUrl } from './linkmic-avatars.js';
 
 export const DOUYIN_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const roomHosts = new Set(['live.douyin.com','douyin.com','www.douyin.com','v.douyin.com','m.douyin.com','webcast.amemv.com']);
@@ -34,7 +37,9 @@ export async function resolveDouyinLink(input, { request = fetch, signal } = {})
   for (let attempt = 0; attempt < 6; attempt++) {
     const match = url.hostname === 'live.douyin.com' && /^\/(\d{1,20})\/?$/.exec(url.pathname);
     if (match) return { platform: 'douyin', webRid: match[1], key: 'douyin:' + match[1], url: 'https://live.douyin.com/' + match[1] };
-    if(url.hostname==='live.douyin.com'&&url.pathname==='/'&&url.searchParams.has('live_web_rid')){
+    const explicitRoomPage=url.hostname==='live.douyin.com'&&(url.pathname==='/'||url.pathname.startsWith('/categorynew/'))||
+      url.hostname==='www.douyin.com'&&url.pathname.startsWith('/search/')&&url.searchParams.get('type')==='live';
+    if(explicitRoomPage&&url.searchParams.has('live_web_rid')){
       const values=url.searchParams.getAll('live_web_rid');
       if(values.length!==1||!/^\d{1,20}$/.test(values[0]))throw new Error('抖音房间编号无效。');
       return {platform:'douyin',webRid:values[0],key:'douyin:'+values[0],url:'https://live.douyin.com/'+values[0]};
@@ -132,7 +137,24 @@ export class DouyinResolver {
     const roomId = String(room.id_str || ''), stream = Number(room.status) === 2 ? selectDouyinFlv(room.stream_url) : null;
     if (!/^\d{1,20}$/.test(roomId)) throw new Error('抖音未返回有效房间编号。');
     return { platform: 'douyin', webRid, roomId, streaming: Number(room.status) === 2,
+      ownerId:String(room.owner?.id_str||data.data.user?.id_str||''),
       title: String(room.title || '抖音直播').slice(0,300), name: String(room.owner?.nickname || data.data.user?.nickname || '抖音直播间').slice(0,100),
       stream, cookie: visitor.cookie, userUniqueId: visitor.userUniqueId };
+  }
+  async linkmic({roomId,anchorId,channel,version,signal}) {
+    if(![roomId,anchorId,channel].every(value=>/^\d{1,20}$/.test(value)))throw new Error('连麦房间编号无效。');
+    signal=signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000);
+    const visitor=await this.cookie(signal);
+    const audience=version===15;
+    const query=new URLSearchParams({aid:'6383',app_name:'douyin_web',live_id:'1',device_platform:'web',
+      room_id:roomId,anchor_id:anchorId,...(audience?{}:{channel_id:channel,offset:'0',count:'50',link_status:'4',
+        scene:version===2?'1':'7',request_source:version===2?'audience_enter_room':'receive_multi_linker_sei'})});
+    const endpoint=audience?'/webcast/linkmic_audience/list/v2/':'/webcast/linkmic/list/';
+    const response=await this.request('https://live.douyin.com'+endpoint+'?'+query+'&a_bogus='+encodeURIComponent(signRoomQuery(query.toString(),DOUYIN_USER_AGENT)),
+      {signal,headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.douyin.com/',Cookie:visitor.cookie}});
+    const result=parsePlatformJson(await readBoundedResponse(response,2*1024*1024));
+    if(result.status_code!==0||!Array.isArray(result.data?.user))throw new Error('连麦名单暂时不可用。');
+    return result.data.user.slice(0,64).map(entry=>({linkId:String(entry.linkmic_id_str||''),id:String(entry.user?.id_str||''),name:labelText(entry.user?.nickname),avatarUrl:avatarUrl(entry.user)}))
+      .filter(person=>/^[\w-]{1,100}$/.test(person.linkId)&&/^\d{1,20}$/.test(person.id));
   }
 }
