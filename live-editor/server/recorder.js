@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { availableLocalPort, findOwnedCore, stopOwnedCore } from './local-endpoint.js';
 import { alive } from './service-runtime.js';
 import {BilibiliRooms,roomEnabled,defaultCoreConfig} from './bilibili-rooms.js';
+import {RecordingRecovery} from './recording-recovery.js';
 
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
@@ -24,6 +25,7 @@ export class Recorder {
     this.pollBusy=false;this.process=null;this.childRunning=false;this.closed=false;this.monitoring=false;this.starting=null;
     this.failures=0;this.retryAt=0;this.shutdown=new AbortController();
     this.lifecycle={fetch,spawn,now:Date.now,isAlive:alive,availablePort:availableLocalPort,findOwned:findOwnedCore,stopProcess:stopOwnedCore,healthMs:2000,retryMs:1000,maxRetryMs:30000,startupMs:30000,startupPollMs:250,requestMs:10000,...lifecycle};
+    this.recovery=new RecordingRecovery({now:lifecycle.progressNow,report:(id,message,level='信息')=>store.diagnostics?.record('B站录制恢复',`房间 ${id}：${message}`,{level,important:true})});
     this.automaticPort=port===0;this.ownedEndpoint=null;this.quitting=false;
     if(this.automaticPort){const saved=store.setting('recorder-endpoint');if(saved?.directory===this.directory&&saved.executable===executable&&Number.isInteger(saved.pid)&&saved.pid>0&&saved.port>0&&saved.port<65536){this.ownedEndpoint=saved;this.port=saved.port;}}
     this.storageEligibilitySince=Date.now();
@@ -120,7 +122,7 @@ export class Recorder {
     if(Array.isArray(resume))this.store.setting('recorder-resume-rooms',null);
     // Reapply room overrides after each reconnection; the core may have restarted separately.
     for(const room of rooms){this.assertOpen();await this.api(`room/${room.roomId}/config`,CHAT_ONLY_CONFIG);}
-    this.assertOpen();this.rooms=this.roomState.capture(await this.api('room'),{prune:true});
+    this.assertOpen();this.rooms=this.roomState.capture(await this.api('room'),{prune:true});this.recovery.rooms.clear();
   }
   async restoreRoom(raw,resume=false){
     this.assertOpen();const room=this.roomState.get(raw.roomId);if(!room)return;
@@ -170,7 +172,8 @@ export class Recorder {
         await this.roomState.serial(raw.roomId,async()=>{if(this.roomState.get(raw.roomId)?.enabled===false){await this.restoreRoom(raw);repaired=true;}});
       }
       if(repaired)rooms=await this.api('room');
-      this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true});this.error='';
+      await this.recoverRecordings(rooms);
+      this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true}).map(room=>({...room,recordingHealth:this.recovery.health(room.roomId)}));this.error='';
       for(const session of this.store.all("SELECT * FROM sessions WHERE room>0 AND status IN ('recording','waiting')")){
         const room=this.rooms.find(r=>Number(r.roomId)===session.room);
         if(room&&!room.recording&&!room.streaming){this.store.run("UPDATE sessions SET status='finished' WHERE id=?",session.id);this.store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);}
@@ -180,6 +183,24 @@ export class Recorder {
         catch(e){if(!this.closed)this.error=`素材同步失败：${e.message}`;}
       }
     }catch(e){this.failed(e);}finally{this.pollBusy=false;}
+  }
+  async recoverRecordings(rooms){
+    this.recovery.prune(new Set(rooms.map(room=>room.roomId)));
+    for(const raw of rooms){
+      if(this.closed||this.quitting)return;
+      await this.roomState.serial(raw.roomId,async()=>{
+        if(this.closed||this.quitting)return;
+        const enabled=this.roomState.get(raw.roomId)?.enabled===true;
+        this.recovery.observe(raw,enabled);
+        if(!enabled)return;
+        const action=this.recovery.action(raw.roomId,raw);if(!action)return;
+        // Mark before requesting: a timeout is ambiguous, so never assume the
+        // old writer has stopped. A subsequent GET must confirm Recording=false.
+        this.recovery.requested(raw.roomId,action);
+        try{await this.api(`room/${raw.roomId}/${action}`,{});}
+        catch(error){if(!this.closed&&!this.quitting)this.store.diagnostics?.record('B站录制恢复',`房间 ${raw.roomId}：恢复请求未确认；继续检查旧任务状态。${error.message}`,{level:'警告'});}
+      });
+    }
   }
   async reconcile(){
     if(this.closed)return;
@@ -239,7 +260,11 @@ export class Recorder {
       this.store.run("UPDATE sources SET closed=1 WHERE closed=0 AND session IN (SELECT id FROM sessions WHERE room=? AND status='finished')",room);
     }
     this.store.run('INSERT OR IGNORE INTO events VALUES(?)',event.EventId);
-    if(['FileOpening','FileClosed','SessionEnded','StreamEnded'].includes(type))this.store.diagnostics?.record('B站录制事件',`房间 ${room}：${type}`);
+    if(['FileOpening','FileClosed','SessionEnded','StreamEnded'].includes(type)){
+      const openSeconds=(Date.parse(d.FileCloseTime)-Date.parse(d.FileOpenTime))/1000;
+      const metrics=type==='FileClosed'?`；媒体时长 ${Number.isFinite(d.Duration)&&d.Duration>0?d.Duration.toFixed(1):'未知'} 秒；打开至关闭 ${Number.isFinite(openSeconds)&&openSeconds>=0?openSeconds.toFixed(1):'未知'} 秒；文件 ${Number.isFinite(d.FileSize)?d.FileSize:'未知'} 字节`:'';
+      this.store.diagnostics?.record('B站录制事件',`房间 ${room}：${type}${metrics}`);
+    }
   }
   async roomControl(id){if(!this.roomState.get(id))this.roomState.capture(await this.api('room'));this.assertOpen();const room=this.roomState.get(id);if(!room)throw new Error('直播间不存在或已移除。');return room;}
   async addRoom(input){
@@ -251,16 +276,19 @@ export class Recorder {
     });await this.poll();return result;
   }
   async startRoom(id){return this.roomState.serial(id,async()=>{
+    this.recovery.forget(id);
     const room=await this.roomControl(id);this.roomState.set(id,{enabled:true});
     await this.api(`room/${id}/config`,{autoRecord:room.autoRecord});await this.api(`room/${id}/start`,{});this.assertOpen();
   });}
   async setAuto(id,enabled){return this.roomState.serial(id,async()=>{
+    if(enabled)this.recovery.forget(id);
     await this.roomControl(id);const current=this.rooms.find(room=>room.roomId===id);
     const room=this.roomState.set(id,{autoRecord:!!enabled,...(enabled?{enabled:true}:current?.recording?{}:{enabled:false})});
     await this.api(`room/${id}/config`,{autoRecord:room.enabled&&room.autoRecord});
     if(enabled)await this.api(`room/${id}/start`,{});this.assertOpen();
   });}
   async stopRoom(id,{remember=true}={}){return this.roomState.serial(id,async()=>{
+    this.recovery.forget(id);
     if(remember){await this.roomControl(id);this.roomState.set(id,{enabled:false});}
     await this.api(`room/${id}/config`,{autoRecord:false});await this.api(`room/${id}/stop`,{});this.assertOpen();
     this.store.run("UPDATE sessions SET status='finishing' WHERE room=? AND status IN ('recording','waiting')",id);

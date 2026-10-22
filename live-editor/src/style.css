@@ -453,6 +453,10 @@ svg { flex-shrink: 0; }
 .checkbox { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 12px; color: #5c3344; }
 
 .timeline-section { border-top: 1px solid var(--line); padding-top: 14px; }
+.recording-gap-notice { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #bd864b66; border-radius: 8px; background: #fff5df; color: #795027; font-size: 12px; line-height: 1.6; }
+.recording-gap-notice svg { flex-shrink: 0; margin-top: 2px; }
+.recording-gap-notice strong,.recording-gap-notice span { display: block; }
+.recording-gap { position: absolute; top: 20px; height: 36px; z-index: 2; pointer-events: none; background: repeating-linear-gradient(135deg,transparent 0 5px,#9a6b4230 5px 7px); border-inline: 1px solid #9a6b4266; }
 .ruler { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; padding: 0 1px; }
 .timeline { position: relative; height: 52px; margin-top: 6px; }
 .timeline-track {

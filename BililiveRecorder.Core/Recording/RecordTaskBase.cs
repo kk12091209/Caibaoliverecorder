@@ -55,7 +55,9 @@ namespace BililiveRecorder.Core.Recording
         protected int ioDiskWrittenBytes;
 
         private DateTimeOffset ioStatsLastTrigger;
-        private TimeSpan durationSinceNoDataReceived;
+        protected readonly Stopwatch progressClock = new();
+        protected readonly RecordingProgressWatchdog progressWatchdog = new();
+        protected virtual bool TracksMediaProgress => false;
 
         protected RecordTaskBase(IRoom room, ILogger logger, IApiClient apiClient, UserScriptRunner userScriptRunner)
         {
@@ -112,7 +114,8 @@ namespace BililiveRecorder.Core.Recording
             var stream = await this.GetStreamAsync(fullUrl: fullUrl, timeout: (int)this.room.RoomConfig.TimingStreamConnect).ConfigureAwait(false);
 
             this.ioStatsLastTrigger = DateTimeOffset.UtcNow;
-            this.durationSinceNoDataReceived = TimeSpan.Zero;
+            this.progressClock.Restart();
+            this.progressWatchdog.Start(0, this.TracksMediaProgress);
 
             this.ct.Register(state => _ = Task.Run(async () =>
             {
@@ -157,7 +160,6 @@ namespace BililiveRecorder.Core.Recording
                 this.ioStatsLastTrigger = endTime;
                 durationDiff = endTime - startTime;
 
-                this.durationSinceNoDataReceived = networkDownloadBytes > 0 ? TimeSpan.Zero : this.durationSinceNoDataReceived + durationDiff;
 
                 // disks
                 lock (this.ioDiskStatsLock) // 锁硬盘统计
@@ -172,6 +174,14 @@ namespace BililiveRecorder.Core.Recording
             var netMbps = networkDownloadBytes * (8d / 1024d / 1024d) / durationDiff.TotalSeconds;
             var diskMBps = diskWriteBytes / (1024d * 1024d) / diskWriteDuration.TotalSeconds;
 
+            var stalled = this.progressWatchdog.Check(this.progressClock.Elapsed.TotalMilliseconds, networkDownloadBytes, this.room.RoomConfig.TimingWatchdogTimeout);
+            if (!this.timeoutTriggered && stalled is not null)
+            {
+                this.timeoutTriggered = true;
+                this.logger.Warning("录制进度异常：{Reason}；主动断开以重新连接", stalled);
+                this.RequestStop();
+            }
+
             this.OnIOStats(new IOStatsEventArgs
             {
                 StreamHost = this.streamHost,
@@ -185,12 +195,7 @@ namespace BililiveRecorder.Core.Recording
                 DiskMBps = diskMBps,
             });
 
-            if ((!this.timeoutTriggered) && (this.durationSinceNoDataReceived.TotalMilliseconds > this.room.RoomConfig.TimingWatchdogTimeout))
-            {
-                this.timeoutTriggered = true;
-                this.logger.Warning("检测到录制卡住，可能是网络或硬盘原因，将会主动断开连接");
-                this.RequestStop();
-            }
+
         }
 
         protected (string fullPath, string relativePath) CreateFileName()

@@ -59,6 +59,8 @@ export class Store {
     if (!this.all('PRAGMA table_info(jobs)').some(c => c.name === 'mode')) this.db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'clean'");
     if (!this.all('PRAGMA table_info(source_storage)').some(c => c.name === 'eligible')) this.db.exec('ALTER TABLE source_storage ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0');
     for(const name of ['avatar','avatar_key'])if(!this.all('PRAGMA table_info(linkmic_people)').some(c=>c.name===name))this.db.exec(`ALTER TABLE linkmic_people ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS jobs_session_status_created ON jobs(session,status,created);
+      CREATE INDEX IF NOT EXISTS sources_session_start ON sources(session,start);`);
     this.recoveryCount=0;
     this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();

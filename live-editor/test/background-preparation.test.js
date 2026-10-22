@@ -270,6 +270,50 @@ test('full dual export reconciles while foreground is busy; deleting its output 
   f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','dual','dual','done',data.output.file,'dual',JSON.stringify(data));
   f.state.foreground=true;await f.scheduler.tick();
   assert.equal(f.scheduler.status('dual').status,'exported');assert.deepEqual(f.state.calls,[]);
-  await fs.unlink(file);await f.scheduler.tick();assert.equal(f.scheduler.status('dual').status,'queued');assert.deepEqual(f.state.calls,[]);
+  await fs.unlink(file);f.state.now+=30000;await f.scheduler.tick();assert.equal(f.scheduler.status('dual').status,'queued');assert.deepEqual(f.state.calls,[]);
   f.state.foreground=false;await f.scheduler.tick();assert.equal(f.scheduler.status('dual').status,'ready');
+});
+
+test('historical reconciliation is bounded and unchanged paused history has no per-session polling',async t=>{
+  const f=await fixture(t,{schedulerOptions:{enabled:false,reconciliationOptions:{batchSize:10}}});
+  for(let i=0;i<45;i++){const id='history-'+i;f.add(id);f.scheduler.enqueue(id);await f.scheduler.pause(id);}
+  await f.scheduler.tick();
+  assert.ok(f.store.get('SELECT COUNT(*) AS n FROM preparation_export_dirty').n>=35);
+  for(let i=0;i<8;i++)await f.scheduler.tick();
+  assert.equal(f.store.get('SELECT COUNT(*) AS n FROM preparation_export_dirty').n,0);
+  const queries=[],get=f.store.get.bind(f.store),all=f.store.all.bind(f.store);
+  f.store.get=(sql,...args)=>{queries.push(sql);return get(sql,...args);};
+  f.store.all=(sql,...args)=>{queries.push(sql);return all(sql,...args);};
+  await f.scheduler.tick();assert.ok(queries.length<10,queries.join('\n'));
+  assert.ok(!queries.some(sql=>sql.includes('FROM jobs WHERE session=')));
+  const id='history-20',file=path.join(f.root,'changed.mp4');await fs.writeFile(file,'saved');
+  f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','changed',id,'done',file,'danmaku',JSON.stringify({scope:'full',ranges:[{start:0,end:120}],excluded:[],output:{file,danmakuFile:file}}));
+  await f.scheduler.tick();assert.equal(f.scheduler.status(id).status,'exported');
+  f.store.run("DELETE FROM jobs WHERE id='changed'");await f.scheduler.tick();assert.equal(f.scheduler.status(id).status,'queued');
+});
+
+test('pending history cannot cause a queued full export to be redundantly rendered',async t=>{
+  const f=await fixture(t,{schedulerOptions:{reconciliationOptions:{batchSize:1}}});
+  for(let i=0;i<4;i++){f.add('old-'+i);f.scheduler.enqueue('old-'+i);await f.scheduler.pause('old-'+i);}
+  f.add('new');f.scheduler.enqueue('new');const file=path.join(f.root,'full.mp4');await fs.writeFile(file,'saved');
+  f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','full','new','done',file,'danmaku',JSON.stringify({scope:'full',ranges:[{start:0,end:120}],excluded:[],output:{file,danmakuFile:file}}));
+  await f.scheduler.tick();assert.equal(f.scheduler.status('new').status,'exported');assert.deepEqual(f.state.calls,[]);
+});
+
+test('reconciliation changes follow transaction rollback and tracking is connection-local',async t=>{
+  const f=await fixture(t);f.add('a');f.scheduler.enqueue('a');await f.scheduler.tick();await f.scheduler.tick();
+  assert.equal(f.store.get('SELECT COUNT(*) AS n FROM preparation_export_dirty').n,0);
+  assert.throws(()=>f.store.transaction(()=>{f.store.run("UPDATE sessions SET duration=121 WHERE id='a'");throw new Error('rollback');}),/rollback/);
+  assert.equal(f.store.get('SELECT COUNT(*) AS n FROM preparation_export_dirty').n,0);
+  assert.equal(f.store.get("SELECT name FROM sqlite_master WHERE name='preparation_export_dirty'"),undefined);
+  assert.match(f.store.all("EXPLAIN QUERY PLAN SELECT * FROM jobs WHERE session=? AND status='done' ORDER BY created DESC",'a').map(row=>row.detail).join(' '),/jobs_session_status_created/);
+});
+
+test('a newly saved export takes priority over the startup history backlog',async t=>{
+  const f=await fixture(t,{schedulerOptions:{enabled:false,reconciliationOptions:{batchSize:1}}});
+  for(let i=0;i<10;i++){f.add('history-'+i);f.scheduler.enqueue('history-'+i);await f.scheduler.pause('history-'+i);}
+  const next=await f.restart(),id='history-9',file=path.join(f.root,'priority.mp4');await fs.writeFile(file,'saved');
+  f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','priority',id,'done',file,'danmaku',JSON.stringify({scope:'full',ranges:[{start:0,end:120}],excluded:[],output:{file,danmakuFile:file}}));
+  await next.tick();assert.equal(next.status(id).status,'exported');
+  assert.ok(f.store.get('SELECT COUNT(*) AS n FROM preparation_export_dirty').n>=9);
 });

@@ -10,6 +10,7 @@ import TimelineSignals from './components/TimelineSignals.vue';
 import TimelineNavigator from './components/TimelineNavigator.vue';
 import TimelineMarker from './components/TimelineMarker.vue';
 import { signalWindow, viewWindow, windowPercent, visibleRange, panWindow, zoomWindow } from './timeline-signals.js';
+import { recordingCoverage } from './recording-coverage.js';
 import DismissibleNotice from './components/DismissibleNotice.vue';
 import appIcon from './assets/app-icon.png';
 import { roomAvailable, roomRecordEnabled, roomStatus } from './room-status.js';
@@ -18,6 +19,7 @@ import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecord
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
 import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
+import { stateSync } from './state-sync.js';
 import { previewStream } from './preview-stream.js';
 import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
 
@@ -97,11 +99,13 @@ const selectedPreparation=computed(()=>preparationFor(selected.value));
 const selectedPreparationAction=computed(()=>preparationAction(selectedPreparation.value));
 const selectedPreparationBlock=computed(()=>preparationActionBlock(activeSession.value));
 const duration=computed(()=>activeSession.value?.duration||0);
+const coverage=computed(()=>recordingCoverage(detail.value?.sources,duration.value));
 const timelineWindow=ref(null),signals=shallowRef(null),signalsLoading=ref(false),signalsError=ref('');
 const timelineDragging=ref(false);
 const viewport=computed(()=>viewWindow(duration.value,timelineWindow.value));
 const viewSpan=computed(()=>viewport.value.to-viewport.value.from);
 const visibleRanges=computed(()=>edit.value.ranges.map((range,index)=>({range,index,view:visibleRange(range,viewport.value.from,viewport.value.to)})).filter(item=>item.view));
+const visibleGaps=computed(()=>coverage.value.gaps.map(gap=>({gap,view:visibleRange(gap,viewport.value.from,viewport.value.to)})).filter(item=>item.view));
 const draftView=computed(()=>draftStart.value!==null&&draftEnd.value!==null?visibleRange({start:draftStart.value,end:draftEnd.value},viewport.value.from,viewport.value.to):null);
 const sliderPosition=computed(()=>Math.min(viewport.value.to,Math.max(viewport.value.from,position.value)));
 const source=computed(()=>detail.value?.sources?.find(s=>position.value>=s.start-.02&&position.value<=s.start+s.duration+.1));
@@ -124,7 +128,7 @@ const exportBlock=computed(()=>{
   return exportRanges.value.length?'':'请先勾选至少一个选段。';
 });
 const canPreview=computed(()=>selectionReady.value&&duration.value>0.1);
-let eventSource,timer,messageTimer,signalsTimer,queryTimer,noticeTimer,refreshBusy=false,dmBusy=false,lastMessageKey='',generation=0,selectionGeneration=0;
+let messageTimer,signalsTimer,queryTimer,noticeTimer,detailBusy=false,detailRefreshedAt=0,dmBusy=false,lastMessageKey='',generation=0,selectionGeneration=0;
 let messageRequest=0,overlayRequest=0,signalRequest=0,signalController=null,lastSignalKey='',lastSignalAt=0;
 let windowSignalTimer=null,lastWindowRequestAt=0,disposing=false;
 let jobPreviewRequest=0;
@@ -336,10 +340,17 @@ async function confirmRemoval(){if(!['remove-room','delete-session'].includes(mo
 }catch(e){if(kind==='delete-session'){materialDeleteError.value=e.name==='TimeoutError'?'请求确认超时，可查看清理进度或重试；已受理的清理会继续。':e.message;tell(materialDeleteError.value);void refresh();}else tell(e.message);}finally{modalBusy.value=false;}}
 function statusText(s){return ({recording:'录制中',waiting:'等待重连',finishing:'整理中',finished:'已完成',importing:'整理中'})[s]||s;}
 function tell(text,kind='error'){noticeSequence.value++;notice.value=text;noticeKind.value=kind;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>notice.value='',8000);}
-async function refresh(){if(refreshBusy)return;refreshBusy=true;try{
-  applyState(await api('state'));connected.value=true;
-  if(selected.value&&selectionReady.value){const id=selected.value,version=selectionGeneration,result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration){detail.value=result;if(previewEnded.value&&isPlaying.value)playNext();}}
-}catch(e){connected.value=false;}finally{refreshBusy=false;}}
+const stateTransport=stateSync({read:signal=>api('state',undefined,{signal}),apply:applyState,connected:value=>connected.value=value,detail:()=>refreshDetail()});
+async function refreshDetail(force=false){
+  if(disposing||detailBusy||!selected.value||!selectionReady.value||(!force&&document.hidden))return;
+  const id=selected.value,version=selectionGeneration,current=activeSession.value;
+  const settled=detail.value?.id===id&&current?.status==='finished'&&detail.value.status==='finished'&&detail.value.duration===current.duration&&detail.value.sources.every(s=>s.metadata||!s.duration);
+  if(!force&&settled&&Date.now()-detailRefreshedAt<30000)return;
+  detailBusy=true;
+  try{const result=await api(`sessions/${id}`,undefined,{signal:AbortSignal.timeout(8000)});if(!disposing&&selected.value===id&&version===selectionGeneration){detail.value=result;detailRefreshedAt=Date.now();if(previewEnded.value&&isPlaying.value)playNext();}}
+  catch{}finally{detailBusy=false;}
+}
+async function refresh(){await stateTransport.refresh();await refreshDetail(true);}
 async function choose(id){
   if(selected.value===id){closeContext();resetSelection();return;}
   const version=++selectionGeneration;
@@ -456,10 +467,10 @@ async function exportClip(){if(modalBusy.value)return;if(exportBlock.value){tell
 function onKey(e){if(e.key==='Escape'){const jobId=jobMenu.value?.id;closeContext();closeModal();if(jobId)focusJob(jobId);return;}if(sessionMenu.value||jobMenu.value)return;if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||modal.value)return;if(e.code==='Space'){e.preventDefault();void togglePlay();}else if(e.code==='ArrowLeft'){e.preventDefault();step(-1);}else if(e.code==='ArrowRight'){e.preventDefault();step(1);}else if(e.key.toLowerCase()==='i')setMark('start');else if(e.key.toLowerCase()==='o')setMark('end');}
 watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(true);});
 watch(timelineWindow,()=>{invalidateSignals();signalsError.value='';queueWindowSignals(!timelineDragging.value);},{flush:'sync'});
-onMounted(async()=>{await refresh();if(disposing)return;eventSource=new EventSource('/api/events');eventSource.onmessage=e=>{applyState(JSON.parse(e.data));connected.value=true;};eventSource.onerror=()=>connected.value=false;timer=setInterval(refresh,2500);messageTimer=setInterval(()=>{void loadMessages(true);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);});
+onMounted(()=>{stateTransport.start();messageTimer=setInterval(()=>{void loadMessages(true);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);});
 onMounted(()=>window.addEventListener('pagehide',releasePagePreview));
 onBeforeUnmount(()=>window.removeEventListener('pagehide',releasePagePreview));
-onBeforeUnmount(()=>{previewTransport?.dispose();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();eventSource?.close();clearInterval(timer);clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);});
+onBeforeUnmount(()=>{previewTransport?.dispose();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();stateTransport.close();clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);});
 onMounted(()=>{panelBreakpoint.addEventListener('change',updatePanelBreakpoint);compactBreakpoint.addEventListener('change',updatePanelBreakpoint);});
 onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBreakpoint);compactBreakpoint.removeEventListener('change',updatePanelBreakpoint);});
 </script>
@@ -506,6 +517,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         </div>
         <div class="playback-toolbar"><div class="playback-left"><button class="icon-button" aria-label="上一帧" title="上一帧（左方向键）" :disabled="!canPreview" @click="step(-1)"><StepBack :size="21"/></button><button class="icon-button play" :disabled="!canPreview" :aria-label="isPlaying?'暂停':'播放'" @click="togglePlay"><Pause v-if="isPlaying" :size="25"/><Play v-else :size="25"/></button><button class="icon-button" aria-label="下一帧" title="下一帧（右方向键）" :disabled="!canPreview" @click="step(1)"><StepForward :size="21"/></button><div class="preview-volume" :class="{open:previewVolumeOpen}" @pointerenter="openPreviewVolume" @pointerleave="leavePreviewVolume" @pointerdown="previewVolumeDown"><button type="button" class="icon-button" :disabled="!canPreview" :aria-pressed="previewMuted||previewVolume===0" :aria-label="previewMuted||previewVolume===0?'恢复预览声音':'静音预览'" :title="(previewMuted||previewVolume===0?'预览已静音，点击恢复声音':'点击静音预览')+'。只改变这里的播放，导出视频的声音不变'" @click="togglePreviewMute"><VolumeX v-if="previewMuted||previewVolume===0" :size="18"/><Volume1 v-else-if="previewVolume<0.5" :size="18"/><Volume2 v-else :size="18"/></button><div class="preview-volume-pop"><div class="preview-volume-rotator"><input type="range" min="0" max="100" step="1" :value="Math.round(previewSlider*100)" :disabled="!canPreview" aria-label="预览音量" :title="'预览音量 '+Math.round(previewSlider*100)+'%'" @input="setPreviewVolume"/></div></div></div><span class="playback-time">{{ format(position) }} <span>/ {{ format(duration) }}</span></span></div><div class="playback-right"><button class="button subtle" :disabled="!canPreview" @click="playFrom(Math.max(0,duration-3),true)"><RotateCcw :size="16"/>回到最新</button><label class="checkbox"><input v-model="showOverlay" type="checkbox"/>弹幕预览</label></div></div>
         <section class="timeline-section" aria-label="连续录像时间轴" :data-view-from="viewport.from" :data-view-to="viewport.to">
+          <div v-if="coverage.gaps.length" class="recording-gap-notice" role="status"><AlertCircle :size="15"/><div><strong>有 {{ coverage.gaps.length }} 处录制空档，共 {{ format(coverage.missing) }}</strong><span>时间跨度 {{ format(duration) }} · 可用片段 {{ format(coverage.available) }}。斜纹区域没有录制片段，定位到这里会跳到下一段。</span></div></div>
           <div class="timeline-view-controls"><span class="timeline-window-label">{{ timelineWindow?'局部查看':'全场' }} · {{ format(viewSpan) }}</span><div class="timeline-zoom" role="group" aria-label="时间轴查看范围" @keydown.stop>
             <button class="timeline-zoom-icon" type="button" aria-label="缩小时间轴" title="缩小时间轴，显示更长范围" :disabled="!canPreview||viewSpan>=duration-.001" @click="zoomTimeline(2)"><Minus :size="14"/></button>
             <button class="timeline-zoom-icon" type="button" aria-label="放大时间轴" title="放大时间轴，最小查看10秒" :disabled="!canPreview||viewSpan<=Math.min(10,duration)+.001" @click="zoomTimeline(.5)"><Plus :size="14"/></button>
@@ -516,6 +528,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <div class="ruler"><span v-for="n in 5" :key="n" :class="{'ruler-quarter':n===2||n===4}">{{ format(viewport.from+(viewport.to-viewport.from)*(n-1)/4) }}</span></div>
           <div id="timeline-tracks" class="timeline-tracks"><div class="timeline"><div class="timeline-track"/>
             <TimelineSignals kind="audio" :audio="signals?.audio" :from="viewport.from" :to="viewport.to" :data-from="signals?.from??viewport.from" :data-to="signals?.to??viewport.to" :selected="selectionReady" :loading="signalsLoading" :error="signalsError"/>
+            <div v-for="{gap,view} in visibleGaps" :key="gap.start" class="recording-gap" :style="rangeStyle(view)" :aria-label="'录制空档：'+format(gap.start)+' 至 '+format(gap.end)"/>
             <div v-if="draftView" class="draft-range" :style="rangeStyle(draftView)"/>
             <TimelineMarker v-if="inViewport(draftStart)" kind="start" :time="draftStart" :from="viewport.from" :to="viewport.to" :min="0" :max="draftEnd!==null&&draftEnd>0?draftEnd-.001:duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('start',$event)" @commit="previewMark" @start="timelineDragging=true" @end="endTimelineDrag"/>
             <TimelineMarker v-if="inViewport(draftEnd)" kind="end" :time="draftEnd" :from="viewport.from" :to="viewport.to" :min="draftStart!==null&&draftStart<duration?draftStart+.001:0" :max="duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('end',$event)" @commit="previewMark" @start="timelineDragging=true" @end="endTimelineDrag"/>

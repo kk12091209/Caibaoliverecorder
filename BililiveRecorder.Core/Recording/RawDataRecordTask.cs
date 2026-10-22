@@ -81,6 +81,7 @@ namespace BililiveRecorder.Core.Recording
 #endif
 
                     this.ioDiskStopwatch.Stop();
+                    this.progressWatchdog.Written(this.progressClock.Elapsed.TotalMilliseconds, bytesRead);
 
                     lock (this.ioDiskStatsLock)
                     {

@@ -1,4 +1,6 @@
 using System.Threading;
+using System.Linq;
+using BililiveRecorder.Flv;
 using BililiveRecorder.Flv.Pipeline;
 using BililiveRecorder.Flv.Pipeline.Actions;
 
@@ -19,6 +21,17 @@ namespace BililiveRecorder.Core.ProcessingRules
         public void Run(FlvProcessingContext context, System.Action next)
         {
             var flag = Interlocked.Exchange(ref this.splitFlag, FLAG_NONE);
+
+            // Long GOPs can be written in bounded batches. A requested new
+            // file must still wait for the next decodable video keyframe.
+            var firstVideo = context.Actions.OfType<PipelineDataAction>()
+                .SelectMany(data => data.Tags).FirstOrDefault(tag => tag.Type == TagType.Video && tag.IsData());
+            if (FLAG_BEFORE == flag && firstVideo is not null && !firstVideo.IsKeyframeData())
+            {
+                Interlocked.CompareExchange(ref this.splitFlag, flag, FLAG_NONE);
+                next();
+                return;
+            }
 
             if (FLAG_BEFORE == flag)
             {

@@ -1,17 +1,13 @@
-import fs from 'node:fs/promises';
-import {normalizedDanmakuStyle,savedDanmakuStyle} from '../shared/danmaku-style.js';
-import {chatRate} from './chat-rules.js';
-import { exportedJobFile } from './output-names.js';
+import {PreparationReconciliation} from './preparation-reconciliation.js';
 
 const ACTIVE = new Set(['recording', 'waiting', 'finishing', 'importing']);
 const interrupted = error => ['AbortError', 'PREP_CANCELLED', 'ABORT_ERR'].includes(error?.name) || ['PREP_CANCELLED', 'ABORT_ERR'].includes(error?.code);
 const finite = (value, fallback = 0) => Number.isFinite(value) && value >= 0 ? value : fallback;
-const renderingKey = edit => JSON.stringify([[...new Set(edit.excluded||[])].sort(),edit.filterLottery!==false,edit.font?.id||null,normalizedDanmakuStyle(edit.danmakuStyle),edit.danmakuPerSecond??50]);
 
 // Scheduling only: render plans, fingerprints, immutable files and disk limits
 // belong to Media/RenderCache. User export jobs are never modified here.
 export class BackgroundPreparation {
-  constructor(store, media, { busyReason = () => '', now = Date.now, pollMs = 1000, idleGraceMs = 3000, enabled = true } = {}) {
+  constructor(store, media, { busyReason = () => '', now = Date.now, pollMs = 1000, idleGraceMs = 3000, enabled = true, reconciliationOptions } = {}) {
     this.store = store; this.media = media; this.busyReason = busyReason; this.now = now;
     this.pollMs = Math.max(10, finite(pollMs, 1000)); this.idleGraceMs = finite(idleGraceMs, 3000);
     this.closed = false; this.started = false; this.timer = null; this.wakeTimer = null; this.active = null;
@@ -23,7 +19,8 @@ export class BackgroundPreparation {
       session TEXT PRIMARY KEY REFERENCES sessions(id),status TEXT NOT NULL DEFAULT 'queued',
       prepared_seconds REAL NOT NULL DEFAULT 0,total_seconds REAL NOT NULL DEFAULT 0,bytes REAL NOT NULL DEFAULT 0,
       reason TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL DEFAULT '',
-      paused INTEGER NOT NULL DEFAULT 0,next_retry REAL NOT NULL DEFAULT 0,generation INTEGER NOT NULL DEFAULT 0);`);
+      paused INTEGER NOT NULL DEFAULT 0,next_retry REAL NOT NULL DEFAULT 0,generation INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS preparation_status_session ON preparation_jobs(status,session);`);
     const saved = store.setting('backgroundPreparationEnabled');
     this.enabled = typeof saved === 'boolean' ? saved : enabled !== false;
     if (typeof saved !== 'boolean') store.setting('backgroundPreparationEnabled', this.enabled);
@@ -33,6 +30,7 @@ export class BackgroundPreparation {
       this.discover(first);
       if (first) store.setting('backgroundPreparationBaselineEstablished', true);
     });
+    this.reconciliation=new PreparationReconciliation(this,reconciliationOptions);
   }
   stamp() { return new Date(this.now()).toISOString(); }
   ensureOpen() { if (this.closed) throw new Error('后台预处理服务已关闭。'); }
@@ -78,36 +76,7 @@ export class BackgroundPreparation {
     return '';
   }
   row(id) { return this.store.get('SELECT * FROM preparation_jobs WHERE session=?', id); }
-  reconcileExports() {
-    if(this.closed)return Promise.resolve();
-    if(this.reconciling)return this.reconciling;
-    this.reconciling=this.reconcileExportRows().finally(()=>{this.reconciling=null;});
-    return this.reconciling;
-  }
-  async reconcileExportRows() {
-    // A finished full baked export fulfils the user's need, even when its
-    // missing parts were rendered directly rather than added to render-cache.
-    for(const row of this.store.all("SELECT p.session FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' AND s.status='finished'")) {
-      const id=row.session;if(!this.available(id))continue;
-      const session=this.store.session(id),currentKey=renderingKey({...this.store.edit(id),font:this.media.fonts?.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store)});
-      let matched=false;
-      for(const job of this.store.all("SELECT * FROM jobs WHERE session=? AND status='done' AND mode IN ('danmaku','dual') ORDER BY created DESC",id)) {
-        let data;try{data=JSON.parse(job.data);}catch{continue;}
-        if(data.scope!=='full'||data.ranges?.length!==1||data.ranges[0].start!==0||Math.abs(data.ranges[0].end-session.duration)>.001||renderingKey(data)!==currentKey)continue;
-        const file=exportedJobFile(job,'danmaku');if(!file)continue;
-        try {const stat=await fs.stat(file);if(!stat.isFile()||stat.size<=0)continue;} catch {continue;}
-        if(this.closed||!this.available(id))return;
-        // Recheck after I/O: deletion/editing may have changed the evidence.
-        const currentJob=this.store.get('SELECT status,data FROM jobs WHERE id=?',job.id);
-        if(currentJob?.status!=='done'||currentJob.data!==job.data||renderingKey({...this.store.edit(id),font:this.media.fonts?.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store)})!==currentKey)continue;
-        await this.interrupt('exported',id);
-        if(this.closed||!this.available(id)||renderingKey({...this.store.edit(id),font:this.media.fonts?.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store)})!==currentKey)return;
-        this.store.run("UPDATE preparation_jobs SET status='exported',reason='',error='',paused=0,next_retry=0,updated=? WHERE session=? AND status!='exported'",this.stamp(),id);
-        matched=true;break;
-      }
-      if(!matched&&this.row(id)?.status==='exported')this.store.run("UPDATE preparation_jobs SET status='queued',reason='',updated=? WHERE session=?",this.stamp(),id);
-    }
-  }
+  reconcileExports() { return this.reconciliation.tick(); }
   available(id) { return !this.closed && !this.blocked.has(id) && !this.changing.has(id) && !this.store.deletions?.has(id) && !!this.store.session(id); }
   waitRows(reason) {
     this.store.run("UPDATE preparation_jobs SET status='waiting',reason=?,updated=? WHERE paused=0 AND status IN ('queued','preparing','waiting') AND (status!='waiting' OR reason!=?)", reason, this.stamp(), reason);
@@ -150,6 +119,10 @@ export class BackgroundPreparation {
       if (session.status !== 'finished' || !sources.length || sources.some(source => source.closed !== 2 || source.error)) {
         this.store.run("UPDATE preparation_jobs SET status='waiting',reason='source' WHERE session=?", row.session); continue;
       }
+      // A newly queued item must be checked even if history spans many batches.
+      await this.reconciliation.check(row.session);
+      if(this.closed||this.gate()||this.active)return this.active?.done;
+      if(!this.available(row.session)||!['queued','waiting'].includes(this.row(row.session)?.status))continue;
       const active = { id: row.session, generation: row.generation, controller: new AbortController(), reason: '', done: null };
       this.active = active;
       this.store.run("UPDATE preparation_jobs SET status='preparing',reason='',error='',updated=? WHERE session=?", this.stamp(), row.session);
@@ -208,7 +181,7 @@ export class BackgroundPreparation {
     if (this.active?.id === id && !this.row(id)?.paused) return this.status(id);
     this.store.run("INSERT INTO preparation_jobs(session,total_seconds,updated) VALUES(?,?,?) ON CONFLICT(session) DO NOTHING", id, finite(session.duration), this.stamp());
     this.store.run('UPDATE preparation_jobs SET paused=0,status=?,reason=?,error=?,next_retry=0,updated=? WHERE session=?', this.enabled ? 'queued' : 'waiting', this.enabled ? '' : 'disabled', '', this.stamp(), id);
-    this.wake(); return this.status(id);
+    this.reconciliation.mark(id);this.wake(); return this.status(id);
   }
   async pause(id) {
     this.ensureOpen(); this.session(id);
@@ -232,6 +205,7 @@ export class BackgroundPreparation {
   }
   async invalidate(id) {
     if (this.closed || !this.store.session(id)) return;
+    this.reconciliation.mark(id);
     this.changing.set(id, (this.changing.get(id) || 0) + 1);
     try {
       const capacity = this.row(id)?.next_retry === Number.MAX_SAFE_INTEGER;
@@ -264,7 +238,7 @@ export class BackgroundPreparation {
     if (this.closing) return this.closing;
     this.closed = true; this.started = false;
     clearInterval(this.timer); clearImmediate(this.wakeTimer); this.timer = null; this.wakeTimer = null;
-    this.closing = Promise.all([this.interrupt('closed'),this.reconciling]);
+    this.closing = Promise.all([this.interrupt('closed'),this.reconciliation.close()]);
     return this.closing;
   }
 }

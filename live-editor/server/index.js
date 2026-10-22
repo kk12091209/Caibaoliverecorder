@@ -343,7 +343,7 @@ async function createManagedApp(options,runtime) {
     for(const s of store.all("SELECT * FROM sessions WHERE status IN ('importing','finishing')")){
       const sources=store.sources(s.id);if(sources.length&&sources.every(x=>x.closed===2))store.run("UPDATE sessions SET status='finished' WHERE id=?",s.id);
     }
-    for(const client of clients)if(!client.writableNeedDrain)client.write(`data: ${JSON.stringify(snapshot())}\n\n`);
+    if(clients.size){const message=`data: ${JSON.stringify(snapshot())}\n\n`;for(const client of clients)if(!client.writableNeedDrain)client.write(message);}
     }catch(error){diagnostics.record('界面状态推送',error,{level:'错误'});}
   },1000);
   const diagnosticPoll=()=>{

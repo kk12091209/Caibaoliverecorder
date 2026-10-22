@@ -18,6 +18,7 @@ export function safeLog(value,depth=0,secrets=[]){
   return text.slice(0,1600);
 }
 export function recordingReason(room,{biliOnline=true}={}){
+  if(room.recordingEnabled!==false&&room.recordingHealth?.message)return room.recordingHealth.message;
   if(room.recording)return '正在录制';
   if(room.recordingEnabled===false)return '用户未启用录制或已停止；不会自动开始';
   if(room.error)return `录制或平台连接异常：${safeLog(room.error)}`;
@@ -128,7 +129,7 @@ export class DailyDiagnostics{
     for(const room of rooms.slice(0,64)){
       const id=`room:${room.platform||'bilibili'}:${room.roomId}`;keep.add(id);
       const reason=recordingReason(room,context);
-      this.observe(id,`${room.platform==='douyin'?'抖音':'B站'}直播间 ${room.roomId}：${reason}${room.chatError?`；弹幕：${safeLog(room.chatError)}`:''}`,room.error?'警告':'信息');
+      this.observe(id,`${room.platform==='douyin'?'抖音':'B站'}直播间 ${room.roomId}：${reason}${room.chatError?`；弹幕：${safeLog(room.chatError)}`:''}`,room.error||room.recordingHealth?'警告':'信息');
     }
     for(const key of this.observed.keys())if(key.startsWith('room:')&&!keep.has(key))this.observed.delete(key);
   }

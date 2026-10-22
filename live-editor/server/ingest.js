@@ -106,9 +106,9 @@ export class Ingestor {
     state.seq++; state.parts = []; state.keys = []; state.bytes = 0; state.start = null;
   }
   async readDanmaku(source) {
-    if (!this.store.session(source.session)) return;
     const previous = this.xmlStates.get(source.id);
     if (source.closed === 2 && (previous?.complete || previous?.nextCheck > this.now())) return;
+    if (!this.store.session(source.session)) return;
     const current = this.store.get('SELECT xmlpos,closed FROM sources WHERE id=?', source.id);
     if (!current) return;
     const state = previous || { complete: false, nextCheck: 0, signature: null, changedAt: this.now() };

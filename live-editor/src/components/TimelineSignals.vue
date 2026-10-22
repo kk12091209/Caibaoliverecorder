@@ -33,7 +33,7 @@ function draw() {
         context.fillStyle='rgba(255,125,146,.95)';context.fillRect(x,h/2-rms,bw,rms*2);
       }
       if(bin.state==='pending'||bin.pending){context.fillStyle='rgba(255,125,146,.28)';context.fillRect(x,h-3,bw,2);}
-      if(bin.state==='unavailable'){context.fillStyle='rgba(218,79,62,.35)';context.fillRect(x,h/2-.5,bw,1);}
+      if(bin.state==='unavailable'){context.fillStyle='rgba(145,105,80,.16)';context.fillRect(x,2,bw,h-4);}
     }
   } else {
     const bins=aggregateDensity(props.density?.bins,Math.max(1,Math.min(w,span)/3)),max=Math.max(1,...bins),scale=Math.log1p(max);

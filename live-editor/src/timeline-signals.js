@@ -59,6 +59,7 @@ export function audioStateLabel(audio,{selected=false,loading=false,error=''}={}
   if(!bins.length)return loading||!audio?'波形准备中…':audio.status==='unavailable'?'波形无法读取':'波形准备中…';
   if(bins.every(bin=>bin?.state==='unavailable'))return '波形无法读取';
   if(bins.some(bin=>bin?.state==='pending')||audio.status==='pending')return bins.some(bin=>bin?.state==='ready')?'波形生成中…':'波形准备中…';
+  if(bins.some(bin=>bin?.state==='unavailable'))return '音频波形 · 部分区间无法读取';
   if(bins.every(bin=>bin?.state==='silent'))return '音频静音';
   return '音频波形';
 }

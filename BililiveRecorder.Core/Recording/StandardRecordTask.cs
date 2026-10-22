@@ -35,6 +35,8 @@ namespace BililiveRecorder.Core.Recording
         private readonly FlvProcessingContext context = new FlvProcessingContext();
         private readonly IDictionary<object, object?> session = new Dictionary<object, object?>();
 
+        private RecordingStatsEventArgs? pendingStats;
+        protected override bool TracksMediaProgress => true;
         private ITagGroupReader? reader;
         private IFlvProcessingContextWriter? writer;
 
@@ -87,6 +89,7 @@ namespace BililiveRecorder.Core.Recording
                     Qn = this.qn,
                     QnDescription = StreamQualityNumber.MapToString(this.qn),
                 };
+                this.progressWatchdog.NewFile();
                 this.OnRecordFileOpening(e);
                 return e;
             });
@@ -154,7 +157,9 @@ namespace BililiveRecorder.Core.Recording
             }
             finally
             {
-                this.timer.Stop();
+                // Drain already received frames after EOF without treating the
+                // closed input as another network stall. Output stays guarded.
+                this.progressWatchdog.InputEnded();
 #if NET6_0_OR_GREATER
                 await stream.DisposeAsync().ConfigureAwait(false);
 #else
@@ -180,14 +185,31 @@ namespace BililiveRecorder.Core.Recording
 
                     this.context.Reset(group, this.session);
 
+                    this.pendingStats = null;
                     this.pipeline(this.context);
 
                     if (this.context.Comments.Count > 0)
                         this.logger.Debug("修复逻辑输出 {@Comments}", this.context.Comments);
 
+                    var videoTimestamp = -1;
+                    var audioTimestamp = -1;
+                    foreach (var action in this.context.Actions)
+                    {
+                        if (action is PipelineNewFileAction) videoTimestamp = audioTimestamp = -1;
+                        if (action is PipelineDataAction data) foreach (var tag in data.Tags)
+                        {
+                            if ((tag.Flag & TagFlag.Header) != 0) continue;
+                            if (tag.Type == TagType.Video) videoTimestamp = Math.Max(videoTimestamp, tag.Timestamp);
+                            if (tag.Type == TagType.Audio) audioTimestamp = Math.Max(audioTimestamp, tag.Timestamp);
+                        }
+                    }
                     this.ioDiskStopwatch.Restart();
                     var bytesWritten = await this.writer.WriteAsync(this.context).ConfigureAwait(false);
                     this.ioDiskStopwatch.Stop();
+                    var stats = this.pendingStats;
+                    this.progressWatchdog.Written(this.progressClock.Elapsed.TotalMilliseconds, bytesWritten,
+                        videoTimestamp, audioTimestamp);
+                    if (stats is not null) this.OnRecordingStats(stats);
 
                     lock (this.ioDiskStatsLock)
                     {
@@ -223,12 +245,12 @@ namespace BililiveRecorder.Core.Recording
             }
             finally
             {
+                this.RequestStop();
+                this.timer.Stop();
                 this.reader?.Dispose();
                 this.reader = null;
                 this.writer?.Dispose();
                 this.writer = null;
-                this.RequestStop();
-
                 this.OnRecordSessionEnded(EventArgs.Empty);
 
                 this.logger.Information("录制结束");
@@ -287,7 +309,7 @@ namespace BililiveRecorder.Core.Recording
                     break;
             }
 
-            this.OnRecordingStats(e);
+            this.pendingStats = e;
         }
 
         internal class WriterTargetProvider : IFlvWriterTargetProvider
