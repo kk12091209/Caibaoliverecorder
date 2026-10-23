@@ -1,0 +1,44 @@
+name: caibao-downloader
+services:
+  downloader:
+    image: caibao-downloader:${DOWNLOADER_BUILD:?Set an immutable build id}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.downloader
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    environment:
+      NODE_ENV: production
+      DOWNLOADER_HOST: 0.0.0.0
+      DOWNLOADER_PORT: "8790"
+      DOWNLOADER_PUBLIC_ORIGIN: https://caibao.media
+      DOWNLOADER_TRUST_PROXY: "true"
+      DOWNLOADER_TEMP_DIR: /work
+      DOWNLOADER_FILE_SERVER: "true"
+      DOWNLOADER_BUILD: ${DOWNLOADER_BUILD}
+      XDG_CONFIG_HOME: /tmp/chrome-config
+      XDG_CACHE_HOME: /tmp/chrome-cache
+    volumes:
+      - /srv/caibao/download-cache:/work
+    networks:
+      edge:
+        aliases: [caibao-downloader]
+    read_only: true
+    tmpfs: ["/tmp:size=256m,nosuid"]
+    shm_size: 128m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-browser.json
+    mem_limit: 1280m
+    cpus: 1.0
+    pids_limit: 256
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+networks:
+  edge:
+    external: true
+    name: caibao-web_default

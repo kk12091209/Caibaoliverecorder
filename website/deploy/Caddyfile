@@ -1,0 +1,108 @@
+# Merge this global option into an existing global block when importing sites.
+# HTTPS is retained. Public download probes showed severe HTTP/2 throughput
+# loss on the current route; prefer HTTP/1.1 until that route is revalidated.
+{
+    servers :443 {
+        protocols h1
+    }
+}
+
+caibao.media {
+    encode zstd gzip
+    header {
+        Alt-Svc clear
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+    }
+    @privateSource path /.parcel-private* /@fs/* /server/* /shared/* /scripts/*
+    handle @privateSource {
+        respond 404
+    }
+    # Retired product: old bookmarks and cached clients must not reach a service.
+    @retiredParcel path /tools/parcel-assistant /tools/parcel-assistant/* /works/parcel-assistant /works/parcel-assistant/* /api/parcel /api/parcel/*
+    handle @retiredParcel {
+        header Cache-Control "no-store"
+        respond "此功能已下线。" 410
+    }
+    handle /api/downloader/* {
+        request_body {
+            max_size 24KB
+        }
+        @downloadFile {
+            method GET HEAD
+            path_regexp downloadFile ^/api/downloader/jobs/[0-9a-f]{36}/(download|files/[0-9a-f]{36})$
+        }
+        @streamFile {
+            method GET HEAD
+            path_regexp streamFile ^/api/downloader/jobs/[0-9a-f]{36}/stream$
+        }
+        route {
+            handle @streamFile {
+                reverse_proxy caibao-downloader:8790 {
+                    flush_interval -1
+                    transport http {
+                        dial_timeout 5s
+                        response_header_timeout 20m
+                    }
+                }
+            }
+            # Authenticate first, then let Caddy handle file bytes and resume ranges.
+            handle @downloadFile {
+                route {
+                    forward_auth caibao-downloader:8790 {
+                        uri /api/downloader/authorize-file
+                        copy_headers X-Caibao-File X-Caibao-Type X-Caibao-Disposition
+                        transport http {
+                            dial_timeout 5s
+                            response_header_timeout 20m
+                        }
+                    }
+                    root * /srv/caibao/download-cache
+                    rewrite * {http.request.header.X-Caibao-File}
+                    header {
+                        Content-Type {http.request.header.X-Caibao-Type}
+                        Content-Disposition {http.request.header.X-Caibao-Disposition}
+                        Cache-Control "private, no-store"
+                    }
+                    file_server
+                }
+            }
+            handle {
+                reverse_proxy caibao-downloader:8790 {
+                    transport http {
+                        dial_timeout 5s
+                        response_header_timeout 120s
+                    }
+                }
+            }
+        }
+    }
+    handle /releases/* {
+        uri strip_prefix /releases
+        root * /srv/caibao/catalog
+        header Cache-Control "public, max-age=60, must-revalidate"
+        file_server
+    }
+    handle /assets/* {
+        root * /srv/caibao/current
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle {
+        root * /srv/caibao/current
+        header Cache-Control "no-cache"
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+www.caibao.media {
+    redir https://caibao.media{uri} permanent
+}
+
+# A small redirect keeps certificate renewal here; installers flow directly from COS.
+download.caibao.media {
+    header Cache-Control "no-cache"
+    redir {$COS_PUBLIC_ORIGIN}{uri} 302
+}

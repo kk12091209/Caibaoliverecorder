@@ -1,0 +1,17 @@
+[Unit]
+Description=Caibao GitHub releases to Tencent COS (isolated container)
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+StartLimitIntervalSec=7200
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/caibao/current/deploy
+RuntimeDirectory=caibao-release-sync
+ExecStart=/usr/bin/flock -n /run/caibao-release-sync/sync.lock /usr/bin/docker compose run --rm --no-deps --name caibao-release-sync-run sync
+ExecStopPost=-/usr/bin/docker rm -f caibao-release-sync-run
+TimeoutStartSec=90min
+Restart=on-failure
+RestartSec=10min

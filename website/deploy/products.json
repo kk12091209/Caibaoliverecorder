@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "products": [
+    {
+      "slug": "caibo-recorder",
+      "repository": "kk12091209/Caibaoliverecorder",
+      "publicRepository": true,
+      "publishReleaseNotes": true,
+      "files": [
+        {
+          "id": "win-setup",
+          "platform": "windows",
+          "arch": "x64",
+          "name": "BiliLiveEditor-{version}-win-x64-setup.exe"
+        },
+        {
+          "id": "win-portable",
+          "platform": "windows",
+          "arch": "x64",
+          "name": "BiliLiveEditor-{version}-win-x64.7z"
+        },
+        {
+          "id": "mac-dmg",
+          "platform": "macos",
+          "arch": "arm64",
+          "name": "Caibo-{version}-macos-arm64.dmg"
+        },
+        {
+          "id": "mac-zip",
+          "platform": "macos",
+          "arch": "arm64",
+          "name": "Caibo-{version}-macos-arm64.zip"
+        }
+      ],
+      "sources": [
+        {
+          "id": "complete-source",
+          "name": "Caibo-{version}-complete-source.zip"
+        },
+        {
+          "id": "ffmpeg-source",
+          "name": "Caibo-{version}-FFmpeg-upstream-sources.tar.gz"
+        }
+      ],
+      "desktopUpdate": {
+        "fromVersion": "0.2.3"
+      }
+    }
+  ]
+}

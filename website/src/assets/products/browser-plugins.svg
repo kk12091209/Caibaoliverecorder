@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="880" viewBox="0 0 1280 880" role="img" aria-labelledby="title desc">
+  <title id="title">浏览器插件合集</title><desc id="desc">浏览器窗口中的评论防护和三位跟车对象示意，无人物照片。</desc>
+  <rect width="1280" height="880" rx="30" fill="#fff7f8"/>
+  <rect x="28" y="28" width="1224" height="824" rx="24" fill="#fff0f3" stroke="#d9a6b4" stroke-width="2"/>
+  <path d="M29 101h1222" stroke="#d9a6b4" stroke-width="2"/>
+  <g fill="#d9a6b4"><circle cx="62" cy="64" r="7"/><circle cx="86" cy="64" r="7"/><circle cx="110" cy="64" r="7"/></g>
+  <rect x="357" y="45" width="566" height="38" rx="12" fill="#fff7f8"/>
+  <g font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+    <text x="640" y="71" text-anchor="middle" fill="#7d4b5c" font-size="18">CAIBAO · BROWSER TOOLS</text>
+    <text x="90" y="190" fill="#4a2432" font-size="44" font-weight="600">浏览器插件合集</text>
+    <text x="90" y="236" fill="#7d4b5c" font-size="22">给浏览器，加一点顺手的功能。</text>
+    <rect x="90" y="285" width="1100" height="176" rx="22" fill="#fff7f8" stroke="#d9a6b4"/>
+    <rect x="120" y="320" width="104" height="104" rx="26" fill="#f8dbe2"/>
+    <path d="M172 340l29 12v24c0 21-29 31-29 31s-29-10-29-31v-24z" fill="none" stroke="#c34433" stroke-width="5"/>
+    <path d="m159 372 9 9 18-21" fill="none" stroke="#c34433" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="257" y="350" fill="#4a2432" font-size="30" font-weight="600">B站评论盲盒防护</text>
+    <text x="257" y="397" fill="#7d4b5c" font-size="20">评论按需查看 · 直播三人跟车 · 草稿不打断</text>
+    <rect x="982" y="334" width="164" height="60" rx="30" fill="#c34433"/>
+    <text x="1064" y="372" text-anchor="middle" fill="#fff7f8" font-size="21">查看源码</text>
+    <rect x="90" y="493" width="530" height="270" rx="22" fill="#fff7f8" stroke="#d9a6b4"/>
+    <text x="122" y="543" fill="#7d4b5c" font-size="20">评论防护</text>
+    <g fill="#eeb8c3"><rect x="122" y="579" width="58" height="58" rx="29"/><rect x="204" y="585" width="255" height="16" rx="8"/><rect x="204" y="618" width="347" height="13" rx="6"/><rect x="204" y="650" width="294" height="13" rx="6"/></g>
+    <text x="204" y="713" fill="#7d4b5c" font-size="18">内容遮罩 · 按需查看</text>
+    <rect x="650" y="493" width="540" height="270" rx="22" fill="#fff7f8" stroke="#d9a6b4"/>
+    <text x="682" y="543" fill="#7d4b5c" font-size="20">我来同你玩</text><text x="1148" y="543" fill="#c34433" font-size="20" text-anchor="end">3 / 3</text>
+    <g fill="#4a2432" font-size="20"><text x="682" y="595">用户 A</text><text x="682" y="652">用户 B</text><text x="682" y="709">用户 C</text></g>
+    <g stroke="#d9a6b4"><path d="M682 612h466"/><path d="M682 669h466"/></g>
+    <g fill="#c34433" font-size="27"><text x="1125" y="595">×</text><text x="1125" y="652">×</text><text x="1125" y="709">×</text></g>
+    <text x="90" y="811" fill="#7d4b5c" font-size="17">用户脚本 / 查看源码 / 一键复制</text>
+  </g>
+</svg>

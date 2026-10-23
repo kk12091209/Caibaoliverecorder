@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.env*
+.release-state
+.parcel-private
+artifacts
+*.pem
+*.key
