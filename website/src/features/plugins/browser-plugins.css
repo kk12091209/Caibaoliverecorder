@@ -1,0 +1,96 @@
+.plugin-page { padding-bottom: 96px; background: var(--color-page); }
+.plugin-page .shell { width: min(1120px, calc(100% - 112px)); }
+.plugin-page .crumb { padding-top: 30px; font-size: 12px; flex-wrap: wrap; }
+.plugin-intro { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; padding-block: 64px; }
+.plugin-eyebrow { margin: 0; font: 11px var(--sans); letter-spacing: .1em; color: var(--color-text); }
+.plugin-intro h1, .plugin-detail-intro h1 { font: 500 clamp(32px, 3.6vw, 48px)/1.4 var(--serif); margin: 18px 0 0; letter-spacing: -.04em; }
+.plugin-tagline { font: 500 25px/1.7 var(--serif); color: var(--color-heading); margin: 0 0 16px; }
+.plugin-summary { color: var(--color-text); font-size: 14px; line-height: 1.9; margin: 0; }
+.plugin-list { scroll-margin-top: calc(var(--nav) + 28px); }
+.plugin-list-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; }
+.plugin-list-heading h2 { margin: 0; font: 500 26px var(--serif); }
+.plugin-list-heading > span { font-size: 12px; color: var(--color-text); }
+.plugin-card { border: 1px solid var(--color-border); border-radius: 20px; background: var(--color-surface); overflow: hidden; }
+.plugin-card-main { display: flex; align-items: center; gap: 28px; padding: 36px; color: inherit; text-decoration: none; }
+.plugin-card-main:hover h3 { color: var(--color-action); }
+.plugin-mark { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 88px; height: 88px; border-radius: 24px; background: var(--color-page); color: var(--color-action); }
+.plugin-mark svg { width: 46px; height: 46px; }
+.plugin-card-main h3 { font: 500 29px/1.5 var(--serif); margin: 8px 0 10px; }
+.plugin-card-arrow { width: 24px; height: 24px; margin-left: auto; color: var(--color-action); flex-shrink: 0; }
+.plugin-meta { color: var(--color-text); font-size: 11px; line-height: 1.8; margin: 0; }
+.plugin-meta span { margin-left: 14px; }
+.plugin-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.plugin-tags > span { font-size: 11px; padding: 5px 10px; border-radius: 99px; color: var(--color-text); background: var(--color-soft); border: 1px solid var(--line); }
+.plugin-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 26px; padding: 18px 36px; border-top: 1px solid var(--line); }
+.plugin-text-link, .plugin-source-link { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; font-size: 12px; text-decoration: none; }
+.plugin-source-link { margin-left: auto; color: var(--color-action); }
+.plugin-text-link svg, .plugin-source-link svg { width: 15px; height: 15px; }
+.plugin-install-note { font-size: 12px; line-height: 1.9; color: var(--color-text); margin-top: 24px; }
+.plugin-detail-intro { padding-block: 54px 64px; }
+.plugin-detail-intro .plugin-mark { width: 64px; height: 64px; border-radius: 18px; margin-bottom: 22px; }
+.plugin-detail-intro .plugin-mark svg { width: 34px; height: 34px; }
+.plugin-detail-intro .plugin-tagline { max-width: 650px; margin-top: 24px; font-size: 22px; }
+.plugin-primary-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.plugin-primary-actions .btn { min-height: 46px; font-size: 13px; }
+.plugin-features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 38px; }
+.plugin-features > div { padding-top: 24px; border-top: 1px solid var(--color-border); }
+.plugin-features h2 { font: 500 23px/1.6 var(--serif); margin: 16px 0 12px; }
+.plugin-features p, .plugin-setup li p { font-size: 13px; line-height: 1.95; color: var(--color-text); margin: 0; }
+.plugin-setup { display: grid; grid-template-columns: 1fr 1fr; gap: 70px; margin-top: 72px; padding-top: 36px; border-top: 1px solid var(--color-border); }
+.plugin-setup h2 { font: 500 29px/1.5 var(--serif); margin: 16px 0; }
+.plugin-setup ol { margin: 0; padding-left: 23px; }
+.plugin-setup li { padding-left: 8px; margin-bottom: 24px; }
+.plugin-setup li strong { display: block; font-size: 15px; color: var(--color-heading); margin-bottom: 9px; }
+.plugin-source-dialog { width: min(1040px, calc(100% - 48px)); height: min(780px, calc(100dvh - 48px)); max-width: 100%; max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--color-border); border-radius: 18px; background: var(--color-surface); color: var(--color-heading); box-shadow: var(--shadow); overflow: hidden; font-family: var(--sans); }
+.plugin-source-dialog[open] { display: flex; flex-direction: column; }
+.plugin-source-dialog::backdrop { background: color-mix(in srgb, var(--color-ink) 44%, transparent); backdrop-filter: blur(4px); }
+.plugin-source-dialog > header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 18px; padding: 24px 28px 20px; }
+.plugin-source-dialog h2 { font: 500 26px/1.4 var(--serif); margin: 8px 0 0; }
+.plugin-close { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex-shrink: 0; border: 0; border-radius: 50%; color: var(--color-heading); background: transparent; cursor: pointer; }
+.plugin-close:hover { background: var(--color-soft); }
+.plugin-close svg { width: 20px; height: 20px; }
+.plugin-source-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; margin: 0 28px 16px; font-size: 12px; color: var(--color-text); }
+.plugin-source-toolbar > span { overflow-wrap: anywhere; min-width: 0; }
+.plugin-source-toolbar .btn { flex-shrink: 0; min-height: 44px; font-size: 12px; padding: 10px 16px; }
+.plugin-source-code { display: block; flex: 1; min-height: 100px; width: calc(100% - 56px); margin: 0 28px; padding: 18px; resize: none; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-soft); color: var(--color-heading); font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.plugin-source-dialog > footer { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 28px; }
+.plugin-source-dialog footer > span { font-size: 11px; line-height: 1.7; color: var(--color-text); }
+.plugin-source-dialog footer .btn { font-size: 12px; padding: 9px 18px; }
+.plugin-source-message { padding: 24px 28px; color: var(--color-text); }
+@media (max-width: 900px) {
+  .plugin-page .shell { width: calc(100% - 64px); }
+  .plugin-intro { gap: 32px; }
+  .plugin-features { gap: 24px; }
+}
+@media (max-width: 640px) {
+  .plugin-page { padding-bottom: 64px; }
+  .plugin-page .shell { width: calc(100% - 40px); }
+  .plugin-page .crumb { font-size: 10px; row-gap: 6px; }
+  .plugin-intro { grid-template-columns: 1fr; gap: 28px; padding-block: 36px 44px; }
+  .plugin-intro h1, .plugin-detail-intro h1 { font-size: 32px; }
+  .plugin-tagline { font-size: 22px; }
+  .plugin-summary { font-size: 13px; }
+  .plugin-card-main { align-items: start; padding: 24px 20px; gap: 14px; }
+  .plugin-mark { width: 48px; height: 48px; border-radius: 14px; }
+  .plugin-mark svg { width: 29px; height: 29px; }
+  .plugin-card-main h3 { font-size: 23px; margin-block: 8px 12px; }
+  .plugin-card-arrow { display: none; }
+  .plugin-meta span { display: block; margin-left: 0; }
+  .plugin-tags { gap: 6px; }
+  .plugin-tags > span { font-size: 10px; padding: 4px 7px; }
+  .plugin-card-actions { padding: 14px 20px; gap: 18px; }
+  .plugin-text-link, .plugin-source-link { font-size: 11px; min-height: 40px; }
+  .plugin-detail-intro { padding-block: 36px 44px; }
+  .plugin-detail-intro .plugin-tagline { font-size: 20px; }
+  .plugin-primary-actions .btn { font-size: 12px; padding-inline: 15px; }
+  .plugin-features { grid-template-columns: 1fr; gap: 28px; }
+  .plugin-features h2 { margin-top: 12px; }
+  .plugin-setup { grid-template-columns: 1fr; gap: 28px; margin-top: 48px; }
+  .plugin-source-dialog { width: calc(100% - 24px); height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); border-radius: 14px; }
+  .plugin-source-dialog > header { padding: 20px 18px; gap: 8px; }
+  .plugin-source-dialog h2 { font-size: 22px; }
+  .plugin-source-toolbar { margin-inline: 18px; gap: 8px; font-size: 10px; }
+  .plugin-source-toolbar .btn { padding: 10px 12px; }
+  .plugin-source-code { width: calc(100% - 36px); margin-inline: 18px; padding: 12px; font-size: 12px; }
+  .plugin-source-dialog > footer { padding: 16px 18px; gap: 12px; }
+}

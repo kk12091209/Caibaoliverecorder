@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "products": {
+    "caibo-recorder": {
+      "version": "v0.2.2",
+      "publishedAt": "2026-10-13T08:10:06Z",
+      "releaseUrl": "https://github.com/kk12091209/Caibaoliverecorder/releases/tag/v0.2.2",
+      "notes": "# v0.2.2 — 录制稳定性、配置恢复与更新检查\n\nWindows 与 Mac 同步更新至 0.2.2，已有 0.2.1 用户可通过应用内检查更新升级。\n\n- 修复等待直播开播时，桌面心跳暂时中断会让后台误判空闲并退出的问题，持续监控不再因这一条件中止。\n- 强化录制配置恢复：正确识别录制核心保存的默认值，避免将正常配置反复判为损坏；发现无法解析、显式 null 等损坏结构时先备份，再恢复房间和保存的录制开关，原始录像保留。\n- 改进日志：区分用户主动停止、后台退出与核心异常退出，记录触发原因；主动退出期间不再误报迟到的健康检查失败。\n- Mac「设置」新增录制与休眠状态，分别读取系统接电睡眠设置、本应用防休眠保护和当前合盖策略，支持重新检测与打开系统电源设置。关闭系统开关后不会再用应用保护状态代替其真实状态。\n- 改善检查更新：正常连续点击复用近期成功结果；普通失败 10 秒后可重试，普通 403 不再误报“过于频繁”；真正限流时显示预计恢复时间，并保留已发现的更新信息。\n\n## 安装与使用\n\n- Windows 10 / 11 x64：提供中文安装包、ZIP / 7z 便携版；需要 .NET Framework 4.7.2+ 与 WebView2 Runtime。\n- Mac：Apple Silicon、macOS 14+，提供 DMG 与 ZIP；沿用 ad-hoc 签名，尚未通过 Apple 公证，暂不支持 Intel Mac。\n- 更新时等待录制、导出与素材处理完成；无需先卸载，录像与设置保留。\n- Mac 的系统开关、应用保护和合盖策略是不同状态；真正休眠或断网期间无法收到的直播内容不能补录。本次不承诺合盖或手动休眠后仍能录制，也不新增 Windows 电源状态设置页。\n\n两端使用同一提交构建。安装包校验值和验证范围见发布附件中的构建记录；自动化验证不替代所有设备、网络环境和多日连续直播验证。\n\n完整对应源码（包含精确子模块及 Mac 许可文件）：[Caibo-0.2.2-complete-source.zip](https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.2/Caibo-0.2.2-complete-source.zip)。\n",
+      "files": [
+        {
+          "id": "win-setup",
+          "platform": "windows",
+          "arch": "x64",
+          "name": "BiliLiveEditor-0.2.2-win-x64-setup.exe",
+          "size": 75785179,
+          "sha256": "e99d879ecefc083b54b51697b7665a4b3720fee5b4271af4e89c0248d8aa0ee5",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/BiliLiveEditor-0.2.2-win-x64-setup.exe"
+        },
+        {
+          "id": "win-portable",
+          "platform": "windows",
+          "arch": "x64",
+          "name": "BiliLiveEditor-0.2.2-win-x64.7z",
+          "size": 71463901,
+          "sha256": "96bd609d10e50a14d80f9d97c8f2705fc682337c31c1d88f6b866f4e8e529c84",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/BiliLiveEditor-0.2.2-win-x64.7z"
+        },
+        {
+          "id": "mac-dmg",
+          "platform": "macos",
+          "arch": "arm64",
+          "name": "Caibo-0.2.2-macos-arm64.dmg",
+          "size": 147021924,
+          "sha256": "256a98d3002c3290c9e885339081723ac1495dc3146069aedce657dec900963a",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/Caibo-0.2.2-macos-arm64.dmg"
+        },
+        {
+          "id": "mac-zip",
+          "platform": "macos",
+          "arch": "arm64",
+          "name": "Caibo-0.2.2-macos-arm64.zip",
+          "size": 146965424,
+          "sha256": "d037d436616526a3ab44489e61b53a3d2adb5075b810f3d8dd57bf9d4dbd5640",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/Caibo-0.2.2-macos-arm64.zip"
+        }
+      ],
+      "sources": [
+        {
+          "id": "complete-source",
+          "name": "Caibo-0.2.2-complete-source.zip",
+          "size": 6855398,
+          "sha256": "5b8bbcf81275158dcaab7a37756b0f13aec90f588b4067460c6f2ba9fba38c79",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/Caibo-0.2.2-complete-source.zip"
+        },
+        {
+          "id": "ffmpeg-source",
+          "name": "Caibo-0.2.2-FFmpeg-upstream-sources.tar.gz",
+          "size": 309034166,
+          "sha256": "8ab6eca940d9fc95621b43a55a1fe5df795ff5806e453232765944f3cc5b2594",
+          "url": "https://download.caibao.media/caibo-recorder/0.2.2/Caibo-0.2.2-FFmpeg-upstream-sources.tar.gz"
+        }
+      ]
+    }
+  },
+  "generatedAt": "2026-10-15T06:40:54.329Z"
+}

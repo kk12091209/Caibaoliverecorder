@@ -1,0 +1,16 @@
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": [
+        "cos:PutObject",
+        "cos:HeadObject",
+        "cos:GetObject"
+      ],
+      "resource": [
+        "qcs::cos:ap-singapore:uid/YOUR_APP_ID:YOUR_BUCKET_NAME/caibo-recorder/*"
+      ]
+    }
+  ]
+}

@@ -2,7 +2,9 @@ name: Editor checks
 on:
   push:
     branches: [main]
+    paths-ignore: ['website/**', 'docs/**', 'README.md', 'CONTRIBUTING.md', '.github/workflows/website.yml']
   pull_request:
+    paths-ignore: ['website/**', 'docs/**', 'README.md', 'CONTRIBUTING.md', '.github/workflows/website.yml']
   workflow_dispatch:
 permissions:
   contents: read

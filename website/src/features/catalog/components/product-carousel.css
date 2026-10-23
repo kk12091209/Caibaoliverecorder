@@ -1,0 +1,39 @@
+.product-preview { margin: 14px 0 0; min-width: 0; }
+.preview-window { position: relative; isolation: isolate; aspect-ratio: 1440 / 1000; background: var(--color-soft); border: 6px solid color-mix(in srgb, var(--color-surface) 88%, transparent); border-radius: 14px; box-shadow: 0 26px 65px -18px color-mix(in srgb, var(--color-ink) 26%, transparent), 0 0 0 1px color-mix(in srgb, var(--color-text) 10%, transparent); overflow: hidden; touch-action: pan-y pinch-zoom; }
+.preview-window:has(:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 5px; }
+.preview-slide { position: absolute; inset: 0; visibility: hidden; transform: translateX(100%); }
+.preview-slide.is-active, .preview-slide.is-leaving { visibility: visible; transform: translateX(0); }
+.preview-slide.is-leaving { pointer-events: none; }
+.preview-slide.is-entering, .preview-slide.is-leaving { animation-duration: 560ms; animation-timing-function: cubic-bezier(.22,.61,.36,1); animation-fill-mode: both; }
+.preview-slide.is-entering[data-direction="next"] { animation-name: preview-enter-next; }
+.preview-slide.is-leaving[data-direction="next"] { animation-name: preview-leave-next; }
+.preview-slide.is-entering[data-direction="previous"] { animation-name: preview-enter-previous; }
+.preview-slide.is-leaving[data-direction="previous"] { animation-name: preview-leave-previous; }
+.preview-image-link { display: block; position: absolute; inset: 0; background: var(--color-soft); overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.preview-image-link .product-image { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }
+.preview-image-link img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.preview-open { position: absolute; right: 15px; bottom: 15px; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--color-surface); box-shadow: 0 3px 15px color-mix(in srgb, var(--color-ink) 9.41176%, transparent); color: var(--color-text); opacity: 0; transition: opacity .2s; }
+.preview-image-link:hover .preview-open, .preview-image-link:focus-visible .preview-open { opacity: 1; }
+.preview-edge { position: absolute; z-index: 2; top: 0; display: none; place-items: center; width: 10%; height: 100%; padding: 0; border: 0; color: var(--color-heading); background: transparent; opacity: 0; transition: opacity .18s; cursor: pointer; }
+.preview-edge-left { left: 0; }
+.preview-edge-right { right: 0; }
+.preview-edge svg { width: 22px; height: 22px; }
+@media (min-width: 761px) and (hover: hover) and (pointer: fine) { .preview-edge { display: grid; } .preview-window:hover .preview-edge { opacity: .55; } }
+.preview-window .preview-edge:hover, .preview-window .preview-edge:focus-visible { opacity: 1; }
+@media (hover: none), (pointer: coarse) { .preview-edge { display: none; } }
+.preview-controls { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 12px; }
+.preview-controls button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--color-text); cursor: pointer; }
+.preview-controls button:hover { background: color-mix(in srgb, var(--color-selected) 50.1961%, transparent); color: var(--color-ink); }
+.preview-step svg { width: 19px; height: 19px; }
+.preview-dot span { width: 6px; height: 6px; border-radius: 999px; background: var(--color-border); transition: width .18s, background .18s; }
+.preview-dot[aria-pressed="true"] span { width: 22px; background: var(--color-action); }
+.preview-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes preview-enter-next { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes preview-leave-next { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+@keyframes preview-enter-previous { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes preview-leave-previous { from { transform: translateX(0); } to { transform: translateX(100%); } }
+@media (max-width: 760px) {
+  .product-preview { margin: 0; }
+  .preview-window { border-width: 4px; border-radius: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .preview-slide { animation: none !important; } }

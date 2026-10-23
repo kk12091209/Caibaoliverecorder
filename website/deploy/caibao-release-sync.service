@@ -1,0 +1,28 @@
+[Unit]
+Description=Caibao GitHub releases to Tencent COS
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=7200
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=caibao-sync
+Group=caibao-sync
+WorkingDirectory=/opt/caibao-sync/current
+EnvironmentFile=/etc/caibao/sync.env
+Environment=SYNC_STATE_DIR=/var/lib/caibao-sync
+Environment=RELEASE_CATALOG=/srv/caibao/catalog/catalog.json
+RuntimeDirectory=caibao-release-sync
+StateDirectory=caibao-sync
+ExecStart=/usr/bin/flock -n /run/caibao-release-sync/sync.lock /usr/bin/node /opt/caibao-sync/current/scripts/sync-releases.mjs
+TimeoutStartSec=90min
+Restart=on-failure
+RestartSec=10min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/caibao-sync /srv/caibao/catalog
+UMask=0022
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
