@@ -1,3 +1,4 @@
+import { pathKey as key, inside } from './storage-files.js';
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
@@ -10,14 +11,9 @@ const FORMAT = 'bili-export-publication-v1';
 const ID = /^[\w-]{1,100}$/;
 const DIRECTORY = /^bili-export-[A-Za-z0-9_-]+$/;
 const fields = ['dev', 'ino', 'size', 'mtimeNs'];
-const key = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 const same = (a, b) => key(a) === key(b);
 const identity = stat => Object.fromEntries(fields.map(field => [field, String(stat[field])]));
 const matches = (stat, value) => fields.every(field => String(stat[field]) === value[field]);
-function inside(root, file) {
-  const relative = path.relative(key(root), key(file));
-  return !!relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
-}
 function absolute(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || /[\x00-\x1f]/.test(file)) throw failure('INVALID_PATH', '保存路径必须是完整的本机文件路径。');
   if (process.platform === 'win32' && (!/^[a-z]:\\/i.test(file) || file.slice(2).includes(':') || file.split(/[\\/]/).some(part => /[. ]$/.test(part)))) throw failure('INVALID_PATH', '保存路径包含不支持的磁盘或文件名。');

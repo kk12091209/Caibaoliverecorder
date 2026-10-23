@@ -1,3 +1,4 @@
+import { pathKey as key } from './storage-files.js';
 import fs from 'node:fs/promises';
 import sync from 'node:fs';
 import path from 'node:path';
@@ -10,7 +11,6 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const jobIdValid = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 const retainedValid = value => value && typeof value === 'object' && !Array.isArray(value) && jobIdValid(value.jobId);
 const pidValid = value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647;
-const key = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 
 export function processRunning(pid) {
   try { process.kill(pid, 0); return true; }

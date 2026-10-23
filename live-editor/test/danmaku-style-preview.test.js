@@ -89,8 +89,8 @@ test('preview uses actual export rendering, zero opacity preserves the exact bac
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-style-preview-')),store=new Store(path.join(root,'data'));
   const media=new Media(store,{ffmpeg,ffprobe:process.env.FFPROBE_PATH||'unused'});
   t.after(async()=>{media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
-  const assets=path.join(root,'assets');await fs.mkdir(assets);const background=path.join(assets,'danmaku-style-preview-test.png');
-  await fs.copyFile(fileURLToPath(new URL('../src/assets/danmaku-style-preview.png',import.meta.url)),background);
+  const assets=path.join(root,'assets');await fs.mkdir(assets);const background=path.join(assets,'danmaku-style-preview-test.webp');
+  await fs.copyFile(fileURLToPath(new URL('../src/assets/danmaku-style-preview.webp',import.meta.url)),background);
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
   const decode=bytes=>execFileSync(ffmpeg,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'],{input:bytes,maxBuffer:16*1024*1024,windowsHide:true});
   const signal=AbortSignal.timeout(15000),hiddenResult=await preview.render({style:{size:1.5,opacity:0},rate:17,font:null},signal),hidden=hiddenResult.bytes;

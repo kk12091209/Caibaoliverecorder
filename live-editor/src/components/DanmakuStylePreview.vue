@@ -1,6 +1,6 @@
 <script setup>
 import {ref,computed,watch,nextTick,onBeforeUnmount} from 'vue';
-import image from '../assets/danmaku-style-preview.png';
+import image from '../assets/danmaku-style-preview.webp';
 import {danmakuGeometry} from '../../shared/danmaku-style.js';
 import DanmakuAreaSelector from './DanmakuAreaSelector.vue';
 const props=defineProps({style:Object,font:Object,rate:{type:Number,default:50},disabled:Boolean}),emit=defineEmits(['ready','area-change']);

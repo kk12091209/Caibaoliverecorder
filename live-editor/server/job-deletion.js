@@ -1,15 +1,11 @@
+import { pathKey as key, inside as within } from './storage-files.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { archiveFile, exportedJobFile } from './output-names.js';
 import { directories } from './directories.js';
 
-const key = file => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
 const same = (a, b) => key(a) === key(b);
-function within(root, file) {
-  const relative = path.relative(key(root), key(file));
-  return !!relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
-}
 function absolute(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /[\x00-\x1f]/.test(value)) throw new Error('导出文件路径无效，未执行删除。');
   if (process.platform === 'win32' && (!/^[a-z]:\\/i.test(value) || value.slice(2).includes(':') || value.split(/[\\/]/).some(part => /[. ]$/.test(part)))) throw new Error('导出文件路径不是普通本机磁盘路径，未执行删除。');

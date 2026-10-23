@@ -1,13 +1,9 @@
+import { pathKey as key, inside } from './storage-files.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { archiveFile, exportedJobFile } from './output-names.js';
 import { deletionWork } from './deletion-work.js';
 
-const key = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
-function inside(root, file) {
-  const relative = path.relative(key(root), key(file));
-  return !!relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
-}
 function absolute(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || /[\x00-\x1f]/.test(file)) throw new Error('素材文件路径无效，未执行删除。');
   return path.resolve(file);

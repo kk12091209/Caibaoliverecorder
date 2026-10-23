@@ -31,7 +31,7 @@ test('source package retains recorder Runtime/Logs source and current CI while e
     'live-editor/shared/danmaku-tracks.js',
     'live-editor/server/danmaku-style-preview.js',
     'live-editor/src/components/DanmakuStyleSettings.vue',
-    'live-editor/src/assets/danmaku-style-preview.png'
+    'live-editor/src/assets/danmaku-style-preview.webp'
   ])assert.ok(included.has(required),`missing corresponding source: ${required}`);
   if(manifest.submodules.find(module=>module.path==='webui/source')?.initialized)
     assert.ok(included.has('webui/source/.github/default.conf'),'initialized Web UI source must retain its build configuration');

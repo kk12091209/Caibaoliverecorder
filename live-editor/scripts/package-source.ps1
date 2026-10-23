@@ -28,7 +28,7 @@ $editorAssetPaths = @(
     'live-editor/desktop/app.ico',
     'live-editor/desktop/assets/app-original.png',
     'live-editor/src/assets/app-icon.png',
-    'live-editor/src/assets/danmaku-style-preview.png'
+    'live-editor/src/assets/danmaku-style-preview.webp'
 )
 $textExtensions = @('.swift','.plist','.py','.cs','.csproj','.sln','.props','.targets','.json','.md','.txt','.yml','.yaml','.xml','.xaml','.config','.conf','.resx','.nuspec','.sh','.ps1','.js','.mjs','.cjs','.ts','.tsx','.jsx','.vue','.html','.css','.scss','.less','.svg','.toml','.manifest','.cmd','.bat','.iss','.isl')
 $textNames = @('LICENSE','NOTICE','COPYING','AUTHORS','Dockerfile','.editorconfig','.gitattributes','.gitignore','.gitmodules','.nojekyll','.dockerignore','.npmrc','.prettierrc','.browserslistrc')

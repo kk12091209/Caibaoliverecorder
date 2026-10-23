@@ -4,7 +4,7 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY deploy/services/downloader/package.json deploy/services/downloader/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY server ./server
 COPY scripts/serve-downloader.mjs ./scripts/serve-downloader.mjs
