@@ -53,3 +53,11 @@ DOWNLOADER_BUILD=<build-id> docker compose -f compose.downloader.yaml up -d --no
 ## 教程构建
 
 正常 `npm run build` 使用真实相机。`npm run build:tutorial` / `package:deploy:tutorial` 是显式教程模式，使用演示图片；不能用教程包替换正式相机功能而不说明。
+
+## 2026-10-23 性能版本
+
+`20261023-lean-web` 已部署。业务基线为 `20261022-1510-native-download`，原发布归档 SHA-256：`2ae1766a111540260924645827205556ac559d6c5b0ab8f8319a08f42452c685`。从该归档可逐字节重建原前端，再单独应用 `App` / `CatalogApp` 入口拆分及 `main` 的按需清单加载。下载后台业务源码完全一致，Docker 只更换为独立的 downloader 依赖清单，锁定的包版本保持一致。
+
+本次部署包 SHA-256：`6d5b7d3df292a141c7f2db37bdd4ce9336e3e94f6666c57d19110998d7166242`。不可变服务目录保存 `release-provenance.json`、完整源码和验证记录；回退信息在对应 `backups/20261023-lean-web`。保留上一版散列资源，支持已经打开的页面继续加载旧版延迟模块。
+
+当前仓库内尚未发布的实况功能继续保持本地状态。部署网站不表示发布录包机，也不更新录包机版本号、GitHub Release 或安装包清单。

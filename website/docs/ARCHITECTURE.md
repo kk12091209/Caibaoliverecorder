@@ -6,7 +6,7 @@
 website/
 ├── src/
 │   ├── main.tsx                 浏览器入口与全局样式加载
-│   ├── app/App.tsx              路由、页面容器和按需加载
+│   ├── app/                     工具入口分流、官网路由和按需加载
 │   ├── features/
 │   │   ├── catalog/             首页、关于、产品页、产品目录和安装包入口
 │   │   ├── downloader/          解析、选择、预览、浏览器下载与 iOS 保存
@@ -33,10 +33,10 @@ website/
 - `catalog` 管理官网和产品元数据。新增产品首先修改 `features/catalog/data/works.ts`；首页展示由 `showcase.ts` 派生。安装包入口读取公开 catalog，不能从浏览器连接云存储写入接口。
 - `downloader/MediaDownloader.tsx` 负责页面渲染，`useMediaDownloader.ts` 负责解析、选择、取消、缓存与下载状态；`AlbumSaveDialog` 处理 iOS 系统分享，`lib` 保留 API 类型和传输逻辑。
 - `teleprompter/components` 负责控件，`hooks` 负责播放与采集生命周期，`model` 负责文稿、分段、颜色、录制格式等可独立测试的逻辑。
-- 保持下载助手、口播助手、插件和 3D 首页背景的延迟加载。不要创建聚合导出文件，导致首页提前加载整个产品。
+- `App` 仅分流入口；`CatalogApp` 按需加载官网页面和安装包清单。直接打开下载助手或口播助手不应请求官网代码、产品图或安装包清单。保持插件和 3D 首页背景的延迟加载，避免聚合导出重新引入提前加载。
 - 前端禁止导入 `server`、`scripts` 和 Node 内置模块。边界测试随 `npm test` 执行。
 
-本次整理保留了全部 CSS 内容、CSS 类名、资源文件、路由及 public URL；不调整 HTML 结构、视觉参数或已有业务策略。
+清理仅移除已经没有调用方的组件和对应样式。现用 CSS 类名、资源、路由、public URL、HTML 结构、视觉参数及业务策略保持兼容。
 
 ## 下载链路
 
@@ -58,4 +58,4 @@ website/
 
 ## 原目录迁移
 
-旧网站 `src/pages`、`src/components`、`src/lib` 中的代码已按产品归入 `src/features`；测试同样按产品归类。录包机没有移动。原来独立的本地网站目录作为迁移前参考保留，后续开发以仓库内 `website/` 为唯一源码入口，避免继续维护两份版本。
+旧网站 `src/pages`、`src/components`、`src/lib` 中的代码已按产品归入 `src/features`；测试同样按产品归类。录包机没有移动。原独立网站目录保留启动入口和源码快捷方式，完整迁移前副本在本地 artifacts/local-consolidation 中归档，后续开发以仓库内 `website/` 为唯一源码入口，避免继续维护两份版本。

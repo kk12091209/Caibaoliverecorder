@@ -3,9 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { App } from './app/App'
 import './styles.css'
-import { loadCatalog } from './features/catalog/lib/catalog'
-
-void loadCatalog()
 
 const router = createBrowserRouter([{ path: '*', element: <App /> }])
 
