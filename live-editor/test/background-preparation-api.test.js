@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { Store } from '../server/store.js';
 import { Media } from '../server/media.js';
 import { createApp } from '../server/index.js';
-import { FLV_HEADER } from '../server/ingest.js';
+import { FLV_HEADER, Ingestor } from '../server/ingest.js';
 import { minimalMp4 } from './helpers/mp4-fixture.js';
 
 // These integration tests use the real HTTP controller and scheduler, with a
@@ -52,8 +52,15 @@ async function seedDatabase(name, setup) {
 async function appFor(t, name, prepare = async () => complete) {
   const calls = [];
   t.mock.method(Media.prototype, 'prepareNext', async function (id, options) { calls.push(id); return prepare(id, options, this); });
+  // These fixtures contain only an FLV header, not a recording to ingest. Startup
+  // recovery is deferred, so stopping the ingestor immediately after createApp
+  // races its later start and can rescan a synthetic fixture during deletion.
+  t.mock.method(Ingestor.prototype, 'start', () => {});
   const base = path.join(root, name);
   const app = await createApp({automaticClean:false, port: await availablePort(), data: path.join(base, 'data'), projectRoot: base, noRecorder: true, compact: false, ffmpeg: 'must-not-launch', ffprobe: 'must-not-launch', preparationOptions: { pollMs: 10, idleGraceMs: 0 } });
+  // POST requests intentionally return 503 until recovery completes. Test the
+  // preparation API only after that lifecycle boundary, without a timed sleep.
+  await app.startupRecovery;
   app.ingestor.stop();
   let closed = false;
   const close = app.close.bind(app);
@@ -134,7 +141,8 @@ test('HTTP 保存弹幕编辑会使已就绪素材重新准备，显式暂停时
   const jobs = app.store.all('SELECT * FROM jobs ORDER BY id');
   const invalidated = [];
   t.mock.method(app.media, 'invalidatePreparation', id => { invalidated.push(id); });
-  await action(app, 'edited', 'start'); await ready(app, 'edited');
+  const started = await action(app, 'edited', 'start');
+  assert.equal(started.status, 200, started.body.error); await ready(app, 'edited');
   const before = app.calls.length;
   const edit = app.store.edit('edited');
   const saved = await app.request('sessions/edited/edit', { ...edit, excluded: ['chat'] });
