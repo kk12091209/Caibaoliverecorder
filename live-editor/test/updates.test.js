@@ -46,7 +46,7 @@ test('next-version reminder preference survives restart and elapsed days, withou
   assert.equal(f.updates.snapshot().enabled,true);assert.equal(f.updates.snapshot().deferred,false);
   now+=30*86400000;assert.equal(f.updates.snapshot().ignored,true);await f.updates.close();
   const store=new Store(f.root),restarted=new Updates(store,{current,platform:'win32-x64',mirror:false,fetcher:f.fetcher,now:()=>now});
-  t.after(async()=>{await restarted.close();store.close();});
+  try {
   await restarted.check();assert.equal(restarted.snapshot().ignored,true);
   restarted.download('0.2.8');await restarted.downloadTask;assert.equal(restarted.status,'ready');
   assert.throws(()=>restarted.requestInstall('0.2.9'),/更新信息已变化/);
@@ -55,6 +55,7 @@ test('next-version reminder preference survives restart and elapsed days, withou
   await restarted.check();assert.equal(restarted.candidate.version,'0.2.9');assert.equal(restarted.snapshot().ignored,false);
   assert.throws(()=>restarted.ignoreVersion('0.2.8'),/更新信息已变化/);
   assert.equal(store.setting('update-ignored-version'),'0.2.8');
+  } finally {await restarted.close();store.close();}
 });
 
 test('reminder API validates the displayed version and full request before storing an ignore preference',async t=>{

@@ -10,6 +10,7 @@ import {Ingestor} from '../server/ingest.js';
 import {CPU_EXPORT_ROUTE,CPU_CHECKPOINT_SECONDS,checkpointSpans,cleanCheckpointParts,frameSpan} from '../server/render-plan.js';
 import {softwareEncoder,encoderArguments,checkpointEncoderArguments} from '../server/export-encoding.js';
 import {sourceReaderCount} from '../server/storage-files.js';
+import {hardCrash} from './helpers/hard-crash.js';
 
 const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';
 const run=(tool,args)=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:8*1024**2});
@@ -63,18 +64,18 @@ for(const mode of ['danmaku','dual','clean'])test(`${mode}: a single long CPU so
     import {Media} from ${JSON.stringify(new URL('../server/media.js',import.meta.url).href)};
     const store=new Store(${JSON.stringify(f.data)});store.projectRoot=${JSON.stringify(f.root)};
     const media=new Media(store,{ffmpeg:${JSON.stringify(ffmpeg)},ffprobe:${JSON.stringify(ffprobe)},exportAcceleration:'software'});
-    let blocks=0;const spawn=media.spawnTracked.bind(media);
+    let blocks=0,crashing=false;const spawn=media.spawnTracked.bind(media);
     media.spawnTracked=(tool,args,...rest)=>{const child=spawn(tool,args,...rest);
-      if(args.includes('-vf')&&++blocks===2)child.once('spawn',()=>setTimeout(()=>{child.kill('SIGKILL');process.kill(process.pid,'SIGKILL');},25));return child;};
+      if(args.includes('-vf')&&++blocks===2)child.once('spawn',()=>setTimeout(()=>{crashing=true;child.kill('SIGKILL');process.send({testEvent:'crash-now'});},25));return child;};
     const open=media.checkpoints.open.bind(media.checkpoints);
     media.checkpoints.open=async(...args)=>{const cp=await open(...args),run=cp.run.bind(cp);cp.run=async(...values)=>{
       const result=await run(...values);if(Array.isArray(values[2])&&values[2].some(n=>/^part-0(?:-danmaku)?\\.mp4$/.test(n)))
         await fs.writeFile(${JSON.stringify(marker)},JSON.stringify({directory:cp.directory,files:values[2]}));return result;};return cp;};
     const row=store.get('SELECT * FROM jobs WHERE id=?',${JSON.stringify(job.id)});store.run("UPDATE jobs SET status='running' WHERE id=?",row.id);
-    await media.exportJob(JSON.parse(row.data));throw Error('crash point not reached');
+    try {await media.exportJob(JSON.parse(row.data));}catch(error){if(!crashing)throw error;}
+    if(crashing)await new Promise(()=>{});throw Error('crash point not reached');
   `;
-  const killed=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:90000});
-  assert.equal(killed.signal,'SIGKILL',killed.stderr);
+  await hardCrash(script,{timeout:90000});
   const crash=JSON.parse(await fs.readFile(marker,'utf8')),first=path.join(crash.directory,crash.files[0]);
   const savedBytes=await fs.readFile(first);assert.equal(Number(streams(first)[0].duration),60);
   await f.restart();const rendered=[],render=f.media.renderer.renderVideo.bind(f.media.renderer);

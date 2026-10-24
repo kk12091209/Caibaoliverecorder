@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {spawnSync,execFileSync} from 'node:child_process';
+import {execFileSync} from 'node:child_process';
 import {Store} from '../server/store.js';
 import {Media} from '../server/media.js';
 import {Ingestor} from '../server/ingest.js';
+import {hardCrash} from './helpers/hard-crash.js';
 
 const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';
 const run=(tool,args)=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:4*1024**2});
@@ -34,13 +35,13 @@ for(const route of ['regular-v1','prepared-v9'])test(`${route} SIGKILL after a r
     const open=media.checkpoints.open.bind(media.checkpoints);
     media.checkpoints.open=async(...args)=>{const cp=await open(...args),run=cp.run.bind(cp);
       cp.run=async(...values)=>{const result=await run(...values);if(Array.isArray(values[2])&&values[2].includes('part-0.mp4')){
-        await fs.writeFile(${JSON.stringify(path.join(root,'crash-checkpoint.json'))},JSON.stringify({directory:cp.directory}));process.kill(process.pid,'SIGKILL');
+        await fs.writeFile(${JSON.stringify(path.join(root,'crash-checkpoint.json'))},JSON.stringify({directory:cp.directory}));
+        process.send({testEvent:'crash-now'});await new Promise(()=>{});
       }return result;};return cp;};
     const row=store.get('SELECT * FROM jobs WHERE id=?',${JSON.stringify(job.id)});store.run("UPDATE jobs SET status='running' WHERE id=?",row.id);
     await media.exportJob(JSON.parse(row.data));throw Error('crash point not reached');
   `;
-  const killed=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:30000});
-  assert.equal(killed.signal,'SIGKILL',killed.stderr);
+  await hardCrash(script);
   const crash=JSON.parse(await fs.readFile(path.join(root,'crash-checkpoint.json'),'utf8'));
   await fs.access(path.join(crash.directory,'part-0.mp4'));
   store=new Store(data);store.projectRoot=root;media=new Media(store,{ffmpeg,ffprobe,exportAcceleration:'software'});

@@ -305,7 +305,7 @@ export class RenderPipeline {
         const file=parts.length===1?parts[i].file:path.join(workDir,`sequence-${i}.mp4`),info=await m.probe(file,options);
         const invalidClock=(parts.length>1||plan.cpuCheckpoints)&&(!Number.isFinite(info.startTime)||Math.abs(info.startTime)>.00001||!Number.isFinite(info.duration)||Math.abs(info.duration-spans[i].duration)>.00002);
         if(info.codec!=='h264'||info.audioStreams!==0||info.frames!==spans[i].frames||!info.encodingSignature||signature&&signature!==info.encodingSignature||invalidClock||
-          parts.length>1&&info.bFrames!==0)throw new Error('连续分块视频的帧数、时间或编码信息不完整。');
+          parts.length>1&&info.bFrames!==0)throw new Error('连续分块视频的帧数、时间或编码信息不完整。'+JSON.stringify({block:i,expected:spans[i],actual:info}));
         signature=info.encodingSignature;infos.push(info);
       }
       for(let i=0;i<parts.length;i++){

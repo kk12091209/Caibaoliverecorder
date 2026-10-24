@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { LivePreparationPolicy } from '../server/live-preparation-policy.js';
 import { liveSystemResources,liveResourceHelperPath } from '../server/live-system-resources.js';
 
@@ -115,6 +116,6 @@ test('malformed native or memory samples and unsupported platforms cannot enable
   for(const mode of ['memory-invalid','thermal-unknown','stale']){const f=samplerFixture();f.setMode(mode);assert.equal((await f.sampler()).supported,false);}
   const unsupported=liveSystemResources({platform:'win32',query:()=>assert.fail('must not launch a Mac helper')});
   assert.deepEqual((await unsupported()).reason,'platform-unavailable');
-  assert.equal(liveResourceHelperPath({root:'/source/live-editor',env:{}}),'/source/.tools/runtime/resources/live-system-resources');
-  assert.equal(liveResourceHelperPath({root:'/App.app/Contents/Resources/live-editor',env:{}}),'/App.app/Contents/Resources/runtime/resources/live-system-resources');
+  assert.equal(liveResourceHelperPath({root:'/source/live-editor',env:{}}),path.join('/source','.tools/runtime/resources/live-system-resources'));
+  assert.equal(liveResourceHelperPath({root:'/App.app/Contents/Resources/live-editor',env:{}}),path.join('/App.app/Contents/Resources','runtime/resources/live-system-resources'));
 });
