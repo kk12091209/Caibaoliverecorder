@@ -118,7 +118,7 @@ async function protectedPaths(store, id) {
 }
 
 export class JobDeletion {
-  constructor(store) { this.store = store; this.previews = new Map(); this.deleting = new Set(); }
+  constructor(store) { this.store = store; this.previews = new Map(); this.deleting = new Set(); store.deletingJobs=this.deleting; }
   job(id) { return this.store.get('SELECT * FROM jobs WHERE id=?', id); }
   assertCurrent(plan) {
     const current = this.job(plan.id); assertInactive(current);
@@ -198,6 +198,8 @@ export class JobDeletion {
         catch (error) { if (error.code === 'ENOENT') continue; throw new Error(`无法删除文件，请关闭占用它的程序后重试：${entry.path}（${error.code || error.message}）`, { cause: error }); }
         deletedFiles++; freedBytes += Number(stat.size);
       }
+      this.assertCurrent(plan);
+      await this.store.exportCheckpoints?.discard(dataOf(this.job(id)));
       this.assertCurrent(plan);
       this.store.run('DELETE FROM jobs WHERE id=?', id);
       this.previews.delete(id);

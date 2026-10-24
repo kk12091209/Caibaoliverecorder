@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { Media } from '../server/media.js';
 
 function fakeProcess() {
@@ -9,6 +9,7 @@ function fakeProcess() {
   child.stdin = new PassThrough();
   child.stderr = new PassThrough();
   child.stdout = new PassThrough();
+  child.stdio = [child.stdin, child.stdout, child.stderr, new PassThrough()];
   // An invalid pid prevents Media from changing any real process priority.
   child.pid = Number.NaN;
   child.stdin.resume();
@@ -28,14 +29,14 @@ function fakeProcess() {
     }
     return true;
   };
-  const media = {
+  const media = Object.assign(Object.create(Media.prototype), {
     closed: false,
     ffmpeg: 'unused-fake-ffmpeg',
     children: new Set(),
     backgroundChildren: new Set(),
     interactiveChildren: new Set(),
     spawnTracked: () => child,
-  };
+  });
   return { child, media, closed };
 }
 
@@ -62,6 +63,7 @@ test('实际预览进程登记为并行任务，仍受清理保护且退出后�
   const {media,child}=fakeProcess();
   Object.assign(media,{processing:false,enqueues:new Set(),previews:new Map(),probes:new Set(),saves:new Map(),savePreparations:new Set()});
   const operation=Media.prototype.process.call(media,[],{interactive:true});
+  await Promise.resolve();
   assert.equal(media.interactiveChildren.has(child),true);
   assert.equal(Media.prototype.hasForegroundWork.call(media),true);
   assert.equal(Media.prototype.hasForegroundWork.call(media,{includeInteractive:false}),false);
@@ -79,6 +81,7 @@ test('输入读盘异常必须等待被终止的子进程 close 后才 reject �
   const operation = observeSettlement(Media.prototype.process.call(fixture.media, [], {
     input: brokenInput(), background: true,
   }), fixture);
+  await Promise.resolve();
   assert.equal(fixture.media.children.has(fixture.child), true);
   assert.equal(fixture.media.backgroundChildren.has(fixture.child), true);
   const [result] = await Promise.all([operation, fixture.closed]);
@@ -107,10 +110,33 @@ test('child error 先到而 close 延迟时，process 不得提前 reject', { ti
   const operation = observeSettlement(Media.prototype.process.call(fixture.media, [], {
     background: true,
   }), fixture);
+  await Promise.resolve();
   fixture.child.emit('error', new Error('子进程管道异常'));
   fixture.child.kill();
   const [result] = await Promise.all([operation, fixture.closed]);
   assert.equal(result.status, 'rejected');
   assert.ok(result.error instanceof Error);
   assertChildSettled(result);
+});
+
+test('取消时源已结束但 stdin 尚未 finish，仍显式关闭输入并等 child close', {timeout:3000}, async()=>{
+  const fixture=fakeProcess(),controller=new AbortController();let finalEntered;
+  const flushing=new Promise(resolve=>{finalEntered=resolve;});
+  fixture.child.stdin=new Writable({write(_bytes,_encoding,done){done();},final(){finalEntered();}});
+  fixture.child.stdio[0]=fixture.child.stdin;
+  async function* input(){yield Buffer.from('complete source with a destination still flushing');}
+  const operation=observeSettlement(Media.prototype.process.call(fixture.media,[],{input:input(),signal:controller.signal,background:true}),fixture);
+  await flushing;controller.abort();assert.equal(fixture.child.stdin.destroyed,true);
+  const result=await operation;assertChildSettled(result);
+});
+
+test('取消已读到结尾但仍有背压的输入，不能等待销毁后不会再发出的 end', {timeout:3000}, async()=>{
+  const fixture=fakeProcess(),controller=new AbortController();let finishRead;
+  fixture.child.stdin=new Writable({highWaterMark:1,write(){}});
+  fixture.child.stdio[0]=fixture.child.stdin;
+  const read=new Promise(resolve=>{finishRead=resolve;});
+  async function* input(){try{for(let i=0;i<4;i++)yield Buffer.alloc(1024);}finally{finishRead();}}
+  const operation=observeSettlement(Media.prototype.process.call(fixture.media,[],{input:input(),signal:controller.signal,background:true}),fixture);
+  await read;await new Promise(resolve=>setImmediate(resolve));controller.abort();
+  const result=await operation;assertChildSettled(result);
 });

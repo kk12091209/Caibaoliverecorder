@@ -21,12 +21,13 @@ async function action(name,input={}){
   <section class="update-settings" aria-label="软件更新">
     <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.2.2' }}</span></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>自动检查更新并提醒</label>
-    <p class="muted">后台每天检查 GitHub 发布页；由你确认下载和安装，不会强制中断录制或导出。</p>
+    <p class="muted">启动后自动检查，运行期间每天检查。发现新版本会弹窗提醒，由你确认更新，不会强制中断录制或导出。</p>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>检查更新</button><small v-if="update.checkedAt">上次检查 {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
     <p role="status">{{ status }}</p>
     <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
       <strong>{{ update.candidate.version }}</strong>
+      <p v-if="update.ignored" class="muted">已设置下次版本更新再提示；仍可在这里更新当前版本。</p>
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
       <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" aria-label="更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">取消下载</button></template>
       <div v-else class="update-actions">

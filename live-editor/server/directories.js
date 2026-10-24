@@ -21,7 +21,13 @@ export async function writableDirectory(value) {
 }
 export function directoryToOpen(store, input) {
   let directory;
-  if (input.jobId) {
+  if(input.recoveryJobId){
+    const row=store.get("SELECT * FROM jobs WHERE id=? AND status IN ('failed','interrupted','save_failed')",String(input.recoveryJobId));
+    if(!row)throw new Error('该任务当前没有可查看的暂存文件。');
+    const job=store.jobDetails(row),value=job.pendingPublication?.directory||job.processingRecovery?.directory;
+    if(typeof value!=='string'||!path.isAbsolute(value)||path.resolve(path.dirname(value))!==path.resolve(store.root,'temp')||!/^bili-export-[A-Za-z0-9_-]+$/.test(path.basename(value)))throw new Error('暂存路径无法确认，未打开其他目录。');
+    directory=value;
+  }else if (input.jobId) {
     const job = store.get("SELECT file FROM jobs WHERE id=? AND status='done'", String(input.jobId));
     if (!job?.file) throw new Error('导出尚未完成。');
     directory = path.dirname(job.file);
@@ -36,7 +42,8 @@ export function directoryToOpen(store, input) {
 }
 export async function openDirectory(store, input) {
   const directory=directoryToOpen(store,input);
-  await fs.mkdir(directory, { recursive: true });
+  if(input.recoveryJobId){const stat=await fs.lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink()||path.resolve(await fs.realpath(directory))!==path.resolve(directory))throw new Error('暂存目录路径发生变化，已停止打开。');}
+  else await fs.mkdir(directory, { recursive: true });
   if (!['win32','darwin'].includes(process.platform)) throw new Error('请在文件管理器中打开显示的保存路径。');
   await new Promise((resolve, reject) => {
     const child = spawn(process.platform==='darwin'?'/usr/bin/open':'explorer.exe', process.platform==='darwin'?['-a','Finder',directory]:[directory], { windowsHide: false, detached: true, stdio: 'ignore' });

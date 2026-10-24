@@ -27,6 +27,50 @@ async function fixture(t,options={}){
 }
 async function downloaded(f){await f.updates.check();f.updates.download(f.updates.candidate.key);await f.updates.downloadTask;}
 
+test('startup checks even when a previous run checked today, keeps periodic checks bounded, and honors opt out',async t=>{
+  let now=200000;const f=await fixture(t,{now:()=>now});
+  f.updates.checkedAt=now;
+  t.mock.timers.enable({apis:['setTimeout','setInterval']});
+  f.updates.start();const timer=f.updates.timer;f.updates.start();assert.equal(f.updates.timer,timer);
+  t.mock.timers.tick(4999);assert.equal(f.calls.length,0);
+  t.mock.timers.tick(1);await f.updates.checkTask;assert.equal(f.calls.length,2);assert.equal(f.updates.status,'available');
+  now+=3600000;t.mock.timers.tick(3600000);assert.equal(f.calls.length,2);
+  now+=86400000;await f.updates.autoCheck();assert.equal(f.calls.length,4);
+  f.updates.setEnabled(false);now+=86400000;await f.updates.autoCheck({startup:true});assert.equal(f.calls.length,4);
+  f.updates.setEnabled(true);await f.updates.checkTask;assert.equal(f.calls.length,6);
+});
+
+test('next-version reminder preference survives restart and elapsed days, without blocking a newer release or manual download',async t=>{
+  let now=200000;const f=await fixture(t,{now:()=>now});Object.assign(f.published,publication('win32-x64',1,'0.2.8'));
+  await f.updates.check();assert.equal(f.updates.ignoreVersion('0.2.8').ignored,true);
+  assert.equal(f.updates.snapshot().enabled,true);assert.equal(f.updates.snapshot().deferred,false);
+  now+=30*86400000;assert.equal(f.updates.snapshot().ignored,true);await f.updates.close();
+  const store=new Store(f.root),restarted=new Updates(store,{current,platform:'win32-x64',mirror:false,fetcher:f.fetcher,now:()=>now});
+  t.after(async()=>{await restarted.close();store.close();});
+  await restarted.check();assert.equal(restarted.snapshot().ignored,true);
+  restarted.download('0.2.8');await restarted.downloadTask;assert.equal(restarted.status,'ready');
+  assert.throws(()=>restarted.requestInstall('0.2.9'),/更新信息已变化/);
+  assert.equal(restarted.snapshot().autoInstall,false);
+  Object.assign(f.published,publication('win32-x64',1,'0.2.9'));now+=60001;
+  await restarted.check();assert.equal(restarted.candidate.version,'0.2.9');assert.equal(restarted.snapshot().ignored,false);
+  assert.throws(()=>restarted.ignoreVersion('0.2.8'),/更新信息已变化/);
+  assert.equal(store.setting('update-ignored-version'),'0.2.8');
+});
+
+test('reminder API validates the displayed version and full request before storing an ignore preference',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-reminder-api-'));
+  const app=await createApp({data:root,noRecorder:true,preparation:false,compact:false,updatesAutoCheck:false});
+  t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});await app.startupRecovery;
+  app.updates.candidate={key:'0.2.8',version:'0.2.8',notes:['测试说明'],size:10};app.updates.status='available';
+  const post=async input=>fetch(app.runtime.origin+'/api/updates/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+  for(const input of [null,[],{},true,{key:null},{key:'0.2.7'},{key:'0.2.8',unknown:true}]){
+    assert.equal((await post(input)).status,400);assert.equal(app.snapshot().updates.ignored,false);
+  }
+  const response=await post({key:'0.2.8'});assert.equal(response.status,200);assert.equal((await response.json()).ignored,true);
+  app.updates.candidate={...app.updates.candidate,key:'0.2.9',version:'0.2.9'};
+  assert.equal(app.snapshot().updates.ignored,false);assert.equal((await post({key:'0.2.8'})).status,400);
+});
+
 test('相同版本依靠修订号更新，较老版本和修订不会降级',()=>{
   assert.equal(newerRelease({...current,revision:3},current),true);
   assert.equal(newerRelease(current,current),false);

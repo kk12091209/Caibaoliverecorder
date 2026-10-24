@@ -21,7 +21,7 @@ export class DouyinRecorder {
     for(const saved of Array.isArray(savedRooms)?savedRooms:[])if(saved&&typeof saved.webRid==='string'&&/^\d{1,20}$/.test(saved.webRid)&&this.entries.size<64)this.entries.set(saved.webRid,this.entry(saved));
   }
   entry(saved){return {webRid:saved.webRid,name:String(saved.name||'抖音直播间').slice(0,100),title:String(saved.title||'').slice(0,300),autoRecord:saved.autoRecord!==false,enabled:saved.enabled!==false,streaming:false,recording:false,error:'',chatError:'',nextPoll:0,retryAt:0};}
-  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,streaming:room.streaming,recording:room.recording,recordingEnabled:room.enabled,autoRecord:room.autoRecord,autoRecordForThisSession:room.enabled,error:room.error,chatError:room.chatError}));}
+  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,streaming:room.streaming,recording:room.recording,recordingEnabled:room.enabled,autoRecord:room.autoRecord,autoRecordForThisSession:room.enabled,error:room.error,chatError:room.chatError,recordingProgress:room.progress?{...room.progress}:null}));}
   save(){this.store.setting('douyin-rooms',[...this.entries.values()].map(room=>({webRid:room.webRid,name:room.name,title:room.title,autoRecord:room.autoRecord,enabled:room.enabled})));}
   start(){
     if(this.closed||this.started)return;this.started=true;
@@ -96,10 +96,17 @@ export class DouyinRecorder {
       xml=await fs.open(source.xml,'wx');
       await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="douyin" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
       this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
-      normalizer=new DouyinFlv();
+      normalizer=new DouyinFlv();room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
       try{this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:metadata.userUniqueId,cookie:metadata.cookie,sourceStart:Date.parse(wall)},
         {write:batch=>writeAll(xml,chatXml(batch)),status:status=>{room.chatError=status==='connected'?'':status==='write-failed'?'弹幕保存失败。':'弹幕连接重试中。';}});}catch{room.chatError='弹幕暂时无法连接。';}
-      for await(const chunk of response.body){lastData=this.now();if(signal.aborted)break;for(const bytes of normalizer.feed(chunk))await writeAll(flv,bytes);}
+      for await(const chunk of response.body){
+        lastData=this.now();if(signal.aborted)break;
+        const frames=normalizer.feed(chunk),started=this.now();let written=0;
+        room.progress.inFlightWriteSince=started;
+        for(const bytes of frames){await writeAll(flv,bytes);written+=bytes.length;}
+        room.progress.bytes+=written;room.progress.mediaMs=normalizer.duration*1000;
+        room.progress.writeLatencyMs=Math.max(0,this.now()-started);room.progress.inFlightWriteSince=null;room.progress.observedAt=this.now();
+      }
       if(!signal.aborted)normalizer.finish();
     }catch(error){
       if(!this.closed&&(!room.abort?.signal.aborted||room.abort.signal.reason?.message==='直播连接超时。'))this.store.diagnostics?.record('抖音录制连接',error,{level:'警告'});
@@ -124,7 +131,7 @@ export class DouyinRecorder {
         this.store.run('UPDATE sources SET closed=MAX(closed,?),error=? WHERE id=?',recordError?2:1,recordError?.message||'',source.id);
         this.store.run("UPDATE sessions SET status=?,error=? WHERE id=?",recordError?'finishing':room.enabled&&!this.closed?'waiting':'finishing',recordError?.message||'',session.id);
       }
-      room.recording=false;room.abort=null;room.sourceId=null;room.retryAt=this.now()+3000;
+      room.recording=false;room.abort=null;room.sourceId=null;room.progress=null;room.retryAt=this.now()+3000;
     }
   }
   async startRoom(key){this.assertOpen();const room=this.room(key);room.enabled=true;room.blocked=false;room.error='';room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}

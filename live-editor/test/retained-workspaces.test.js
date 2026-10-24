@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import sync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +15,13 @@ const marker = directory => fs.readFile(path.join(directory, MARKER), 'utf8').th
 async function setMarker(directory, patch) {
   await fs.writeFile(path.join(directory, MARKER), JSON.stringify({ ...await marker(directory), ...patch }));
 }
+
+test('owner marker replacement fails on a full disk without truncating the previous recoverable owner',async t=>{
+  const f=await fixture('atomic-owner');await f.manager.retain(f.directory,jobId);const before=await marker(f.directory),rename=sync.renameSync;
+  const fault=t.mock.method(sync,'renameSync',(from,to)=>{if(to===path.join(f.directory,MARKER))throw Object.assign(Error('disk full'),{code:'ENOSPC'});return rename(from,to);});
+  assert.throws(()=>f.manager.beforeSpawn(f.directory),{code:'ENOSPC'});assert.deepEqual(await marker(f.directory),before);
+  await fs.access(f.file);fault.mock.restore();await f.manager.release(f.directory,jobId);await f.manager.finish(f.directory);await missing(f.directory);
+});
 async function fixture(name, prefix = 'bili-export-') {
   const temporaryRoot = path.join(root, name, 'temp');
   const manager = new TemporaryWorkspaces(temporaryRoot, { processAlive: pid => pid === process.pid });
@@ -122,7 +130,7 @@ test('pending spawn 或活 child 阻止 release，retain 可先保护工作区�
   f.manager.processAlive = pid => pid === process.pid;
   f.manager.childExited(ticket, childPid);
   assert.equal(await f.manager.finish(f.directory), false);
-  assert.deepEqual((await marker(f.directory)).retained, { jobId });
+  assert.equal((await marker(f.directory)).retained.jobId, jobId);
   await fs.access(f.file);
   await f.manager.release(f.directory, jobId);
   await fs.access(f.file);

@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {setImmediate as immediate,setTimeout as pause} from 'node:timers/promises';
 import {timestamp,tags} from './ingest.js';
 import {checkedFile,fingerprint,inside,pathKey,originalTags,isMedia,isCodecHeader,isKeyframe,chunkReaderCount} from './storage-files.js';
+import {codecHeaderSignature,keyframesDigest,directKeyframesDigest} from './source-range-identity.js';
 
 const cancelled=()=>Object.assign(new Error('素材整理已暂停。'),{code:'COMPACT_CANCELLED'});
 const digest=()=>createHash('sha256');
@@ -117,15 +118,20 @@ export class CompactStorage {
         for(const {tag,offset} of parsed.items){if(!isMedia(tag)||isCodecHeader(tag))throw new Error('过渡片段包含无法识别的数据包，已保留文件。');if(isKeyframe(tag))actualKeys.push({time:source.start+timestamp(tag)/1000,offset});}
         const expectedKeys=keysBySeq.get(entry.seq)||[];
         if(JSON.stringify(actualKeys)!==JSON.stringify(expectedKeys.map(key=>({time:key.time,offset:key.offset}))))throw new Error('过渡片段关键帧与索引不一致，已保留文件。');
-        chunkKeys.push(...expectedKeys.map(key=>({...key,mediaOffset:mediaOffset+key.offset})));mediaOffset+=data.length;chunkHash.update(data);
-        manifest.push({seq:entry.seq,path:entry.path,fingerprint:fingerprint(entry.stat),sha256:digest().update(data).digest('hex')});await this.cooperate(source);
+        const sha256=digest().update(data).digest('hex'),identity=this.store.get('SELECT * FROM chunk_identities WHERE source=? AND seq=?',source.id,entry.seq);
+        if(identity&&(identity.sha256!==sha256||identity.fingerprint!==fingerprint(entry.stat)||identity.keys_hash!==keyframesDigest(expectedKeys)))throw new Error('过渡片段在封口后发生变化，已保留文件。');
+        manifest.push({seq:entry.seq,path:entry.path,fingerprint:fingerprint(entry.stat),sha256,mediaOffset,header:identity?.header});
+        chunkKeys.push(...expectedKeys.map(key=>({...key,mediaOffset:mediaOffset+key.offset})));mediaOffset+=data.length;chunkHash.update(data);await this.cooperate(source);
       }
-      const rawHash=digest(),rawKeys=[],headers={};let rawMediaOffset=0,rawBytes=13;
+      const rawHash=digest(),rawKeys=[],headers={};let rawMediaOffset=0,rawBytes=13,chunkIndex=0;
       for await(const {tag,offset} of originalTags(handle,13,{checkpoint:()=>this.cooperate(source)})) {
         rawBytes=offset+tag.length;
         if(!isMedia(tag))continue;
         if(tag[0]===9&&(tag[11]&15)!==7)throw new Error('原片视频编码与内部索引不符。');
         if(isCodecHeader(tag)){headers[tag[0]===9?'video':'audio']=tag.toString('base64');continue;}
+        while(chunkIndex+1<manifest.length&&rawMediaOffset>=manifest[chunkIndex+1].mediaOffset)chunkIndex++;
+        const chunkIdentity=manifest[chunkIndex];
+        if(chunkIdentity.header&&codecHeaderSignature(headers)!==codecHeaderSignature(chunkIdentity.header))throw new Error('原片编码头区间与已封口片段不一致，已保留过渡片段。');
         if(isKeyframe(tag))rawKeys.push({time:source.start+timestamp(tag)/1000,mediaOffset:rawMediaOffset,raw_offset:offset});
         rawHash.update(tag);rawMediaOffset+=tag.length;
       }
@@ -144,7 +150,10 @@ export class CompactStorage {
         if(!session||session.status!=='finished'||!this.store.get('SELECT eligible FROM source_storage WHERE source=?',source.id)?.eligible||this.signature(current)!==this.signature(source)||JSON.stringify(this.store.all('SELECT * FROM chunks WHERE source=? ORDER BY seq',source.id))!==JSON.stringify(chunks)||JSON.stringify(this.store.all('SELECT * FROM keyframes WHERE source=? ORDER BY seq,offset',source.id))!==JSON.stringify(keys))throw cancelled();
         this.store.run('DELETE FROM direct_keyframes WHERE source=?',source.id);this.store.run('DELETE FROM compact_chunks WHERE source=?',source.id);
         for(let i=0;i<rawKeys.length;i++)this.store.run('INSERT INTO direct_keyframes VALUES(?,?,?,?,?)',source.id,chunkKeys[i].seq,chunkKeys[i].offset,rawKeys[i].time,rawKeys[i].raw_offset);
-        for(const entry of manifest)this.store.run('INSERT INTO compact_chunks(source,seq,path,fingerprint,sha256) VALUES(?,?,?,?,?)',source.id,entry.seq,entry.path,entry.fingerprint,entry.sha256);
+        for(const entry of manifest) {
+          const mapped=this.store.all('SELECT time,chunk_offset,raw_offset FROM direct_keyframes WHERE source=? AND seq=? ORDER BY chunk_offset',source.id,entry.seq);
+          this.store.run('INSERT INTO compact_chunks(source,seq,path,fingerprint,sha256,keys_hash) VALUES(?,?,?,?,?,?)',source.id,entry.seq,entry.path,entry.fingerprint,entry.sha256,directKeyframesDigest(mapped));
+        }
         this.store.run("UPDATE source_storage SET mode='direct',status='pending',reason='',fingerprint=?,verified_bytes=?,next_retry=0,updated=? WHERE source=?",sealed,mediaOffset,new Date(this.now()).toISOString(),source.id);
       }));
     } finally {await handle.close();}

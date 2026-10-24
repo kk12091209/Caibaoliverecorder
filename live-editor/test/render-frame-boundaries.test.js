@@ -19,7 +19,8 @@ test('real 60.014-second source at 4090.976 keeps its ready block and omits only
   assert.deepEqual(blocks.map(({startMs,endMs})=>[startMs,endMs]),[[4090976,4150976]]);
   let acquired=0,released=0;
   const renderer=new RenderPipeline({store:{edit:()=>({})},renderCache:{acquire:async()=>{acquired++;return {bytes:123,release:async()=>released++};}}},()=> '');
-  renderer.describe=async()=>({blocks});renderer.spec=async(_plan,block)=>block;
+  renderer.describe=async()=>({blocks,sources:[source],layout:[],snapshot:{excluded:new Set()},profileHash:'profile'});renderer.spec=async(_plan,block)=>block;
+  renderer.sourceFingerprint=async()=>JSON.stringify(source);
   renderer.acquire=async()=>{throw Error('Existing complete block must be reused');};
   const result=await renderer.prepareNext('session');
   assert.equal(result.done,true);assert.equal(result.preparedSeconds,result.totalSeconds);

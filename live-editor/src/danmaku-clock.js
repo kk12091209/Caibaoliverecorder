@@ -56,7 +56,23 @@ export class DanmakuCache {
     this.entries.delete(key); this.entries.set(key, entry);
     return entry.value;
   }
-  set(key, value, cost = 1) {
+  set(key, value, cost = 1, protectedKeys) {
+    // A visible working set can exceed the budget. Keep its resident subset
+    // stable instead of evicting it in a loop and repainting every item/frame.
+    if (protectedKeys && cost <= this.maxCost) {
+      let needed = this.cost - (this.entries.get(key)?.cost || 0) + cost - this.maxCost;
+      const victims = [];
+      for (const [candidate, entry] of this.entries) {
+        if (needed <= 0) break;
+        if (candidate !== key && !protectedKeys.has(candidate)) { victims.push(candidate); needed -= entry.cost; }
+      }
+      if (needed > 0) {
+        const old = this.entries.get(key);
+        if (old) { this.cost -= old.cost; this.entries.delete(key); }
+        return value;
+      }
+      for (const victim of victims) { this.cost -= this.entries.get(victim).cost; this.entries.delete(victim); }
+    }
     const old = this.entries.get(key);
     if (old) { this.cost -= old.cost; this.entries.delete(key); }
     if (cost > this.maxCost) return value;

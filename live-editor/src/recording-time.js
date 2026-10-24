@@ -48,13 +48,21 @@ export function toRecordingInput(epochMs) {
   if(!Number.isFinite(date.getTime())||year<1||year>9999)throw new Error(INVALID_INPUT);
   return `${pad(year,4)}-${pad(date.getUTCMonth()+1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(),3)}`;
 }
-export function recordingTimeAt(seconds,session,sources) {
+function timeAtSpans(seconds,spans) {
   if(!Number.isFinite(seconds)||seconds<0)return null;
-  const spans=spansFor(session,sources);
   // Start-inclusive intervals agree with playback/export start selection. An
   // exact source end remains representable as a clip end, including before gaps.
   const span=spans.find(s=>seconds>=s.start&&seconds<s.end)||spans.find(s=>Math.abs(seconds-s.end)<=EPSILON_SECONDS);
   return span?Math.round(span.wall+(Math.min(seconds,span.end)-span.start)*1000):null;
+}
+// Compile metadata once for the preview clock, rather than parse/sort every
+// media event. Callers rebuild this mapper when source metadata changes.
+export function createRecordingClock(session,sources) {
+  const spans=spansFor(session,sources);
+  return seconds=>timeAtSpans(seconds,spans);
+}
+export function recordingTimeAt(seconds,session,sources) {
+  return timeAtSpans(seconds,spansFor(session,sources));
 }
 export function recordingTimeBounds(session,sources,duration=session?.duration) {
   const spans=spansFor(session,sources,duration);

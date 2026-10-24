@@ -20,7 +20,7 @@ const message=(id,time,text='EDGE')=>({id,time,text,type:'d',color:'16777215'});
 test('preparation holds every current-plan ready block through a budget failure and releases all leases',async()=>{
   const held=new Set(),blocks=[0,60000,120000].map(startMs=>({startMs,endMs:startMs+60000}));
   const renderer=new RenderPipeline({store:{edit:()=>({})},renderCache:{async acquire(spec){if(spec===60000)return null;held.add(spec);return {bytes:10,release:async()=>held.delete(spec)};}}},assText);
-  renderer.describe=async()=>({blocks});renderer.spec=async(_plan,block)=>block.startMs;
+  renderer.describe=async()=>({blocks,sources:[],layout:[],snapshot:{excluded:new Set()},profileHash:"profile"});renderer.spec=async(_plan,block)=>block.startMs;
   renderer.acquire=async()=>{assert.deepEqual([...held],[0,120000]);throw Object.assign(new Error('budget'),{code:'PREP_SPACE'});};
   await assert.rejects(renderer.prepareNext('session'),{code:'PREP_SPACE'});
   assert.equal(held.size,0);assert.equal(renderer.operations.size,0);
@@ -146,7 +146,7 @@ test('background builds one block per call, exports reuse across restart, precis
   f.media=await f.restart();assert.equal(await f.media.renderCache.hasReady(f.session.id),true);
   const last=f.calls.length;
   const changed=await exported(f,{scope:'full',mode:'dual'});assert.equal(videoRenders(f.calls)-count,2);
-  const copied=(flag)=>f.calls.slice(last).some(call=>call.args[call.args.indexOf(flag)+1]==='copy');
+  const copied=(flag)=>f.calls.slice(last).some(call=>call.args[call.args.indexOf(flag)+1]==='copy'||call.args[call.args.indexOf('-c')+1]==='copy');
   assert.equal(copied('-c:v'),true);assert.equal(copied('-c:a'),true);
   assert.equal(f.calls.slice(last).some(call=>call.args.includes('flac')),false);
   assert.ok((await fs.stat(clipFile(changed.file,'danmaku'))).size>0);
@@ -183,7 +183,7 @@ test('cold foreground policy renders two balanced parts, publishes dual files an
   };
   assert.equal(await f.media.renderCache.hasReady(f.session.id),false);
   const duration=f.store.session(f.session.id).duration,whole=await exported(f,{scope:'full',mode:'dual'}),baked=clipFile(whole.file,'danmaku');
-  assert.equal(peak,2);assert.equal(spans.length,2);assert.ok(Math.abs((spans[0][1]-spans[0][0])-(spans[1][1]-spans[1][0]))<=1/60);
+  assert.equal(peak,2);assert.equal(spans.length,2,JSON.stringify({spans,job:whole.job}));assert.ok(Math.abs((spans[0][1]-spans[0][0])-(spans[1][1]-spans[1][0]))<=1/60);
   assert.equal(spans[0][1],spans[1][0]);assert.equal(whole.job.preparedBlocks,0);
   const info=inspect(baked);assert.equal(info.streams.find(s=>s.codec_type==='video').r_frame_rate,'60/1');
   assert.equal(Number(info.streams.find(s=>s.codec_type==='video').nb_read_frames),Math.round(duration*60));

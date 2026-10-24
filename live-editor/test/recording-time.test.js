@@ -2,11 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {recordingTimeAt,positionAtRecordingTime,toRecordingInput,parseRecordingInput,recordingTimeBounds} from '../src/recording-time.js';
+import {createRecordingClock,recordingTimeAt,positionAtRecordingTime,toRecordingInput,parseRecordingInput,recordingTimeBounds} from '../src/recording-time.js';
 const session={created:'2026-09-28T13:30:00.123Z',duration:600,status:'finished'};
 const epoch=Date.parse(session.created);
 const source={start:0,duration:600,wall:session.created};
 const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<.000001,`${actual} != ${expected}`);
+
+test('preview clock uses recorded wall time at 08:30 + 42 minutes, reconnects, and missing metadata',()=>{
+  const session={created:'2026-10-24T08:30:00+08:00',duration:3000,room:0};
+  const sources=[{start:0,duration:2600,wall:session.created},{start:2700,duration:300,wall:'2026-10-24T09:20:00+08:00'}];
+  const clock=createRecordingClock(session,sources);
+  assert.equal(toRecordingInput(clock(42*60)),'2026-10-24T09:12:00.000');
+  assert.equal(clock(2650),null);
+  assert.equal(toRecordingInput(clock(2715)),'2026-10-24T09:20:15.000');
+  for(const position of [-1,NaN,0,.001,2599.999,2600,2650,2700,3000,3001])assert.equal(clock(position),recordingTimeAt(position,session,sources));
+  sources[0].wall='2026-10-24T10:00:00+08:00';
+  assert.equal(toRecordingInput(clock(0)),'2026-10-24T08:30:00.000','compiled mapping is an immutable metadata snapshot');
+  assert.equal(toRecordingInput(createRecordingClock(session,sources)(0)),'2026-10-24T10:00:00.000');
+  assert.equal(createRecordingClock({created:'unknown',duration:5},[])(1),null);
+});
 
 test('北京时间输入严格校验并保留毫秒，不受电脑时区影响',()=>{
   assert.equal(toRecordingInput(epoch),'2026-09-28T21:30:00.123');

@@ -46,7 +46,7 @@ async function plainFile(file, { missing = false } = {}) {
   if (!stat.isFile() || stat.isSymbolicLink()) throw failure('UNSAFE_PATH', '视频文件包含链接或类型异常，未操作该文件。');
   return stat;
 }
-async function mp4Complete(file, size) {
+export async function mp4Complete(file, size) {
   const handle = await fs.open(file, 'r');
   try {
     let position = 0, count = 0; const seen = new Set();
@@ -115,22 +115,33 @@ export class ExportPublication {
     if (this.busy.has(name)) throw pending(failure('SAVE_BUSY', '这个视频正在保存，请等待完成。'), workDir);
     this.busy.add(name); try { return await operation(); } finally { this.busy.delete(name); }
   }
-  async stage(job, workDir, results) {
+  async stage(job, workDir, results, {recover=false}={}) {
     return this.exclusive(workDir, async () => {
       await this.checkDirectory(workDir);
       try {
         await fs.access(path.join(workDir, MANIFEST));
         const existing = await this.read(workDir, job.id);
         return { directory: workDir, jobId: job.id, state: existing.state };
-      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      } catch (error) { if (error.code !== 'ENOENT'&&!(recover&&error.code==='INVALID_MANIFEST')) throw error; }
       if (!ID.test(job.id || '') || !['clean', 'danmaku', 'dual', undefined].includes(job.mode) || !Array.isArray(results) || !results.length || results.length > 2) throw failure('INVALID_MANIFEST', '待保存任务或成片列表无效。');
+      const previous=await this.recoveryIntent(workDir,job.id);
+      if(previous?.phase==='publishing')throw failure('RECOVERY_REVIEW','保存记录不完整且可能已有成片，已保留文件，请检查暂存和目标目录。');
+      const intent=previous||{version:1,phase:'staging',mode:job.mode,scope:job.scope||'clips',session:job.session,outputRoot:job.outputRoot,output:job.output,results,files:[]};
+      // Retain before validation/fsync: even a full temp disk or failed intent
+      // write must not cause the caller's finally to delete finished videos.
+      await this.temporary.retain(workDir,job.id,{publicationIntent:intent});
       const files = [];
       for (const result of results) {
         if (!['final.mp4', 'final-danmaku.mp4'].includes(result.temporary) || files.some(file => file.temporary === result.temporary)) throw failure('INVALID_MANIFEST', '待保存成片名称无效。');
         const source = path.join(workDir, result.temporary); let stat;
         try { stat = await plainFile(source); } catch (error) { if (error.code === 'ENOENT') throw failure('SOURCE_MISSING', `已编码的临时视频不存在：${source}`, error); throw error; }
         if (stat.nlink !== 1n || stat.size <= 0n || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw failure('SOURCE_INVALID', '已编码视频为空、长度异常或被共享，未开始保存。');
+        const expected=intent.files.find(file=>file.temporary===result.temporary);
+        if(expected&&!matches(stat,expected))throw failure('SOURCE_CHANGED','恢复保存前成片已发生变化，已保留文件，请检查。');
         await mp4Complete(source, Number(stat.size));
+        const item={temporary:result.temporary,kind:job.mode==='danmaku'||result.temporary==='final-danmaku.mp4'?'danmaku':'video',...identity(stat)};
+        intent.files=[...intent.files.filter(file=>file.temporary!==result.temporary),item];
+        await this.temporary.retain(workDir,job.id,{publicationIntent:intent});
         const handle = await fs.open(source, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
         const after = await plainFile(source); if (!matches(after, identity(stat)) || after.nlink !== 1n) throw failure('SOURCE_CHANGED', '已编码视频在校验期间发生变化，已停止保存。');
         files.push({ temporary: result.temporary, kind: job.mode === 'danmaku' || result.temporary === 'final-danmaku.mp4' ? 'danmaku' : 'video', ...identity(stat) });
@@ -145,6 +156,32 @@ export class ExportPublication {
       } catch (error) { throw pending(error, workDir); }
       return { directory: workDir, jobId: job.id, state: manifest.state };
     });
+  }
+  async recoveryIntent(workDir,jobId){
+    await this.checkDirectory(workDir);
+    const stat=await plainFile(path.join(workDir,OWNER));if(stat.nlink!==1n||stat.size>16384n)throw failure('INVALID_MANIFEST','暂存目录归属记录异常，已保留文件。');
+    const owner=JSON.parse(await fs.readFile(path.join(workDir,OWNER),'utf8'));
+    if(owner.retained?.jobId!==jobId)return null;
+    const intent=owner.retained.publicationIntent;
+    if(!intent)return null;
+    if(intent.version!==1||!['staging','publishing'].includes(intent.phase)||!Array.isArray(intent.results)||!intent.results.length||intent.results.length>2||!Array.isArray(intent.files)||intent.files.length>2||intent.results.some(f=>!['final.mp4','final-danmaku.mp4'].includes(f.temporary))||new Set(intent.results.map(f=>f.temporary)).size!==intent.results.length)throw failure('INVALID_MANIFEST','暂存恢复意图异常，已保留文件。');
+    resultPaths({...intent,files:intent.results.map(f=>({temporary:f.temporary,kind:intent.mode==='danmaku'||f.temporary==='final-danmaku.mp4'?'danmaku':'video'}))});
+    return intent;
+  }
+  async recoverStage(job){
+    const existing=await this.discover(job.id);if(existing)return existing;
+    const candidates=[];
+    for(const directory of new Set([job.pendingPublication?.directory,job.processingRecovery?.directory].filter(Boolean))){
+      let intent;try{intent=await this.recoveryIntent(directory,job.id);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+      if(intent)candidates.push({directory,intent});
+    }
+    if(candidates.length>1)throw failure('AMBIGUOUS_RESULT','有多份暂存结果，已保留文件，请检查后恢复。');
+    if(!candidates.length)return null;
+    const {directory,intent}=candidates[0];
+    if(intent.phase!=='staging')throw failure('RECOVERY_REVIEW','保存记录损坏且可能已有输出，已保留文件，请检查暂存和目标目录。');
+    if(intent.mode!==job.mode||(intent.scope||'clips')!==(job.scope||'clips')||intent.session!==job.session)throw failure('INVALID_MANIFEST','暂存恢复意图与原任务不一致，未操作视频。');
+    await this.temporary.adoptRetained(directory,job.id);
+    return this.stage({...job,outputRoot:intent.outputRoot,output:intent.output},directory,intent.results,{recover:true});
   }
   async discover(jobId) {
     if (!ID.test(jobId || '')) throw failure('INVALID_MANIFEST', '导出任务编号无效。');
@@ -221,6 +258,8 @@ export class ExportPublication {
           if (!matches(stat, file) || stat.nlink !== 1n || stat.size <= 0n) throw failure('SOURCE_CHANGED', '待保存的视频已被更改或共享，已停止保存。');
         }
         manifest.outputRoot = targets.outputRoot; manifest.output = targets.output; manifest.state = 'saving'; delete manifest.lastError;
+        const intent=await this.recoveryIntent(workDir,jobId);
+        if(intent)await this.temporary.retain(workDir,jobId,{publicationIntent:{...intent,phase:'publishing'}});
         await this.write(workDir, manifest);
         try { await directory(path.dirname(targets.paths[0].path), true); }
         catch (error) { throw this.destinationError(error, path.dirname(targets.paths[0].path)); }

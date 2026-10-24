@@ -10,6 +10,9 @@ import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
 import { MAX_FONT_BYTES } from './danmaku-font.js';
 import { BackgroundPreparation } from './background-preparation.js';
+import { LiveRecordingHealth } from './live-recording-health.js';
+import { LivePreparationPolicy } from './live-preparation-policy.js';
+import { liveSystemResources } from './live-system-resources.js';
 import { JobDeletion } from './job-deletion.js';
 import { DeletionMaintenance } from './deletion-maintenance.js';
 import { SessionDeletion } from './session-deletion.js';
@@ -59,26 +62,34 @@ async function createManagedApp(options,runtime) {
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  media.isRecording=()=>recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
   const linkmic=new LinkmicIndex(store,{resolver:recorder.douyin.resolver,ffmpeg});store.linkmic=linkmic;
   const clients=new Set(); let closing=false,app,closePromise,startupRecovery;
   store.recovery.recovering=true;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
   let autoUpdate;
+  const liveOptions=options.preparationOptions?.liveOptions||{},liveResources=liveOptions.resources||liveSystemResources();
+  const liveHealth=new LiveRecordingHealth({store,recorder,ingestor,media,resources:liveResources,
+    blocked:()=>closing||store.recovery.recovering||autoUpdate?.applying||storage.busy||
+      (!options.noRecorder&&recorder.connectionPending)||media.hasForegroundWork?.()||
+      !!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1")});
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
+    liveOptions:{...liveOptions,context:liveOptions.context||(()=>liveHealth.context()),policy:liveOptions.policy||new LivePreparationPolicy({resources:liveResources})},
     busyReason:()=>{
       if(closing||store.recovery.recovering||autoUpdate?.applying)return 'foreground';
       if(!options.noRecorder&&recorder.connectionPending)return 'connection';
-      if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
       if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
       if(storage.busy)return 'compaction';
       if(store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1"))return 'indexing';
+      if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
       return '';
     }
   });
   media.preparation=preparation;store.preparation=preparation;store.renderCache=media.renderCache;
   store.temporaryWorkspaces=media.temporaryWorkspaces;
   const closeAction=()=>{const saved=store.setting('window-close-action');return ['exit','background'].includes(saved)?saved:'ask';};
+  const previewTimestamp=()=>store.setting('preview-timestamp')===true;
   function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
   function activity(){
     const recording=recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
@@ -94,12 +105,12 @@ async function createManagedApp(options,runtime) {
   const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
   await runtime.startup('检查上次更新状态');
   try{await updates.recover();}
-  catch(error){await updates.close();media.close();await recorder.close();store.close();throw error;}
+  catch(error){liveHealth.close();await updates.close();media.close();await recorder.close();store.close();throw error;}
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),danmakuPerSecond:chatRate(store)};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -145,12 +156,17 @@ async function createManagedApp(options,runtime) {
       }
       if(store.recovery.recovering&&req.method==='POST'&&p.startsWith('/api/')&&!['/api/folders/open'].includes(p))return json(res,{error:'正在恢复上次任务，请稍候；原始素材已保留。'},503);
       if((runtime.stopping||autoUpdate.applying)&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
-      if(p==='/api/updates/apply'&&req.method==='POST'){await body(req);return json(res,updates.requestInstall());}
+      if(p==='/api/updates/apply'&&req.method==='POST'){const input=await body(req);return json(res,updates.requestInstall(input?.key));}
       if(p==='/api/updates/check'&&req.method==='POST'){await body(req);return json(res,await updates.check());}
       if(p==='/api/updates/download'&&req.method==='POST'){const input=await body(req);return json(res,updates.download(input.key,input.autoInstall===true),202);}
       if(p==='/api/updates/clear'&&req.method==='POST'){await body(req);return json(res,await updates.clearCache());}
       if(p==='/api/updates/cancel'&&req.method==='POST'){await body(req);return json(res,updates.cancel());}
       if(p==='/api/updates/defer'&&req.method==='POST'){await body(req);return json(res,updates.defer());}
+      if(p==='/api/updates/ignore'&&req.method==='POST'){
+        const input=await body(req);
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||!('key' in input))throw new Error('版本提醒设置无效。');
+        return json(res,updates.ignoreVersion(input.key));
+      }
       if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
       if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));
       if((p==='/api/danmaku-font'||p==='/api/danmaku-font/draft')&&req.method==='POST'){
@@ -178,8 +194,13 @@ async function createManagedApp(options,runtime) {
       }
 
       if(p==='/api/preparation/settings'&&req.method==='POST'){
-        const input=await body(req);if(typeof input.enabled!=='boolean')throw new Error('请选择是否开启录制完成后的自动预处理。');
-        await preparation.setEnabled(input.enabled);return json(res,preparation.snapshot());
+        const input=await body(req);
+        if(!input||Array.isArray(input)||typeof input!=='object'||!Object.keys(input).length||Object.keys(input).some(key=>!['enabled','liveEnabled'].includes(key)))throw new Error('预处理设置无效。');
+        if('enabled' in input&&typeof input.enabled!=='boolean')throw new Error('请选择是否开启录制完成后的自动预处理。');
+        if('liveEnabled' in input&&typeof input.liveEnabled!=='boolean')throw new Error('请选择是否开启录制时的自动提前处理。');
+        if('enabled' in input)await preparation.setEnabled(input.enabled);
+        if('liveEnabled' in input)await preparation.setLiveEnabled(input.liveEnabled);
+        return json(res,preparation.snapshot());
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/preparation$/.exec(p))&&req.method==='POST'){
         const input=await body(req),id=match[1];if(!store.session(id))throw new Error('素材不存在或已删除。');
@@ -206,8 +227,9 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont'].includes(key)))throw new Error('不支持的设置项。');
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont','previewTimestamp'].includes(key)))throw new Error('不支持的设置项。');
         if('closeAction' in input)validateCloseAction(input.closeAction);
+        if('previewTimestamp' in input&&typeof input.previewTimestamp!=='boolean')throw new Error('请选择是否显示预览时间戳。');
         if('danmakuPerSecond' in input)validateChatRate(input.danmakuPerSecond);
         const style='danmakuStyle' in input?validateDanmakuStyle(input.danmakuStyle):null;
         if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
@@ -221,13 +243,14 @@ async function createManagedApp(options,runtime) {
           store.transaction(()=>{
             if(directory!==undefined)store.setting('export-directory',directory);
             if('closeAction' in input)store.setting('window-close-action',input.closeAction);
+            if('previewTimestamp' in input)store.setting('preview-timestamp',input.previewTimestamp);
             if('danmakuPerSecond' in input)store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);
             if(style)store.setting(DANMAKU_STYLE_SETTING,style);
             if(font!==undefined)store.setting('danmaku-font',font);
           });
           if('danmakuPerSecond' in input)recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);
           if(changed)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
-          return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),danmakuPerSecond:chatRate(store),danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()});
+          return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),danmakuPerSecond:chatRate(store),danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()});
         }finally{media.fonts.changing=false;}
       }
       if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
@@ -298,6 +321,7 @@ async function createManagedApp(options,runtime) {
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/export$/.exec(p))&&req.method==='POST')return json(res,await media.enqueue(match[1],await body(req)));
       if((match=/^\/api\/jobs\/([\w-]+)\/retry-save$/.exec(p))&&req.method==='POST')return json(res,await media.retrySave(match[1],await body(req)));
+      if((match=/^\/api\/jobs\/([\w-]+)\/retry$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.retryExport(match[1]));}
       if((match=/^\/api\/jobs\/([\w-]+)\/cancel$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.cancelExport(match[1]));}
       if((match=/^\/api\/jobs\/([\w-]+)\/delete-preview$/.exec(p))&&req.method==='GET')return json(res,await jobDeletion.preview(match[1]));
       if((match=/^\/api\/jobs\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST')return json(res,await jobDeletion.delete(match[1],await body(req)));
@@ -311,10 +335,10 @@ async function createManagedApp(options,runtime) {
   });
   await runtime.startup('连接本地界面服务');
   try{port=await listenLocal(server,port);}
-  catch(error){media.close();await recorder.close();store.close();throw error;}
+  catch(error){liveHealth.close();media.close();await recorder.close();store.close();throw error;}
   port=server.address().port;recorder.editorPort=port;
   try{await runtime.publish(port);await runtime.startup('本地界面服务已就绪',{ready:true});}
-  catch(error){media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
+  catch(error){liveHealth.close();media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
 
   let nextTemporarySweep=0;
   const maintain=()=>{
@@ -361,7 +385,7 @@ async function createManagedApp(options,runtime) {
   const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
   if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
   app={diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
+    closing=true;liveHealth.close();await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();

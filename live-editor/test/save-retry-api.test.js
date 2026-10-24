@@ -29,6 +29,19 @@ const rowOf = f => f.store.get('SELECT * FROM jobs WHERE id=?', f.job.id);
 const detailsOf = f => JSON.parse(rowOf(f).data);
 async function missing(file) { await assert.rejects(fs.access(file), error => error.code === 'ENOENT'); }
 
+test('HTTP failed export can resume its saved selection; rejects foreign origins, deletion races and duplicate retries',async t=>{
+  const app=await appFor(t,'processing-retry'),f=await saveRetryFixture(app.store,app.media),render=app.media.process.bind(app.media);
+  app.media.process=()=>{throw Object.assign(Error('full disk'),{code:'ENOSPC'});};await f.run();
+  assert.equal(rowOf(f).status,'failed');const before=detailsOf(f);assert.equal(app.snapshot().jobs.find(j=>j.id===f.job.id).hasProcessingRecovery,true);
+  assert.equal((await app.request(`jobs/${f.job.id}/retry`,{},{Origin:'https://example.invalid'})).status,403);
+  app.store.deletingJobs.add(f.job.id);assert.ok((await app.request(`jobs/${f.job.id}/retry`,{})).status>=400);app.store.deletingJobs.delete(f.job.id);
+  app.media.process=render;
+  assert.equal((await app.request(`jobs/${f.job.id}/retry`,{ranges:[{start:0,end:10000}],mode:'clean'})).status,200);
+  assert.equal(rowOf(f).status,'queued');assert.deepEqual(detailsOf(f).ranges,before.ranges);assert.equal(detailsOf(f).mode,before.mode);
+  assert.ok((await app.request(`jobs/${f.job.id}/retry`,{})).status>=400);
+  await f.run();assert.equal(rowOf(f).status,'done');assert.ok((await app.request(`jobs/${f.job.id}/retry`,{})).status>=400);
+});
+
 test('编码结束时目标目录已被移走，保存自动重建目录并清理自身临时成片', async t => {
   const app = await appFor(t, 'missing-destination');
   const f = await saveRetryFixture(app.store, app.media);

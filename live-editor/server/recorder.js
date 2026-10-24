@@ -173,7 +173,7 @@ export class Recorder {
       }
       if(repaired)rooms=await this.api('room');
       await this.recoverRecordings(rooms);
-      this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true}).map(room=>({...room,recordingHealth:this.recovery.health(room.roomId)}));this.error='';
+      this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true}).map(room=>({...room,recordingHealth:this.recovery.health(room.roomId),recordingObservedAt:this.lifecycle.now()}));this.error='';
       for(const session of this.store.all("SELECT * FROM sessions WHERE room>0 AND status IN ('recording','waiting')")){
         const room=this.rooms.find(r=>Number(r.roomId)===session.room);
         if(room&&!room.recording&&!room.streaming){this.store.run("UPDATE sessions SET status='finished' WHERE id=?",session.id);this.store.run('UPDATE sources SET closed=1 WHERE session=? AND closed=0',session.id);}

@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { sourceStream, seekBase } from './ingest.js';
+import {sourceExportPlan,copyOriginal,exportSegments} from './export-plan.js';
 import { validateRanges } from './store.js';
 import { directories, writableDirectory, exportScopeDirectory } from './directories.js';
 import { outputSpan, reserveClip, reserveFull, clipFile } from './output-names.js';
@@ -16,13 +17,18 @@ import { detectExportEncoder, encoderArguments, softwareEncoder, videoMetadata, 
 import { TemporaryWorkspaces } from './temp-workspaces.js';
 import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
-import { RenderPipeline, visibleComments } from './render-plan.js';
+import { RenderPipeline, visibleComments, CPU_EXPORT_ROUTE, CPU_CHECKPOINT_SECONDS } from './render-plan.js';
 import { danmakuGeometry, assOpacity, savedDanmakuStyle, normalizedDanmakuStyle, danmakuDuration } from '../shared/danmaku-style.js';
 import { chatRate } from './chat-rules.js';
 import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
 import { PreviewRequests } from './preview-requests.js';
 import { linkmicAss } from './linkmic.js';
 import { avatarFilter } from './linkmic-avatars.js';
+import { MediaScheduler } from './media-scheduler.js';
+import { IdleRenderPolicy } from './idle-render-policy.js';
+import {ExportCheckpoints} from './export-checkpoints.js';
+import {retryMedia as retryMediaWork,mediaFailure} from './media-retry.js';
+import {hashRender,commentSignature} from './render-plan.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
 export function assText(messages, width = 1280, height = 720, font = null, style) {
@@ -43,7 +49,14 @@ export function assText(messages, width = 1280, height = 720, font = null, style
 
 export class Media {
   exportContext = new AsyncLocalStorage();
+  preparationContext = new AsyncLocalStorage();
+  preparationShutdown = new AbortController();
+  preparationCalls = new Map();
+  preparationMetrics = new Map();
+  backgroundBatches = new Set();
   exportOperations = new Map();
+  preparationHandoffs = new Map();
+  checkpoints = new ExportCheckpoints(this);
   previewRequests = new PreviewRequests();
   exportSignal(signal) {
     const jobSignal=this.exportContext?.getStore()?.controller.signal;
@@ -52,13 +65,51 @@ export class Media {
   assertExportActive() {
     if(this.exportContext?.getStore()?.controller.signal.aborted)throw Object.assign(new Error('导出已取消。'),{code:'EXPORT_CANCELLED'});
   }
+  persistExportJob(job){
+    if(!this.closed&&typeof job?.id==='string'&&this.store.get('SELECT id FROM jobs WHERE id=?',job.id))
+      this.store.run('UPDATE jobs SET data=? WHERE id=?',JSON.stringify(job),job.id);
+  }
+  retryMedia(work,options={}){
+    const operation=this.exportContext?.getStore(),signal=this.exportSignal(options.signal);
+    const retries=operation?Math.min(options.retries??2,Math.max(0,6-(operation.job.automaticRetries||0))):options.retries;
+    return retryMediaWork(work,{...options,...(retries===undefined?{}:{retries}),signal,allowRetry:()=>!operation||(operation.job.automaticRetries||0)<6,report:event=>{
+      if(operation){operation.job.automaticRetries=(operation.job.automaticRetries||0)+1;try{this.persistExportJob(operation.job);}catch{}}
+      this.store.diagnostics?.record('媒体自动重试',`临时读写故障 ${event.code}，重试 ${event.attempt}/${event.retries}`,{level:'警告'});
+      options.report?.(event);
+    }});
+  }
+  async exportWorkspace(job,details){
+    this.store.exportCheckpoints=this.checkpoints;
+    const sources=this.store.sources(job.session);
+    const temporary=async()=>{const directory=await this.temporaryDirectory('bili-export-',job.session);return {directory,run:(_key,work)=>this.retryMedia(work),finish:()=>this.temporaryWorkspaces.finish(directory)};};
+    if(!this.checkpoints||sources.some(s=>s.closed!==2)||!this.store.get('SELECT id FROM jobs WHERE id=?',job.id)){
+      return temporary();
+    }
+    const inputs=[];
+    for(const {source,from,to} of details.segments){
+      let fingerprint;
+      try{fingerprint=await this.renderer.sourceFingerprint(source,from,to);}
+      catch(error){
+        if(error.code!=='PREP_SOURCE_STALE')throw error;
+        // An unverifiable optimization index must not block a normal export
+        // from readable original material. Never reuse an old checkpoint here.
+        await this.checkpoints.discard(job);job.checkpointWarning='来源索引无法用于断点复用，本次从原素材重新处理。';this.persistExportJob(job);return temporary();
+      }
+      inputs.push([source.id,from,to,fingerprint]);
+    }
+    const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents];
+    const checkpoint=await this.checkpoints.open(job,hashRender([details.route,details.encoder,details.profile,details.comments,inputs,snapshot]));
+    job.processingRecovery.route=details.route;this.persistExportJob(job);return checkpoint;
+  }
   async cancelExport(id) {
     const row=this.store.get('SELECT * FROM jobs WHERE id=?',id);
     if(!row)throw new Error('导出任务不存在。');
     if(['cancelled','canceled'].includes(row.status))return {ok:true,status:'cancelled'};
     if(row.status==='queued') {
       this.store.run("UPDATE jobs SET status='cancelled',error='' WHERE id=? AND status='queued'",id);
-      await this.releaseReservation(JSON.parse(row.data));
+      const handoff=this.preparationHandoffs?.get(id);this.preparationHandoffs?.delete(id);await handoff?.release(id);
+      const job=JSON.parse(row.data);await this.checkpoints?.discard(job);this.persistExportJob(job);
+      await this.releaseReservation(job);
       return {ok:true,status:'cancelled'};
     }
     const operation=this.exportOperations.get(id);
@@ -71,15 +122,51 @@ export class Media {
   }
   exportJob(job) {
     if(this.exportOperations.has(job.id))throw new Error('这个导出任务正在执行。');
-    const operation={job,controller:new AbortController(),done:null};
+    const operation={job,controller:new AbortController(),done:null,started:performance.now(),stages:{}};
     this.exportOperations.set(job.id,operation);
     operation.done=this.exportContext.run(operation,()=>Promise.resolve().then(()=>{this.assertExportActive();return this.performExportJob(job);}))
-      .finally(()=>this.exportOperations.delete(job.id));
+      .finally(async()=>{
+        const handoff=this.preparationHandoffs?.get(job.id);this.preparationHandoffs?.delete(job.id);await handoff?.release(job.id);
+        if(operation.controller.signal.aborted&&!this.suspendedJobs?.has(job.id)&&job.processingRecovery)
+          await this.checkpoints?.discard(job).catch(()=>{});
+        this.exportOperations.delete(job.id);
+        job.performance={elapsedMs:Math.round(performance.now()-operation.started),stages:operation.stages};
+        // Timing is diagnostic metadata; it must never mask an export failure
+        // (including a call rejected before it has a persisted job id).
+        try {
+          const row=typeof job.id==='string'?this.store.get('SELECT data FROM jobs WHERE id=?',job.id):null;
+          if(typeof row?.data==='string'){const saved=JSON.parse(row.data);saved.performance=job.performance;this.store.run('UPDATE jobs SET data=? WHERE id=?',JSON.stringify(saved),job.id);}
+        } catch { /* Shutdown or a removed job can make diagnostics unavailable. */ }
+      });
     return operation.done;
   }
-  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions } = {}) { this.store = store; this.fonts = new DanmakuFonts(store); this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
-  prepareNext(id,options){return this.renderer.prepareNext(id,options);}
+  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions, idleRenderOptions } = {}) { this.store = store; store.exportCheckpoints=this.checkpoints; this.fonts = new DanmakuFonts(store); this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.idlePolicy=new IdleRenderPolicy(idleRenderOptions);this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
+  prepareNext(id,options={}){
+    if(this.closed)return Promise.reject(Object.assign(new Error('后台预处理已停止。'),{name:'AbortError'}));
+    if(this.preparationCalls.has(id))return this.preparationCalls.get(id);
+    const operation={started:performance.now(),stages:{},live:!!options.live};
+    const signal=options.signal?AbortSignal.any([options.signal,this.preparationShutdown.signal]):this.preparationShutdown.signal;
+    const task=this.preparationContext.run(operation,()=>Promise.resolve().then(()=>this.renderer.prepareNext(id,{...options,signal})))
+      .then(result=>({...result,performance:{elapsedMs:Math.round(performance.now()-operation.started),stages:operation.stages,policy:operation.policy}}))
+      .finally(()=>{this.preparationCalls.delete(id);this.preparationMetrics.set(id,{elapsedMs:Math.round(performance.now()-operation.started),stages:operation.stages,policy:operation.policy});while(this.preparationMetrics.size>8)this.preparationMetrics.delete(this.preparationMetrics.keys().next().value);});
+    this.preparationCalls.set(id,task);return task;
+  }
+  async withBackgroundBatch(capacity,work){
+    const batch={capacity:Math.max(1,Math.min(2,capacity))};this.backgroundBatches.add(batch);
+    try{return await work();}finally{this.backgroundBatches.delete(batch);this.scheduler?.drain();}
+  }
   invalidatePreparation(id){this.renderer.invalidate(id);}
+  discardPendingPreparation(id){return this.renderCache.dropPending(entry=>!id||entry.spec.sessionId===id);}
+  async liveHardwareAvailable(){
+    if(this.closed||this.exportAcceleration==='software')return false;
+    // The tiny real encoder probe uses the same bounded, low-priority lane.
+    // Its result is shared with exports; a listed but unusable GPU is not enough.
+    try {
+      const operation={started:performance.now(),stages:{},live:true};
+      const encoder=await this.preparationContext.run(operation,()=>this.renderer.encoder({background:true,signal:this.preparationShutdown.signal}));
+      return !this.closed&&encoder.hardware===true&&['h264_videotoolbox','h264_nvenc','h264_qsv','h264_amf'].includes(encoder.id);
+    }catch{return false;}
+  }
   // Preview and audio analysis can run beside preparation. Cleanup still uses
   // the default broad check, so their readers/processes remain protected.
   interactiveChildren = new Set();
@@ -109,39 +196,80 @@ export class Media {
     child.once('close',()=>this.temporaryWorkspaces.childExited(ticket,child.pid));
     return child;
   }
-  process(args, { input, output, signal, progress, cwd, background=false, interactive=false } = {}) {
+  scheduled(kind,signal,work,stage=kind) {
+    if(this.closed)return Promise.reject(new Error('视频服务已关闭。'));
+    this.scheduler??=new MediaScheduler({recording:()=>this.isRecording?.()===true,backgroundLimit:()=>Math.max(1,...[...(this.backgroundBatches||[])].map(batch=>batch.capacity))});
+    const operation=this.exportContext?.getStore()||this.preparationContext?.getStore();
+    if(kind==='background'&&operation?.live)kind='live-background';
+    return this.scheduler.run(kind,signal,work,({waitMs,workMs})=>{
+      if(!operation)return;
+      const timings=operation.stages[stage]??={count:0,waitMs:0,workMs:0};
+      timings.count++;timings.waitMs+=Math.round(waitMs);timings.workMs+=Math.round(workMs);
+    });
+  }
+  process(args, options={}) {
+    const signal=Media.prototype.exportSignal.call(this,options.signal),{background,interactive}=options;
+    return this.scheduled(interactive?'interactive':background?'background':'foreground',signal,
+      ()=>this.processInternal(args,{...options,signal}),options.stage||'media');
+  }
+  processInternal(args, { input, output, signal, progress, cwd, background=false, interactive=false, idleMs=120000 } = {}) {
     signal=Media.prototype.exportSignal.call(this,signal);
     const exportSignal=this.exportContext?.getStore()?.controller.signal;
     if(this.closed)return Promise.reject(new Error('视频服务已关闭。'));
     if(signal?.aborted)return Promise.reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));
-    const child = this.spawnTracked(this.ffmpeg, ['-hide_banner','-loglevel','warning','-nostdin',...args], { cwd, windowsHide: true, stdio: ['pipe', output ? 'pipe' : 'ignore', 'pipe'] },cwd);
+    const child = this.spawnTracked(this.ffmpeg, ['-hide_banner','-loglevel','warning','-nostdin','-progress','pipe:3','-nostats',...args], { cwd, windowsHide: true, stdio: ['pipe', output ? 'pipe' : 'ignore', 'pipe','pipe'] },cwd);
     this.children.add(child);if(background)this.backgroundChildren.add(child);if(interactive)this.interactiveChildren.add(child); let log = '';
     try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     child.stderr.on('data', b => { log = (log+b).slice(-16000); progress?.(log); });
     const done = new Promise((resolve, reject) => { let spawnError;child.once('error', error=>{spawnError=error;}); child.once('close', code => { this.children.delete(child);this.backgroundChildren.delete(child);this.interactiveChildren.delete(child); if (signal?.aborted) resolve(); else if(spawnError)reject(spawnError);else if(code===0)resolve();else reject(new Error(`视频处理失败 (${code})：${log.slice(-1200)}`)); }); });
     const inputStream = input ? Readable.from(input,{objectMode:false,highWaterMark:256*1024}) : null;
-    const abort = () => { inputStream?.destroy(); stopChild(child); }; signal?.addEventListener('abort', abort, { once: true });
-    if(signal?.aborted)abort();
+    // Mark cancellation as an error on the readable as well as closing stdin.
+    // A normal destroy racing its async iterator's final read can leave Node's
+    // pipeline waiting for an end event that the destroyed stream cannot emit.
+    const abort = () => { inputStream?.destroy(Object.assign(new Error('媒体输入已取消。'),{name:'AbortError',code:'ABORT_ERR'})); child.stdin.destroy(); stopChild(child); }; signal?.addEventListener('abort', abort, { once: true });
+    let idleTimer,stalled=false,tail='';const counters=new Map();
+    const touch=()=>{clearTimeout(idleTimer);idleTimer=setTimeout(()=>{stalled=true;abort();},idleMs);idleTimer.unref?.();};
+    const progressPipe=args.some((value,index)=>value==='-progress'&&args[index+1]==='pipe:2')?child.stderr:child.stdio[3];
+    progressPipe?.on('data',bytes=>{tail+=bytes;const lines=tail.split('\n');tail=lines.pop().slice(-1000);for(const line of lines){const match=/^(frame|out_time_us|total_size)=(\d+)$/.exec(line);if(match&&counters.get(match[1])!==match[2]){counters.set(match[1],match[2]);touch();}}});
+    touch();
     const inputDone = inputStream ? pipeline(inputStream, child.stdin).catch(e => { if (!['EPIPE','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE'].includes(e.code) && !signal?.aborted) { stopChild(child); throw e; } }) : (child.stdin.end(), Promise.resolve());
-    const outputDone = output ? pipeline(child.stdout, output).catch(e => { stopChild(child); if (!signal?.aborted) throw e; }) : Promise.resolve();
+    // A paused native player may stop draining the response. Killing FFmpeg
+    // alone cannot release that blocked pipe; cancel both ends before handoff.
+    const outputDone = output ? pipeline(child.stdout, output, {signal}).catch(e => { stopChild(child); if (!signal?.aborted) throw e; }) : Promise.resolve();
+    if(signal?.aborted)abort();
     // A failed pipe can reject before FFmpeg closes. Do not hand its workspace
     // back to the scheduler or cleanup until every pipe and the child settles.
     return Promise.allSettled([done,inputDone,outputDone]).then(results=>{
       if(exportSignal?.aborted)throw Object.assign(new Error('导出已取消。'),{code:'EXPORT_CANCELLED'});
+      if(stalled)throw Object.assign(new Error('媒体处理长时间没有进展，已停止本次任务，可重试。'),{code:'MEDIA_STALLED'});
       const failed=[results[1],results[2],results[0]].find(result=>result.status==='rejected');if(failed)throw failed.reason;
-    }).finally(() => signal?.removeEventListener('abort', abort));
+    }).finally(() => {clearTimeout(idleTimer);signal?.removeEventListener('abort', abort);});
   }
   async probe(file,{signal,background=false}={}) {
     signal=this.exportSignal(signal);
+    return this.scheduled(background?'background':'foreground',signal,()=>this.probeInternal(file,{signal,background}),'probe');
+  }
+  async probeAudio(file,{signal}={}) {
+    signal=this.exportSignal(signal);
+    return this.scheduled('foreground',signal,()=>this.probeInternal(file,{signal,kind:'audio'}),'probe');
+  }
+  async probePackets(file,{signal}={}) {
+    signal=this.exportSignal(signal);
+    return this.scheduled('foreground',signal,()=>this.probeInternal(file,{signal,kind:'packets'}),'probe');
+  }
+  async probeInternal(file,{signal,background=false,kind='video'}={}) {
+    signal=this.exportSignal(signal);
     return new Promise((resolve,reject) => {
       if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));
-      const child = this.spawnTracked(this.ffprobe, ['-v','error','-analyzeduration','1000000','-probesize','1000000','-show_data_hash','sha256','-show_entries','stream=codec_type,codec_name,width,height,r_frame_rate,pix_fmt,sample_aspect_ratio,profile,level,time_base,extradata_hash,nb_frames,duration','-of','json', file], {windowsHide:true},path.dirname(file));
-      let output='',log='',timedOut=false;this.children.add(child);if(background)this.backgroundChildren.add(child);
+      const query=kind==='packets'?['-select_streams','v:0','-show_packets','-show_entries','packet=pts_time,dts_time,flags']:
+        ['-show_data_hash','sha256','-show_entries','stream=codec_type,codec_name,width,height,r_frame_rate,pix_fmt,sample_aspect_ratio,profile,level,time_base,extradata_hash,nb_frames,duration,start_time,has_b_frames,sample_rate,channels'];
+      const child = this.spawnTracked(this.ffprobe, ['-v','error','-analyzeduration','1000000','-probesize','1000000',...query,'-of','json', file], {windowsHide:true},path.dirname(file));
+      let output='',log='',timedOut=false,oversized=false,spawnError;this.children.add(child);if(background)this.backgroundChildren.add(child);
       const abort=()=>stopChild(child);signal?.addEventListener('abort',abort,{once:true});
-      child.stdout.on('data', b => output+=b);child.stderr.on('data',b=>log=(log+b).slice(-2000));
+      child.stdout.on('data', b => {if(output.length+b.length>8*1024*1024){oversized=true;stopChild(child);}else output+=b;});child.stderr.on('data',b=>log=(log+b).slice(-2000));
       const timeout=setTimeout(()=>{timedOut=true;stopChild(child);},15000);
-      child.once('error',e=>{clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);reject(new Error(`无法启动视频信息读取工具：${e.message}`));});
-      child.once('close', code => { clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));if(timedOut)return reject(new Error('读取视频信息超时，请检查素材文件是否可正常访问。'));if(code)return reject(new Error(`读取视频信息失败：${log.trim()||'工具退出码 '+code}`));try {resolve(videoMetadata(JSON.parse(output).streams));}catch(e){reject(e);} });
+      child.once('error',e=>{spawnError=e;});
+      child.once('close', code => { clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));if(oversized)return reject(new Error('媒体索引超过安全读取范围。'));if(timedOut)return reject(new Error('读取视频信息超时，请检查素材文件是否可正常访问。'));if(spawnError)return reject(new Error(`无法启动视频信息读取工具：${spawnError.message}`));if(code)return reject(new Error(`读取视频信息失败：${log.trim()||'工具退出码 '+code}`));try {const data=JSON.parse(output);if(kind==='packets')resolve(data.packets);else if(kind==='audio'){const audio=data.streams?.filter(s=>s.codec_type==='audio');if(audio?.length!==1)throw new Error('需要一条完整音轨。');resolve(audio[0]);}else resolve(videoMetadata(data.streams));}catch(e){reject(e);} });
     });
   }
   async probeSource(source,time=source.start,options={}) {
@@ -153,14 +281,16 @@ export class Media {
   async probeSourceInternal(source,time,options={}) {
     this.assertSessionAvailable(source.session);
     const cached=this.store.setting('metadata:'+source.id);
-    if(cached?.metadataVersion>=2&&cached.width>0&&cached.height>0&&Number.isFinite(cached.fps)&&cached.fps>0)return cached;
+    if(!options.fresh&&cached?.metadataVersion>=2&&cached.width>0&&cached.height>0&&Number.isFinite(cached.fps)&&cached.fps>0)return cached;
     const dir=await this.temporaryDirectory('bili-probe-',source.session),file=path.join(dir,'sample.flv');
     try{
       const handle=await fs.open(file,'wx');
       try{for await(const bytes of sourceStream(this.store,source.id,time,Math.min(source.start+source.duration,time+5),{signal:options.signal}))await handle.writeFile(bytes);}
       finally{await handle.close();}
       const info=await this.probe(file,options);
-      if(!this.blockedSessions.has(source.session)&&this.store.session(source.session))this.store.setting('metadata:'+source.id,info);
+      // A historical live range can belong to a different codec epoch. Do not
+      // replace the legacy whole-source metadata with a range-specific sample.
+      if(!options.fresh&&!this.blockedSessions.has(source.session)&&this.store.session(source.session))this.store.setting('metadata:'+source.id,info);
       return info;
     }catch(e){if(e.code==='ENOENT')throw new Error('内部素材片段缺失，无法读取视频信息。请恢复该素材的内部文件后再导出。');throw e;}
     finally{await this.temporaryWorkspaces.finish(dir);}
@@ -204,8 +334,6 @@ export class Media {
   }
   async enqueueInternal(id, input) {
     this.assertSessionAvailable(id);
-    if(this.preparation)await this.preparation.yieldForForeground();
-    this.assertSessionAvailable(id);
     const session=this.store.session(id); if(!session) throw new Error('找不到录像。');
     const scope=input.scope??'clips';if(!['clips','full'].includes(scope))throw new Error('请选择有效的导出范围。');
     const sources=this.store.sources(id);if(scope==='full')this.assertFullReady(session,sources);
@@ -221,6 +349,8 @@ export class Media {
     const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     for(const job of jobs)job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
     try {
+      const handoff=this.preparation?.yieldForExport?await this.preparation.yieldForExport(id,jobs):await this.preparation?.yieldForForeground();
+      if(handoff)for(const job of jobs)this.preparationHandoffs.set(job.id,handoff);
       const outputRoot=await writableDirectory(input.exportDirectory??directories(this.store).exports);
       for(const job of jobs){
         job.outputRoot=outputRoot;
@@ -238,6 +368,7 @@ export class Media {
       void this.work(); return jobs.length===1?jobs[0]:{jobs};
     }catch(error){
       for(const job of jobs){
+        const handoff=this.preparationHandoffs?.get(job.id);this.preparationHandoffs?.delete(job.id);await handoff?.release(job.id);
         if(job.output?.reservation)await fs.rmdir(job.output.reservation).catch(()=>{});
         else if(job.output?.dir)await fs.rmdir(job.output.dir).catch(()=>{});
       }
@@ -270,7 +401,7 @@ export class Media {
       if(this.closed)break;
       const job=this.store.jobDetails(row);if(job.recoveryInvalid)continue;
       try {
-      const pending=await this.publication.discover(row.id);
+      const pending=await this.publication.recoverStage(job);
       if(this.closed)break;
       if(!pending) {
         if(await this.publication.verifyPublished(job)&&!this.closed)this.completeSave(job);
@@ -278,7 +409,12 @@ export class Media {
       }
       job.pendingPublication=pending;job.canRetrySave=true;
       this.store.run("UPDATE jobs SET status='save_failed',progress=.98,data=?,error=? WHERE id=?",JSON.stringify(job),'视频已处理完成，请重试保存。',row.id);
-      }catch(error){if(!this.closed){this.store.run("UPDATE jobs SET status='failed',error=? WHERE id=?",'恢复未完成，原文件已保留：'+error.message,row.id);this.store.diagnostics?.record('任务恢复',error,{level:'警告'});}}
+      }catch(error){if(!this.closed){
+        let retry=false;try{retry=(await this.publication.recoveryIntent(job.pendingPublication?.directory||job.processingRecovery?.directory,row.id))?.phase==='staging';}catch{}
+        job.canRetrySave=retry;
+        this.store.run('UPDATE jobs SET status=?,data=?,error=? WHERE id=?',retry?'save_failed':'failed',JSON.stringify(job),'恢复未完成，暂存文件已保留：'+error.message,row.id);
+        this.store.diagnostics?.record('任务恢复',error,{level:'警告'});
+      }}
     }
   }
   suspendForExit(){
@@ -297,11 +433,12 @@ export class Media {
     this.close();
   }
   async recoverInterruptedExports(){
-    for(const row of this.store.all("SELECT * FROM jobs WHERE status IN ('interrupted','save_failed')")){
+    for(const row of this.store.all("SELECT * FROM jobs WHERE status IN ('interrupted','save_failed') OR (status='failed' AND data LIKE '%processingRecovery%')")){
       if(this.closed)break;
       const job=this.store.jobDetails(row);
       if(job.recoveryInvalid)continue;
       if(job.resumeOnLaunch!==true)continue;
+      if((job.recoveryAttempts||0)>=3){delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET status='failed',error='导出已多次异常中断，请检查设备与磁盘后点击继续导出。',data=? WHERE id=?",JSON.stringify(job),row.id);continue;}
       if(!this.store.session(job.session)){
         delete job.resumeOnLaunch;
         this.store.run("UPDATE jobs SET status='failed',error='素材不存在，无法恢复导出。',data=? WHERE id=?",JSON.stringify(job),row.id);continue;
@@ -310,6 +447,7 @@ export class Media {
         try{await this.retrySave(row.id);}catch(error){delete job.resumeOnLaunch;this.store.run("UPDATE jobs SET data=?,error=? WHERE id=?",JSON.stringify(job),error.message,row.id);}continue;
       }
       try{
+        job.recoveryAttempts=(job.recoveryAttempts||0)+1;
         const occupied=async file=>{try{await fs.access(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}};
         if(job.scope==='full'||!job.output||await occupied(job.output.file)||job.output.danmakuFile&&await occupied(job.output.danmakuFile)){
           await this.releaseReservation(job);
@@ -326,6 +464,24 @@ export class Media {
     const operation=this.retrySaveInternal(id,input);this.savePreparations.add(operation);
     try{return await operation;}finally{this.savePreparations.delete(operation);}
   }
+  async retryExport(id){
+    if(this.closed)throw new Error('视频服务已关闭。');
+    if(this.store.deletingJobs?.has(id))throw new Error('该任务正在删除，请等待完成。');
+    const row=this.store.get('SELECT * FROM jobs WHERE id=?',id);
+    if(!row||!['failed','interrupted'].includes(row.status)||this.exportOperations.has(id))throw new Error('该任务当前不能重试导出。');
+    const job=this.store.jobDetails(row);if(job.recoveryInvalid)throw new Error('任务记录损坏，请重新创建导出。');
+    this.assertSessionAvailable(job.session);
+    const pending=await this.publication.recoverStage(job);
+    if(pending){job.pendingPublication=pending;job.canRetrySave=true;this.store.run("UPDATE jobs SET status='save_failed',data=?,error='成片已完成，请重试保存。' WHERE id=?",JSON.stringify(job),id);return {ok:true,status:'save_failed'};}
+    // Recheck after async filesystem validation: a second request may already
+    // have claimed this job, or a deletion may have removed the material.
+    this.assertSessionAvailable(job.session);
+    if(this.store.deletingJobs?.has(id))throw new Error('该任务正在删除，请等待完成。');
+    if(!['failed','interrupted'].includes(this.store.get('SELECT status FROM jobs WHERE id=?',id)?.status))throw new Error('任务已开始恢复，请等待完成。');
+    job.recoveryAttempts=0;job.automaticRetries=0;job.resumeOnLaunch=true;job.resumedExportSteps=0;
+    this.store.run("UPDATE jobs SET status='queued',error='',data=? WHERE id=?",JSON.stringify(job),id);
+    void this.work();return {ok:true,status:'queued'};
+  }
   async retrySaveInternal(id,input={}) {
     if(this.closed)throw new Error('视频服务已关闭。');
     if(this.retrying.has(id)||this.saves.has(id))throw new Error('这个任务正在保存，请稍候。');
@@ -336,7 +492,7 @@ export class Media {
     this.retrying.add(id);
     let newReservation;
     try {
-      const pending=await this.publication.discover(id);
+      const pending=await this.publication.recoverStage(job);
       if(this.closed)throw new Error('视频服务已关闭。');
       if(!pending) {
         if(await this.publication.verifyPublished(job)) {
@@ -386,6 +542,7 @@ export class Media {
     if(reservation&&path.dirname(reservation)===this.temporaryRoot&&path.basename(reservation).startsWith('bili-full-'))await fs.rmdir(reservation).catch(()=>{});
   }
   async publishEncoded(job,directory) {
+    const started=performance.now(),operation=this.exportContext?.getStore();
     try {
       const result=await this.publication.publish(job.id,directory,{outputRoot:job.outputRoot,output:job.output});
       job.publishedFiles=result.publishedFiles;
@@ -394,17 +551,45 @@ export class Media {
       await this.publication.commit(job.id,directory,result.publishedFiles);
       return this.completeSave(job,result.file);
     }catch(error){error.savePending=true;error.directory=directory;throw error;}
+    finally {if(operation){const stage=operation.stages.save??={count:0,waitMs:0,workMs:0};stage.count++;stage.workMs+=Math.round(performance.now()-started);}}
   }
   completeSave(job,file=job.mode==='danmaku'?clipFile(job.output.file,'danmaku'):job.output.file) {
-    delete job.pendingPublication;delete job.resumeOnLaunch;job.canRetrySave=false;
+    delete job.pendingPublication;delete job.resumeOnLaunch;delete job.processingRecovery;job.canRetrySave=false;
     this.store.run("UPDATE jobs SET status='done',progress=1,error='',data=?,file=? WHERE id=?",JSON.stringify(job),file,job.id);
     this.preparation?.wake();
     return file;
+  }
+  async publishFiles(job,workDir,results) {
+    this.assertExportActive();
+    await this.temporaryWorkspaces.retain(workDir,job.id);
+    job.pendingPublication={directory:workDir,jobId:job.id,state:'staging'};job.canRetrySave=true;
+    this.persistExportJob(job);
+    this.store.run("UPDATE jobs SET status='saving',progress=.98 WHERE id=?",job.id);
+    try{
+      job.pendingPublication=await this.retryMedia(()=>this.publication.stage(job,workDir,results));
+      this.store.run("UPDATE jobs SET status='saving',progress=.98,data=? WHERE id=?",JSON.stringify(job),job.id);
+      return await this.publishEncoded(job,workDir);
+    }catch(error){error.savePending=true;error.directory=workDir;throw error;}
+  }
+  async selectExportEncoder() {
+    this.exportEncoder??=this.exportAcceleration==='software'?Promise.resolve(softwareEncoder()):detectExportEncoder((args,options)=>this.process(args,options));
+    return this.exportEncoder;
   }
   async performExportJob(job) {
     try {
     if(this.closed)throw new Error('视频服务已关闭。');
     this.assertSessionAvailable(job.session);
+    const handoff=this.preparationHandoffs?.get(job.id);
+    if(handoff){
+      const signal=this.exportSignal();
+      await new Promise((resolve,reject)=>{
+        const abort=()=>reject(Object.assign(new Error('导出已取消。'),{code:'EXPORT_CANCELLED'}));
+        signal?.addEventListener('abort',abort,{once:true});
+        Promise.resolve(handoff.done).then(resolve,reject).finally(()=>signal?.removeEventListener('abort',abort));
+        if(signal?.aborted)abort();
+      });
+      this.assertExportActive();job.preparationHandoff=true;
+    }
     job.scope??='clips';if(!['clips','full'].includes(job.scope))throw new Error('导出范围无效。');
     job.outputRoot??=directories(this.store).exports;
     if(job.scope==='full') {
@@ -416,32 +601,48 @@ export class Media {
     const first=sources.find(s=>s.start<job.ranges[0].end&&s.start+s.duration>job.ranges[0].start);
     if(!first)throw new Error('选段中没有已录制的画面。');
     const info=await this.probeSource(first,Math.max(first.start,job.ranges[0].start));
-    const copyClean=!job.linkmicEvents?.length&&canCopyFullSource(job,sources,info,seekBase(this.store,first.id,job.ranges[0].start));
+    const sourcePlan=await sourceExportPlan(this,job,sources,info);
+    const copyClean=sourcePlan.canCopyOriginal;
     if(job.scope==='full'&&job.mode==='clean'){
       job.cleanStreamCopy=false;
       job.cleanStreamCopyEligible=copyClean;
-      if(!copyClean)job.cleanEncodingReason='不满足完整原片安全码流复制条件，使用现有完整导出编码。';
+      if(!copyClean)job.cleanEncodingReason=sourcePlan.reason;
     }
     const cleanOnly=job.mode==='clean';
+    // Older versions may already have finished an entire regular-path source.
+    // Finish that existing job without discarding its validated large files.
+    const legacyRecovery=job.processingRecovery?.route==='regular-v1';
     let encoder;
-    if(copyClean&&cleanOnly)encoder=softwareEncoder();
+    if(copyClean&&cleanOnly||job.processingRecovery?.route===CPU_EXPORT_ROUTE||legacyRecovery&&job.encoder==='libx264')encoder=softwareEncoder();
     else {
-      this.exportEncoder??=this.exportAcceleration==='software'?Promise.resolve(softwareEncoder()):detectExportEncoder((args,options)=>this.process(args,options));
-      encoder=await this.exportEncoder;
+      encoder=await this.selectExportEncoder();
     }
     if(this.closed)throw new Error('视频服务已关闭。');
     const recordEncoder=()=>{job.encoder=encoder.id;job.encoderLabel=encoder.label;this.store.run('UPDATE jobs SET data=? WHERE id=?',JSON.stringify(job),job.id);};
     recordEncoder();
     let file;
-    const immediateParallel=encoder.hardware&&job.ranges.reduce((sum,range)=>sum+range.end-range.start,0)>=60;
-    if(['danmaku','dual'].includes(job.mode)&&this.store.session(job.session)?.status==='finished'&&sources.every(source=>source.closed===2)&&(immediateParallel||await this.renderCache.hasReady(job.session))) {
+    const selectedDuration=sourcePlan.segments.reduce((sum,segment)=>sum+segment.to-segment.from,0);
+    const finished=this.store.session(job.session)?.status==='finished'&&sources.every(source=>source.closed===2);
+    const cpuCheckpointed=()=>!legacyRecovery&&!encoder.hardware&&finished&&(selectedDuration>=CPU_CHECKPOINT_SECONDS||job.processingRecovery?.route===CPU_EXPORT_ROUTE);
+    const exportCpu=async(plan=sourcePlan)=>{
+      job.output??=await this.reserveOutput(job,this.store.session(job.session),sources);
+      Object.assign(job.output,{namingVersion:2,sidecars:false});
+      return this.renderer.exportJob(job,encoder,plan,{cpuCheckpoints:true});
+    };
+    const immediateParallel=encoder.hardware&&selectedDuration>=60;
+    const prepared=!legacyRecovery&&!cleanOnly&&finished&&(immediateParallel||job.processingRecovery?.route==='prepared-v9'||await this.renderCache.hasReady(job.session));
+    // Keep existing prepared blocks when available. A cold CPU export gets its
+    // regular foreground budget and persists each minute independently instead
+    // of silently returning to a whole-source encode after a failed block.
+    if(cpuCheckpointed()&&(job.processingRecovery?.route===CPU_EXPORT_ROUTE||!prepared&&!(copyClean&&cleanOnly)))return await exportCpu();
+    if(prepared) {
       try {
         job.output??=await this.reserveOutput(job,this.store.session(job.session),sources);
         Object.assign(job.output,{namingVersion:2,sidecars:false});
-        return await this.renderer.exportJob(job,encoder);
+        return await this.renderer.exportJob(job,encoder,sourcePlan);
       }catch(error) {
         this.assertExportActive();
-        if(error.savePending||this.closed)throw error;
+        if(error.savePending||this.closed||['action','temporary'].includes(mediaFailure(error)))throw error;
         // Missing, changed or incompatible cache is only an optimization miss.
         // A publication failure must keep its finished video and never re-encode.
         job.preparationFallback=error.message;
@@ -451,15 +652,28 @@ export class Media {
         }
       }
     }
-    try { file=await this.encodeJob(job,encoder,{first,info,copyClean}); }
+    if(cpuCheckpointed()&&!(copyClean&&cleanOnly))return await exportCpu();
+    try { file=await this.encodeJob(job,encoder,{first,info,copyClean,sourcePlan}); }
     catch(e) {
       this.assertExportActive();
+      if(['action','temporary'].includes(mediaFailure(e)))throw e;
+      if(e.originalCopyFailure&&!e.savePending&&!this.closed){
+        job.streamCopyFallback=true;job.cleanStreamCopy=false;job.cleanEncodingReason=e.message;
+        encoder=await this.selectExportEncoder();recordEncoder();
+        if(cpuCheckpointed())return await exportCpu({...sourcePlan,canCopyOriginal:false,canCopyStreams:false});
+        try{file=await this.encodeJob(job,encoder,{first,info,disableStreamCopy:true});}
+        catch(retry){if(!encoder.hardware||!retry.hardwareEncoderFailure||retry.savePending)throw retry;encoder=softwareEncoder();this.exportEncoder=Promise.resolve(encoder);job.encoderFallback=true;recordEncoder();
+          if(cpuCheckpointed())return await exportCpu({...sourcePlan,canCopyOriginal:false,canCopyStreams:false});
+          file=await this.encodeJob(job,encoder,{first,info,disableStreamCopy:true});}
+        return file;
+      }
       if(this.closed||!encoder.hardware||!e.hardwareEncoderFailure)throw e;
       // Rebuild every part with the same software encoder. Mixing partially
       // completed GPU and CPU parts can make the final concatenation unreliable.
       encoder=softwareEncoder();this.exportEncoder=Promise.resolve(encoder);
       job.encoderFallback=true;recordEncoder();
-      file=await this.encodeJob(job,encoder,{first,info,copyClean});
+      if(cpuCheckpointed()&&!(copyClean&&cleanOnly))return await exportCpu();
+      file=await this.encodeJob(job,encoder,{first,info,copyClean,sourcePlan});
     }
     return file;
     } finally {
@@ -475,30 +689,26 @@ export class Media {
     if(dual||bakedOnly)job.output.danmakuFile=clipFile(job.output.file,'danmaku');
     else delete job.output.danmakuFile;
     const output=bakedOnly?clipFile(job.output.file,'danmaku'):job.output.file;
-    const segments=[];
-    for(const range of job.ranges) {
-      let cursor=range.start;
-      for(const source of sources.filter(s=>s.start<range.end&&s.start+s.duration>range.start)) {
-        const from=Math.max(cursor,source.start),to=Math.min(range.end,source.start+source.duration);
-        if(to<=from)continue;
-        if(from-cursor>.15&&job.scope!=='full')throw new Error('选段跨越直播断流空缺，请分别添加空缺前后的选段，避免伪造缺失画面。');
-        segments.push({source,from,to});cursor=to;
-      }
-      if(range.end-cursor>.15)throw new Error('选段末尾尚未完整写入，请稍后重新导出。');
-    }
+    const segments=prepared.sourcePlan?.segments??exportSegments(sources,job.ranges,job.scope);
     const first=segments[0]?.source;if(!first)throw new Error('选段中没有已录制的画面。');
     const info=prepared.first?.id===first.id?prepared.info:await this.probeSource(first,segments[0].from);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont}):null;
-    const workDir=await this.temporaryDirectory('bili-export-',job.session);
+    const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy],comments:commentSignature(chatLayout||[]),segments});
+    const workDir=checkpoint.directory;
     try {
+    if(job.mode==='clean'&&prepared.sourcePlan?.canCopyOriginal&&(segments.length>1||prepared.sourcePlan.entries[0].wholeFromSource)){
+      await checkpoint.run('original',()=>copyOriginal(this,prepared.sourcePlan,workDir),['final.mp4']);
+      job.cleanStreamCopy=true;job.audioStreamCopy=prepared.sourcePlan.entries[0].info.audioStreams===1;
+      return await this.publishFiles(job,workDir,[{temporary:'final.mp4',file:output}]);
+    }
     const fontDirectory=await this.fonts.stage(job.font,workDir);
     let outputOffset=0;
     const totalDuration=segments.reduce((sum,segment)=>sum+segment.to-segment.from,0),singlePart=segments.length===1;
     for(const {source,from,to} of segments) {
         const base=seekBase(this.store,source.id,from); if(base===undefined) throw new Error('选段没有可用关键帧。');
-        const number=parts.length,subFile=`part-${number}.ass`,out=`part-${number}.mp4`;
+        const number=parts.length,subFile=`part-${number}.ass`,out=singlePart?'final.mp4':`part-${number}.mp4`,bakedOut=singlePart?'final-danmaku.mp4':`part-${number}-danmaku.mp4`;
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},from,to);
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
@@ -514,8 +724,8 @@ export class Media {
         const labelFilter=await withNames('cleanmic'),danmakuLabelFilter=dual?await withNames('danmic'):labelFilter;
         const fps=normalizedDanmakuStyle(job.danmakuStyle).fps;
         const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
-        const compatibleFull=singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
-        let copyClean=!bakedOnly&&!labels.length&&compatibleFull;
+        const compatibleFull=!prepared.disableStreamCopy&&(prepared.sourcePlan?.canCopyStreams??true)&&singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
+        let copyClean=!bakedOnly&&!labels.length&&compatibleFull&&(prepared.sourcePlan?.canCopyOriginal??true);
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;
         const mux=singlePart?['-movflags','+faststart']:[];
         const encode=(map,file,baked=false)=>['-ss',String(Math.max(0,from-base)),'-t',String(to-from),'-map',map,'-map','0:a:0?',
@@ -530,7 +740,7 @@ export class Media {
               :`split=2[clean][overlay];[overlay]${overlayFilter}[danmaku]`;
             const graph=copyClean?`[0:v:0]${overlayFilter}[danmaku]`:`[0:v:0]${filter?filter+',':''}${split}`;
             filters=['-filter_complex_threads','2','-filter_complex',graph];
-            outputs=[...(copyClean?copied(out):encode('[clean]',out)),...encode('[danmaku]',`part-${number}-danmaku.mp4`,true)];
+            outputs=[...(copyClean?copied(out):encode('[clean]',out)),...encode('[danmaku]',bakedOut,true)];
           } else if(copyClean)outputs=copied(out);
           else {
             const chain=[filter,...(bakedOnly?[overlayFilter]:[]),labelFilter].filter(Boolean).join(',');
@@ -541,7 +751,7 @@ export class Media {
         };
         let lastProgress=0;
         const render=()=>this.process(command(),
-            {cwd:workDir,input:sourceStream(this.store,source.id,from,to),progress:log=>{
+            {cwd:workDir,input:sourceStream(this.store,source.id,from,to),stage:copyClean&&job.mode==='clean'?'copy':'render',progress:log=>{
               if(this.closed)return;
               const matches=[...log.matchAll(/(?:^|\n)out_time_us=(\d+)/g)],seconds=Number(matches.at(-1)?.[1])/1000000;
               if(!Number.isFinite(seconds)||Date.now()-lastProgress<750)return;lastProgress=Date.now();
@@ -555,48 +765,49 @@ export class Media {
             copyAudio=false;job.audioStreamCopyFallback=true;await render();
           }
         };
+        await checkpoint.run('part-'+number,async()=>{
         try {await renderWithAudioFallback();}
         catch(error) {
           this.assertExportActive();
-          if(this.closed)throw error;
+          if(this.closed||mediaFailure(error)==='action'||mediaFailure(error)==='temporary')throw error;
           if(copyClean) {
             // A compatible probe is conservative, but a muxer can still reject
             // a damaged stream. Retry the same complete part with normal encode.
+            if(!dual){error.originalCopyFailure=true;throw error;}
             copyClean=false;job.streamCopyFallback=true;job.cleanStreamCopy=false;job.cleanEncodingReason=error.message;
-            try{await renderWithAudioFallback();}catch(fallback){if(encoder.hardware)fallback.hardwareEncoderFailure=true;throw fallback;}
+            try{await renderWithAudioFallback();}catch(fallback){if(encoder.hardware&&mediaFailure(fallback)!=='action'&&mediaFailure(fallback)!=='temporary')fallback.hardwareEncoderFailure=true;throw fallback;}
           } else {if(encoder.hardware)error.hardwareEncoderFailure=true;throw error;}
         }
+        },dual?[out,bakedOut]:[out]);
         if(copyClean)job.cleanStreamCopy=true;
         if(copyAudio)job.audioStreamCopy=true;else delete job.audioStreamCopy;
         parts.push(out); outputOffset+=to-from;
       this.store.run('UPDATE jobs SET progress=MAX(progress,?) WHERE id=?',Math.min(.94,.01+.93*outputOffset/totalDuration),job.id);
     }
     this.store.run("UPDATE jobs SET status='finalizing',progress=.95 WHERE id=?",job.id);
-    if(singlePart)await fs.rename(path.join(workDir,parts[0]),path.join(workDir,'final.mp4'));
-    else {
+    const results=await checkpoint.run('final-output',async()=>{
+    if(!singlePart) {
       await fs.writeFile(path.join(workDir,'concat.txt'),parts.map(p=>`file '${p}'`).join('\n'));
       await this.process(['-f','concat','-safe','1','-i','concat.txt','-c','copy','-movflags','+faststart','-y','final.mp4'],{cwd:workDir});
     }
     const results=[{temporary:'final.mp4',file:output}];
     if(dual){
-      if(singlePart)await fs.rename(path.join(workDir,parts[0].replace('.mp4','-danmaku.mp4')),path.join(workDir,'final-danmaku.mp4'));
-      else {
+      if(!singlePart) {
         await fs.writeFile(path.join(workDir,'concat-danmaku.txt'),parts.map(p=>`file '${p.replace('.mp4','-danmaku.mp4')}'`).join('\n'));
         await this.process(['-f','concat','-safe','1','-i','concat-danmaku.txt','-c','copy','-movflags','+faststart','-y','final-danmaku.mp4'],{cwd:workDir});
       }
       results.push({temporary:'final-danmaku.mp4',file:clipFile(output,'danmaku')});
     }
+    return results;
+    },value=>value.map(item=>item.temporary));
+    // A resumed job may reserve a new destination without changing its media.
+    for(const result of results)result.file=result.temporary==='final-danmaku.mp4'?clipFile(output,'danmaku'):output;
     if(dual)job.output.danmakuFile=results[1].file;
-    this.assertExportActive();
-    this.store.run("UPDATE jobs SET status='saving',progress=.98 WHERE id=?",job.id);
-    job.pendingPublication=await this.publication.stage(job,workDir,results);job.canRetrySave=true;
-    try {
-      this.store.run("UPDATE jobs SET status='saving',progress=.98,data=? WHERE id=?",JSON.stringify(job),job.id);
-      return await this.publishEncoded(job,workDir);
-    }catch(error){error.savePending=true;error.directory=workDir;throw error;}
+    return await this.publishFiles(job,workDir,results);
     } finally {
-      await this.temporaryWorkspaces.finish(workDir);
+      await checkpoint.finish();
     }
   }
-  close(){this.closed=true;this.previewRequests?.close();for(const active of this.previews.values())active.controller.abort();for(const child of this.children)stopChild(child);}
+  close(){this.closed=true;this.preparationShutdown?.abort();this.scheduler?.close();this.previewRequests?.close();for(const active of this.previews.values())active.controller.abort();for(const child of this.children)stopChild(child);
+    for(const [id,handoff] of this.preparationHandoffs||[]){void handoff.release(id).catch(()=>{});}this.preparationHandoffs?.clear();}
 }

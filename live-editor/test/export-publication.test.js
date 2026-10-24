@@ -39,7 +39,7 @@ async function fixture(name, mode = 'clean') {
 }
 async function stage(f) { return f.publication.stage(f.job, f.directory, f.results); }
 async function retained(f) {
-  assert.deepEqual((await readJson(path.join(f.directory, OWNER))).retained, { jobId: f.job.id });
+  assert.equal((await readJson(path.join(f.directory, OWNER))).retained.jobId, f.job.id);
   assert.equal(await f.manager.finish(f.directory), false);
   assert.equal((await f.manager.cleanupStale()).removed, 0);
   for (const file of f.sources) await fs.access(file);
@@ -350,7 +350,7 @@ test('部分 commit 后唯一成片不能被失败重试回滚：source1 缺失�
   assert.equal(await hash(f.results[1].file + '.retained'), originalHashes[1]);
   const manifest = await readJson(path.join(f.directory, MANIFEST));
   assert.ok(manifest.publishedFiles.some(file => file.path === f.results[0].file));
-  assert.deepEqual((await readJson(path.join(f.directory, OWNER))).retained, { jobId: f.job.id });
+  assert.equal((await readJson(path.join(f.directory, OWNER))).retained.jobId, f.job.id);
   assert.equal(await f.manager.finish(f.directory), false);
   assert.equal((await f.manager.cleanupStale()).removed, 0);
   await fs.access(path.join(f.directory, MANIFEST));

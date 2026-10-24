@@ -112,7 +112,7 @@ test('双版本共用选段，弹幕实际烧入第二份视频且在非关键�
   await trace.cleaned();store.close();
 });
 
-test('第二份合并失败不会发布半成品，项目临时文件清理且无关文件与编辑不变',async t=>{
+test('第二份合并失败不发布半成品，保留已处理步骤供重试且无关文件与编辑不变',async t=>{
   const {store,session,media}=await setup('failed-merge');media.work=async()=>{};media.exportAcceleration='software';
   const systemTemp=t.mock.method(os,'tmpdir',()=> 'C:\\must-not-use-system-temp');
   const dm=store.messages(session.id),edit=store.saveEdit(session.id,{revision:0,ranges:[{start:1,end:2},{start:3,end:4}],excluded:[dm[0].id],undo:[dm[0].id]});
@@ -122,7 +122,9 @@ test('第二份合并失败不会发布半成品，项目临时文件清理且�
   const trace=traceExportWork(media),run=media.process.bind(media);
   media.process=async(args,options)=>{if(args.at(-1)==='final-danmaku.mp4')throw new Error('Simulated final merge failure');return run(args,options);};
   await assert.rejects(media.exportJob(job),/Simulated final merge failure/);
-  assert.deepEqual(await fs.readdir(job.output.dir),['用户文件.txt']);assert.equal(await fs.readFile(note,'utf8'),'保留');await trace.cleaned();
+  assert.deepEqual(await fs.readdir(job.output.dir),['用户文件.txt']);assert.equal(await fs.readFile(note,'utf8'),'保留');
+  assert.ok(job.processingRecovery);await fs.access(job.processingRecovery.directory);
+  media.process=run;await media.exportJob(job);await trace.cleaned();
   assert.equal(systemTemp.mock.callCount(),0);assert.deepEqual(await fs.readdir(path.join(store.root,'temp')),[]);
   assert.deepEqual(store.edit(session.id),edit);assert.equal(store.messages(session.id).length,3);store.close();
 });

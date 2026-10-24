@@ -9,7 +9,7 @@ const FORMAT = 'bili-editor-temp-v1';
 const NAME = /^bili-(probe|export|full)-[A-Za-z0-9_-]+$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const jobIdValid = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
-const retainedValid = value => value && typeof value === 'object' && !Array.isArray(value) && jobIdValid(value.jobId);
+const retainedValid = value => value && typeof value === 'object' && !Array.isArray(value) && jobIdValid(value.jobId)&&(!Object.hasOwn(value,'ownerReleased')||typeof value.ownerReleased==='boolean');
 const pidValid = value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647;
 
 export function processRunning(pid) {
@@ -51,10 +51,14 @@ function readMarker(root, directory) {
 
 function allowedFile(directory, name) {
   if (name === MARKER) return true;
+  if(/^\.bili-temp-owner-[0-9a-f-]+\.tmp$/i.test(name))return true;
   const kind = NAME.exec(path.basename(directory))?.[1];
   if (kind === 'probe') return name === 'sample.flv';
+  if (kind === 'export' && (['.bili-export-checkpoint.json','.bili-export-checkpoint.previous.json'].includes(name) || /^\.bili-export-checkpoint-[0-9a-f-]+\.tmp$/i.test(name))) return true;
   if (kind === 'export' && (name === '.bili-export-publication.json' || /^\.bili-export-publication-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/i.test(name))) return true;
   if (kind === 'export' && /^(?:audio-\d+\.flac|audio-concat\.txt|video-concat(?:-danmaku)?\.txt|video(?:-danmaku)?\.mp4|audio\.m4a)$/.test(name)) return true;
+  if (kind === 'export' && /^(?:original-\d+\.mp4|original-concat\.txt|audio-copy-\d+\.m4a|audio-copy-concat\.txt|(?:clean-)?names-\d+\.ass|names\.ass|sequence-\d+\.mp4)$/.test(name)) return true;
+  if (kind === 'export' && /^avatar-[a-f0-9]{64}\.png$/.test(name)) return true;
   if (kind === 'export') return /^(?:part-\d+(?:-danmaku)?\.mp4|part-\d+\.ass|concat(?:-danmaku)?\.txt|final(?:-danmaku)?\.mp4)$/.test(name);
   return false;
 }
@@ -78,8 +82,13 @@ export class TemporaryWorkspaces {
   write(state, data) {
     const existing = readMarker(this.root, state.directory);
     if (!existing || existing.token !== state.data.token || existing.ownerPid !== state.data.ownerPid) throw new Error('临时工作区所有权标记异常，已保留。');
-    // An interrupted write leaves an invalid marker, which cleanup preserves.
-    sync.writeFileSync(path.join(state.directory, MARKER), JSON.stringify(data)); state.data = data;
+    // Keep the last valid owner until the new copy has been flushed and renamed.
+    const text=JSON.stringify(data);if(Buffer.byteLength(text)>16384)throw new Error('临时工作区归属记录超过安全大小，已保留文件。');
+    const temporary=path.join(state.directory,`.bili-temp-owner-${randomUUID()}.tmp`);let handle;
+    try{
+      handle=sync.openSync(temporary,'wx',0o600);sync.writeFileSync(handle,text);sync.fsyncSync(handle);sync.closeSync(handle);handle=undefined;
+      sync.renameSync(temporary,path.join(state.directory,MARKER));state.data=data;
+    }finally{if(handle!==undefined)try{sync.closeSync(handle);}catch{}try{sync.unlinkSync(temporary);}catch{}}
   }
   retainedState(directory, jobId, requireRetained = true) {
     if (!jobIdValid(jobId)) throw new Error('保留导出的任务编号无效。');
@@ -97,21 +106,22 @@ export class TemporaryWorkspaces {
     } else {
       // Only previously retained orphans may be recovered. An unmarked orphan
       // could already be in a cleanup pass and must never be claimed here.
-      if (!marker.retained || marker.pendingSpawns || this.alive(marker.ownerPid) || marker.childPids.some(pid => this.alive(pid))) throw new Error('保留导出仍由其他进程使用，或无法确认其已停止。');
+      if (!marker.retained || marker.pendingSpawns || (!marker.retained.ownerReleased&&this.alive(marker.ownerPid)) || marker.childPids.some(pid => this.alive(pid))) throw new Error('保留导出仍由其他进程使用，或无法确认其已停止。');
       state = { directory, completed: false, finishing: null, data: marker };
       this.write(state, { ...marker, ownerPid: process.pid, childPids: [] });
       this.active.set(key(directory), state);
     }
     return state;
   }
-  async retain(directory, jobId) {
+  async retain(directory, jobId, details = {}) {
     const state = this.retainedState(directory, jobId, false);
-    this.write(state, { ...state.data, retained: { jobId } });
+    this.write(state, { ...state.data, retained: { ...state.data.retained, ...details, jobId } });
     state.completed = false;
     return true;
   }
   async adoptRetained(directory, jobId) {
     const state = this.retainedState(directory, jobId);
+    if(state.data.retained.ownerReleased)this.write(state,{...state.data,retained:{...state.data.retained,ownerReleased:false}});
     state.completed = false;
     return state;
   }
@@ -172,6 +182,8 @@ export class TemporaryWorkspaces {
   async finish(directory) {
     const state = this.active.get(key(directory)); if (!state) return false;
     state.completed = true;
+    if(state.data.retained&&!state.data.pendingSpawns&&!state.data.childPids.some(pid=>this.alive(pid)))
+      try{this.write(state,{...state.data,retained:{...state.data.retained,ownerReleased:true}});}catch{ /* Uncertain markers stay protected. */ }
     if (state.finishing) return state.finishing;
     state.finishing = (async () => {
       try { const removed = await this.remove(directory, state.data, true); if (removed) this.active.delete(key(directory)); return removed; }
@@ -194,6 +206,12 @@ export class TemporaryWorkspaces {
       const directory=path.join(this.root,name);
       let marker;try{marker=readMarker(this.root,directory);}catch{continue;}
       if(marker?.sessionId!==sessionId)continue;
+      // Explicit material deletion may release its own inactive processing
+      // checkpoints. Pending publication remains protected from this path.
+      if(marker.retained?.processing&&!marker.retained.publicationIntent&&this.active.get(key(directory))?.completed!==false&&!marker.pendingSpawns&&!marker.childPids.some(pid=>this.alive(pid))){
+        await this.adoptRetained(directory,marker.retained.jobId);
+        await this.release(directory,marker.retained.jobId);marker=readMarker(this.root,directory);
+      }
       const state=this.active.get(key(directory));
       if(state?.finishing){if(control)await control.wait(state.finishing);else await state.finishing;if(!this.active.has(key(directory)))continue;}
       if(marker.retained||marker.pendingSpawns||marker.childPids.some(pid=>this.alive(pid))||(state?!state.completed:this.alive(marker.ownerPid)))throw new Error('这份素材的临时工作区仍在处理或等待保存，请稍后重试删除。');
