@@ -52,14 +52,16 @@ export function videoMetadata(streams) {
 
 export function preparedEncoderArguments(encoder,threads=2) {
   return [...encoderArguments({...encoder,threads:Math.max(1,Math.min(6,threads,encoder.threads||2))}),'-g','120','-bf','0',
-    ...(encoder.id==='libx264'?['-sc_threshold','0']:[]),'-pix_fmt','yuv420p','-video_track_timescale','60000'];
+    ...(encoder.id==='libx264'?['-sc_threshold','0']:[]),'-pix_fmt','yuv420p','-video_track_timescale','60000','-movie_timescale','60000'];
 }
 
 // Foreground CPU checkpoints are never mixed with the preparation cache. Keep
 // the regular encoder's quality, B frames and bounded thread budget; each file
 // starts its own independently decodable GOP and is only remuxed at the end.
 export function checkpointEncoderArguments(encoder) {
-  return [...encoderArguments(encoder),'-pix_fmt','yuv420p','-video_track_timescale','60000'];
+  // FFmpeg 8 uses the movie clock for B-frame edit-list durations. Its default
+  // 1 kHz clock truncates fractional-frame tails; keep it on the video grid.
+  return [...encoderArguments(encoder),'-pix_fmt','yuv420p','-video_track_timescale','60000','-movie_timescale','60000'];
 }
 
 export async function detectExportEncoder(run,{platform=process.platform}={}) {

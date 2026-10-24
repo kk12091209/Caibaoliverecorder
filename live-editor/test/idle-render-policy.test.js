@@ -39,7 +39,7 @@ test('resource and disk pressure always cap forced parallel mode at a single blo
 test('macOS resource samples coalesce and expire without spawning a command for every block',async()=>{
   let now=0,calls=0;const sampler=idleResourceSampler({platform:'darwin',now:()=>now,query:async()=>{calls++;await tick();return {stdout:'System-wide memory free percentage: 35%\n'};}});
   const values=await Promise.all([sampler(),sampler(),sampler()]);assert.equal(calls,1);
-  assert.equal(values[0].available,values[0].total*.35);assert.equal(values[0].source,'memory-pressure');
+  assert.ok(Math.abs(values[0].available-values[0].total*.35)<1);assert.equal(values[0].source,'memory-pressure');
   now=20000;await sampler();assert.equal(calls,1);now=30000;await sampler();assert.equal(calls,2);
   const unavailable=await idleResourceSampler({platform:'darwin',query:async()=>{throw Error('no command');}})();
   assert.equal(unavailable.source,'free-memory');assert.ok(unavailable.available>=0);

@@ -30,6 +30,7 @@ test('CPU checkpoints cover the exact frame grid for a three-hour recording and 
   const encoder=softwareEncoder(),args=checkpointEncoderArguments(encoder);
   assert.deepEqual(args.slice(0,encoderArguments(encoder).length),encoderArguments(encoder));
   assert.equal(args.includes('-bf'),false,'keep the regular CPU encoder B frames and quality settings');
+  assert.equal(args[args.indexOf('-movie_timescale')+1],'60000','B-frame edit lists must preserve fractional-frame durations on FFmpeg 8');
   const segments=Array.from({length:7200},(_,i)=>({source:{id:'clock'},from:i*1.5+.06,to:i*1.5+1.077}));
   for(const fps of [30,30000/1001]){
     const parts=cleanCheckpointParts(segments,60,fps),duration=segments.reduce((sum,p)=>sum+frameSpan(p.from,p.to,60).duration,0);
@@ -114,7 +115,9 @@ test('CPU clean checkpoints preserve fractional source fps and have no silent au
   await f.media.exportJob(job);await f.media.waitForSaves();
   const tracks=streams(job.output.file),video=tracks.find(s=>s.codec_type==='video');
   assert.equal(video.r_frame_rate,'30000/1001');assert.equal(tracks.length,1);
-  assert.equal(Number(video.nb_frames),Math.round(frameSpan(job.ranges[0].start,job.ranges[0].end,60).frames*(30000/1001)/60));
+  const frames=Math.round(frameSpan(job.ranges[0].start,job.ranges[0].end,60).frames*(30000/1001)/60);
+  assert.equal(Number(video.nb_frames),frames);
+  assert.ok(Math.abs(Number(video.duration)-frames/(30000/1001))<.00002,'the MP4 edit list must not truncate a fractional-frame tail to milliseconds');
   run(ffmpeg,['-v','error','-xerror','-i',job.output.file,'-f','null','-']);
 });
 

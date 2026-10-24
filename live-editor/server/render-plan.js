@@ -295,7 +295,7 @@ export class RenderPipeline {
       // belongs on the final user MP4; moving every block's mdat adds I/O.
       const output=parts.length===1?['-y',parts[0].file]:
         ['-force_key_frames',cuts.map(n=>String(n/fps)).join(','),'-f','segment','-segment_frames',cuts.join(','),'-reset_timestamps','1',
-          '-segment_format','mp4','-segment_format_options','video_track_timescale=60000','-y','sequence-%d.mp4'];
+          '-segment_format','mp4','-segment_format_options','video_track_timescale=60000:movie_timescale=60000','-y','sequence-%d.mp4'];
       await m.process(['-copyts','-fflags','+genpts','-threads',threads,'-f','flv','-i','pipe:0','-map','0:v:0','-an','-filter_threads',threads,'-vf',chain,
         ...plan.profile.arguments,'-frames:v',String(span.frames),'-r',String(fps),...output],
       {cwd:workDir,input:sourceStream(this.store,source.id,readFrom,Math.min(span.to,options.readTo??span.to),{signal:options.signal}),signal:options.signal,background:options.background,stage:'render'});
@@ -538,7 +538,7 @@ export class RenderPipeline {
               try{
                 const r=part.reuse;
                 await this.media.process(['-ss',String(r.from),'-i',r.file,'-t',String(r.to-r.from),'-map','0:v:0','-an','-c:v','copy',
-                  '-video_track_timescale','60000','-movflags','+faststart','-y',part.file],{signal:controller.signal,stage:'copy'});
+                  '-video_track_timescale','60000','-movie_timescale','60000','-movflags','+faststart','-y',part.file],{signal:controller.signal,stage:'copy'});
                 const info=await this.inspect(part.file);
                 if(info.frames!==r.frames||info.bFrames!==0||!Number.isFinite(info.startTime)||!Number.isFinite(info.duration)||Math.abs(info.startTime)>.00001||
                   Math.abs(info.duration-(r.to-r.from))>.00001||info.encodingSignature!==r.signature)throw new Error('缓存裁剪的帧数、时间或编码签名不一致。');
@@ -664,7 +664,7 @@ export class RenderPipeline {
     const videoInput=files.length===1?['-i',files[0].file]:['-f','concat','-safe','0','-i',listName];
     if(files.length>1)await fs.writeFile(path.join(workDir,listName),'ffconcat version 1.0\n'+files.map(item=>`file '${concatPath(item.file)}'\nduration ${item.duration}`).join('\n'));
     const duration=files.reduce((sum,item)=>sum+item.duration,0);
-    await this.media.process(['-copyts',...videoInput,...(audio?['-i',audio]:[]),'-map','0:v:0',...(audio?['-map','1:a:0']:['-an']),'-c','copy','-t',String(duration),'-movflags','+faststart','-y',name],{cwd:workDir,stage:'mux'});
+    await this.media.process(['-copyts',...videoInput,...(audio?['-i',audio]:[]),'-map','0:v:0',...(audio?['-map','1:a:0']:['-an']),'-c','copy','-t',String(duration),'-movie_timescale','60000','-movflags','+faststart','-y',name],{cwd:workDir,stage:'mux'});
   }
   async exportJob(job,encoder,sourcePlan,{cpuCheckpoints=false}={}) {
     const m=this.media,plan=await this.describe(job.session,job,encoder,{cpuCheckpoints}),segments=exportSegments(plan.sources,job.ranges,job.scope);
