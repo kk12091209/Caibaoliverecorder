@@ -6,6 +6,9 @@ $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Set-Location $root
 $version = (Get-Content live-editor/package.json -Raw | ConvertFrom-Json).version
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a numeric release version.' }
+$desktopProject = [xml](Get-Content live-editor/desktop/RecorderDesktop.csproj -Raw -Encoding UTF8)
+$desktopVersion = [string]($desktopProject.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+if ($desktopVersion -ne $version) { throw 'Windows desktop and editor release versions must match before building.' }
 $revision = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read source revision.' }
 $tools = Join-Path $root '.tools/release-tools'
