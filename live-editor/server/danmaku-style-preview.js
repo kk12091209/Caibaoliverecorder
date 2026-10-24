@@ -52,7 +52,7 @@ export class DanmakuStylePreview{
     try{
       const font=await this.media.fonts.selection(input.font);
       if(signal?.aborted)return null;
-      const images=(await fs.readdir(this.imageRoot)).filter(name=>/^danmaku-style-preview-[A-Za-z0-9_-]+\.png$/.test(name));
+      const images=(await fs.readdir(this.imageRoot)).filter(name=>/^danmaku-style-preview-[A-Za-z0-9_-]+\.(?:png|webp)$/.test(name));
       if(images.length!==1)throw new Error('预览背景未就绪，请重新构建或安装软件。');
       const background=path.join(this.imageRoot,images[0]),stat=await fs.lstat(background);
       if(!stat.isFile()||stat.isSymbolicLink()||stat.size>8*1024*1024)throw new Error('预览背景文件无效。');

@@ -1,3 +1,5 @@
+import { horizontalConflict } from './danmaku-collision.js';
+
 export const DANMAKU_SECONDS = 6;
 export const danmakuText = text => String(text).replace(/[{}\\\r\n]/g, ' ').slice(0, 200);
 export const danmakuGap = size => Math.max(12, Math.ceil(size * 0.6));
@@ -22,26 +24,9 @@ function trackOrder(count) {
   return order;
 }
 
-// Estimate the largest on-screen intersection during the remaining shared
-// travel, including a longer/faster follower catching the preceding comment.
-function horizontalConflict(before, time, textWidth, speed, width, gap) {
-  const age = time - before.time - (before.entryDelay || 0);
-  const duration = before.end - time;
-  if (duration <= 0 || (width - age * before.speed + before.textWidth <= width - gap && width - duration * speed >= gap)) return 0;
-  let peak = 0;
-  const limit = Math.min(width, textWidth, before.textWidth);
-  for (let sample = 1; sample <= 5; sample++) {
-    const elapsed = duration * sample / 6;
-    const left = width - elapsed * speed, beforeLeft = width - (age + elapsed) * before.speed;
-    peak = Math.max(peak, Math.min(width, left + textWidth, beforeLeft + before.textWidth) - Math.max(0, left, beforeLeft));
-    if (peak >= limit) return 1;
-  }
-  return Math.max(.02, Math.min(1, peak / limit));
-}
-
-export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, clipBottom = height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map() }) {
-  const active = [], gap = danmakuGap(size), rowOrder = trackOrder(lanes);
-  const rowUses = Array(lanes).fill(0), glyphHeight = size * 1.4 + 4;
+export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, clipBottom = height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map(), ordered = false, state = {} }) {
+  const active = state.active ??= [], gap = danmakuGap(size), rowOrder = trackOrder(lanes);
+  const rowUses = state.rowUses ??= Array(lanes).fill(0), glyphHeight = size * 1.4 + 4;
   // Dense traffic can use intermediate positions instead of stacking every
   // overflow comment on exactly the same few baselines. Bound the search.
   const subdivisions = lanes > 1 ? Math.max(1, Math.floor(128 / (lanes - 1))) : 1;
@@ -52,10 +37,16 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
   const slots = lanes > 1 ? (lanes - 1) * subdivisions + 1 : lastY > firstY ? 129 : 1;
   const slotOrder = trackOrder(slots), step = slots > 1 ? (lastY - firstY) / (slots - 1) : lineHeight;
   const slotY = slot => firstY + slot * step, rowSlot = lane => lanes > 1 ? lane * subdivisions : Math.round((slots - 1) / 2);
-  const ordered = messages.map((message, index) => ({ ...message, id: message.id ?? String(index) }))
+  const scores = new Float64Array(slots), peaks = new Float64Array(slots);
+  const collisionScratch = new Float64Array(8);
+  // The server already orders its admitted messages. Browser callers retain
+  // the public unsorted-input behavior; a checkpoint is private to one layout.
+  const feed = ordered ? messages : messages.map((message, index) => ({ ...message, id: message.id ?? String(index) }))
     .sort((a, b) => a.time - b.time || (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
-  let previousEntry = -Infinity;
-  for (const message of ordered) {
+  let previousEntry = state.previousEntry ?? -Infinity;
+  let index=0;
+  for (const raw of feed) {
+    const message=raw.id==null?{...raw,id:String(index)}:raw;index++;
     const text = danmakuText(message.text), painted = measure?.(text);
     // Browser measurement only sizes a sprite; layout and velocity are shared.
     const textWidth = danmakuTextWidth(text, size, font), old = previous.get(message.id);
@@ -66,7 +57,7 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
     const entry = Math.min(message.time + maxDelay, Math.max(message.time, previousEntry + entryStep));
     const entryDelay = old && old.time === message.time && old.textWidth === textWidth &&
       Math.abs(old.end - old.time - duration) < 1e-8 && Number.isFinite(old.entryDelay) && old.entryDelay >= 0 && old.entryDelay <= maxDelay ? old.entryDelay : Number((entry - message.time).toFixed(6));
-    previousEntry = message.time + entryDelay;
+    state.previousEntry = previousEntry = message.time + entryDelay;
     const speed = (width + textWidth) / (duration - entryDelay);
     // Reuse already displayed positions before doing any collision scoring.
     // A sliding workbench window must not repeatedly rerasterize or reflow it.
@@ -78,35 +69,33 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
       rowUses[comment.lane]++; active.push(comment); yield comment; continue;
     }
     let remaining = 0;
-    const conflicts = [];
+    scores.fill(0); peaks.fill(0);
     for (const before of active) {
       if (before.end <= message.time) continue;
       active[remaining++] = before;
-      const weight = horizontalConflict(before, previousEntry, textWidth, speed, width, gap);
-      if (weight) conflicts.push({ y: before.y, weight });
-    }
-    active.length = remaining;
-    const scores = new Float64Array(slots), peaks = new Float64Array(slots);
-    for (const { y, weight } of conflicts) {
+      const weight = horizontalConflict(before, previousEntry, textWidth, speed, width, gap, message.time + duration, collisionScratch);
+      if (!weight) continue;
+      const y = before.y;
       const first = Math.max(0, Math.ceil((y - glyphHeight - firstY) / step));
       const last = Math.min(slots - 1, Math.floor((y + glyphHeight - firstY) / step));
       for (let slot = first; slot <= last; slot++) {
         const overlap = Math.max(0, 1 - Math.abs(slotY(slot) - y) / glyphHeight);
-        const cost = weight * overlap * overlap;
+        const cost = weight * overlap;
         scores[slot] += cost; peaks[slot] = Math.max(peaks[slot], cost);
       }
     }
+    active.length = remaining;
     let lane = -1, slot = -1;
     for (const candidate of rowOrder) {
       if (scores[rowSlot(candidate)] < 1e-9 && (lane < 0 || rowUses[candidate] < rowUses[lane])) lane = candidate;
     }
     if (lane >= 0) slot = rowSlot(lane);
     else {
-      // Minimize the worst pair first, then total crowding. This prevents a
-      // long burst from repeatedly selecting one already crowded baseline.
+      // Balance total obscured area/time against the worst pair. A single brief
+      // crossing must not force several other messages to overlap for seconds.
       for (const candidate of slotOrder) {
-        if (slot < 0 || peaks[candidate] < peaks[slot] - 1e-9 ||
-          (Math.abs(peaks[candidate] - peaks[slot]) < 1e-9 && scores[candidate] < scores[slot] - 1e-9)) slot = candidate;
+        if (slot < 0 || scores[candidate] + peaks[candidate] < scores[slot] + peaks[slot] - 1e-9 ||
+          (Math.abs(scores[candidate] + peaks[candidate] - scores[slot] - peaks[slot]) < 1e-9 && peaks[candidate] < peaks[slot] - 1e-9)) slot = candidate;
       }
       lane = Math.min(lanes - 1, Math.round(slot / subdivisions));
     }

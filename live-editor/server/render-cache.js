@@ -4,10 +4,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { checkedFile, fingerprint, pathKey } from './storage-files.js';
 
 const GiB = 1024 ** 3, ID = /^[\w-]{1,100}$/, KEY = /^[a-f0-9]{64}$/, UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-const OWNER_FORMAT = 'render-cache-owner-v1', FORMAT = 'render-cache-entry-v1';
+const OWNER_FORMAT = 'render-cache-owner-v1', FORMAT = 'render-cache-entry-v1', PENDING_FORMAT = 'render-cache-pending-v1';
 const REMOVAL = '.deleting.json', REMOVAL_FORMAT = 'render-cache-removal-v1';
 const error = (code, message) => Object.assign(new Error(message), { code });
 const cancelled = () => error('PREP_CANCELLED', '后台预处理已暂停。');
+function ownerRunning(pid) {
+  if(!Number.isSafeInteger(pid)||pid<=0)return true;
+  try{process.kill(pid,0);return true;}catch(failure){return failure.code!=='ESRCH';}
+}
 function normalized(spec) {
   if (!spec || spec.version !== 1 || !ID.test(spec.sessionId || '') || !ID.test(spec.sourceId || '') || !Number.isFinite(spec.startMs) || !Number.isFinite(spec.endMs) || spec.startMs < 0 || spec.endMs <= spec.startMs || spec.endMs > Number.MAX_SAFE_INTEGER) throw error('PREP_SPEC', '预处理缓存描述无效。');
   for (const name of ['sourceFingerprint', 'profileHash', 'assHash']) if (typeof spec[name] !== 'string' || !spec[name].length || spec[name].length > 65536) throw error('PREP_SPEC', '预处理缓存签名无效。');
@@ -71,11 +75,12 @@ async function completeMp4(file, bytes) {
 }
 
 export class RenderCache {
-  constructor(dataRoot, { minFreeBytes = 2 * GiB, maxBytes = 20 * GiB, statfs = directory => fs.statfs(directory, { bigint: true }), now = Date.now } = {}) {
+  constructor(dataRoot, { minFreeBytes = 2 * GiB, maxBytes = 20 * GiB, pendingTtlMs = 120000, maxPendingBytes = 256 * 1024 ** 2, statfs = directory => fs.statfs(directory, { bigint: true }), now = Date.now } = {}) {
     if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw error('PREP_PATH', '缓存数据目录必须使用完整路径。');
-    if (![minFreeBytes, maxBytes].every(value => Number.isFinite(value) && value >= 0)) throw error('PREP_SPACE', '缓存容量设置无效。');
+    if (![minFreeBytes, maxBytes, maxPendingBytes, pendingTtlMs].every(value => Number.isFinite(value) && value >= 0)) throw error('PREP_SPACE', '缓存容量设置无效。');
     this.root = path.join(path.resolve(dataRoot), 'render-cache', 'v1'); this.minFreeBytes = minFreeBytes; this.maxBytes = maxBytes; this.statfs = statfs; this.now = now;
-    this.entries = new Map(); this.loaded = new Set(); this.loading = new Map(); this.building = new Map(); this.blocked = new Set(); this.waiters = new Set(); this.closed = false; this.reserved = 0; this.spaceQueue = Promise.resolve();
+    this.entries = new Map(); this.revision = 0; this.loaded = new Set(); this.loading = new Map(); this.building = new Map(); this.blocked = new Set(); this.waiters = new Set(); this.closed = false; this.reserved = 0; this.spaceQueue = Promise.resolve();
+    this.pending = new Map(); this.pendingCleanup = new Set(); this.pendingQueue=Promise.resolve(); this.pendingTtlMs = pendingTtlMs; this.maxPendingBytes = maxPendingBytes;
   }
   getKey(spec) { return renderCacheKey(spec); }
   assertAllowed(id) { if (this.closed || this.blocked.has(id)) throw cancelled(); }
@@ -87,6 +92,7 @@ export class RenderCache {
     this.blockSession(id);
     for (const work of this.building.values()) if (work.spec.sessionId === id) work.controller.abort();
     if (this.busySession(id)) await new Promise(resolve => { this.waiters.add({ id, resolve }); this.notify(); });
+    await this.dropPending(entry => entry.spec.sessionId === id);
   }
   async loadSession(id, refresh = false) {
     if (!ID.test(id || '')) throw error('PREP_SPEC', '素材编号无效。');
@@ -112,13 +118,28 @@ export class RenderCache {
               const value = removal.value;
               if (value.format !== REMOVAL_FORMAT || value.token !== token || value.spec?.sessionId !== id || renderCacheKey(value.spec) !== key) continue;
               if (!['fileIdentity','manifestIdentity','ownerIdentity'].every(field=>['dev','ino','size','mtimeNs'].every(name=>typeof value[field]?.[name]==='string'))) continue;
-              this.entries.set(entryId, { id: entryId, directory, file: path.join(directory,'video.mp4'), spec: normalized(value.spec), key, bytes: Number(value.fileIdentity.size), fileIdentity: value.fileIdentity, manifestIdentity: value.manifestIdentity, ownerIdentity: value.ownerIdentity, removing: true, created: 0, lastUsed: 0, leases: 0, deleting: false });
+              this.revision++; this.entries.set(entryId, { id: entryId, directory, file: path.join(directory,'video.mp4'), spec: normalized(value.spec), key, bytes: Number(value.fileIdentity.size), fileIdentity: value.fileIdentity, manifestIdentity: value.manifestIdentity, ownerIdentity: value.ownerIdentity, removing: true, created: 0, lastUsed: 0, leases: 0, deleting: false });
               continue;
             }
             const owner = await readJson(this.root, path.join(directory, 'owner.json'));
+            // An interrupted process may leave an explicitly owned pending
+            // result. Never promote it after restart: discard only files whose
+            // saved identities still match, without broad orphan cleanup.
+            if(![...this.pending.values()].some(entry=>entry.directory===directory)&&!this.building.has(key)){
+              let pending;
+              try{pending=await readJson(this.root,path.join(directory,'pending.json'));}catch(failure){if(failure.code!=='ENOENT')continue;}
+              if(pending){
+                const p=pending.value;
+                if(p.format!==PENDING_FORMAT||p.token!==token||p.spec?.sessionId!==id||renderCacheKey(p.spec)!==key||owner.value.format!==OWNER_FORMAT||owner.value.token!==token||owner.value.key!==key||owner.value.sessionId!==id||JSON.stringify(owner.identity)!==JSON.stringify(p.ownerIdentity))continue;
+                if(!['dev','ino','size','mtimeNs','ctimeNs'].every(name=>typeof p.partialIdentity?.[name]==='string'))continue;
+                if(ownerRunning(owner.value.ownerPid))continue;
+                await this.discardBuild(directory,owner.identity,{partialIdentity:p.partialIdentity,pendingIdentity:pending.identity});
+                continue;
+              }
+            }
             const record = await readJson(this.root, path.join(directory, 'manifest.json')), value = record.value;
             if (owner.value.format !== OWNER_FORMAT || owner.value.token !== token || owner.value.sessionId !== id || owner.value.key !== key || value.format !== FORMAT || value.token !== token || value.key !== key || value.spec?.sessionId !== id || renderCacheKey(value.spec) !== key || !Number.isSafeInteger(value.bytes) || value.bytes <= 0 || value.fileIdentity?.size !== String(value.bytes)) continue;
-            this.entries.set(entryId, { id: entryId, directory, file: path.join(directory, 'video.mp4'), spec: normalized(value.spec), key, bytes: value.bytes, fileIdentity: value.fileIdentity, manifestIdentity: record.identity, ownerIdentity: owner.identity, created: Number(value.created) || 0, lastUsed: Number(value.created) || 0, leases: 0, deleting: false });
+            this.revision++; this.entries.set(entryId, { id: entryId, directory, file: path.join(directory, 'video.mp4'), spec: normalized(value.spec), key, bytes: value.bytes, fileIdentity: value.fileIdentity, manifestIdentity: record.identity, ownerIdentity: owner.identity, created: Number(value.created) || 0, lastUsed: Number(value.created) || 0, leases: 0, deleting: false });
           } catch { /* Corrupt or unknown generations are preserved, never hits. */ }
         }
       }
@@ -183,6 +204,44 @@ export class RenderCache {
       await this.freeSpace(this.reserved + bytes); this.reserved += bytes;
     } finally { resolve(); }
   }
+  takePending(key) {
+    const entry=this.pending.get(key);
+    if(entry){this.pending.delete(key);clearTimeout(entry.timer);}
+    return entry;
+  }
+  async disposePending(entry) {
+    try{await this.discardBuild(entry.directory,entry.ownerIdentity,entry);}
+    finally{this.reserved-=entry.estimate;}
+  }
+  async dropPending(predicate) {
+    const work=[];
+    for(const [key,entry] of this.pending)if(predicate(entry))work.push(this.disposePending(this.takePending(key)));
+    await Promise.all(work);
+  }
+  async retainPending(entry) {
+    let release;const prior=this.pendingQueue;this.pendingQueue=new Promise(resolve=>{release=resolve;});await prior;
+    try{return await this.retainPendingLocked(entry);}finally{release();}
+  }
+  async retainPendingLocked(entry) {
+    if(!this.pendingTtlMs||entry.bytes>this.maxPendingBytes||entry.expires<=this.now())return false;
+    await this.dropPending(old=>old.expires<=this.now());
+    while(this.pending.size>=2||[...this.pending.values()].reduce((sum,old)=>sum+old.bytes,entry.bytes)>this.maxPendingBytes){
+      const key=this.pending.keys().next().value;if(key===undefined)return false;
+      await this.disposePending(this.takePending(key));
+    }
+    this.assertAllowed(entry.spec.sessionId);
+    if(!entry.pendingIdentity){
+      await durableJson(path.join(entry.directory,'pending.json'),{format:PENDING_FORMAT,token:path.basename(entry.directory),spec:entry.spec,ownerIdentity:entry.ownerIdentity,partialIdentity:entry.partialIdentity});
+      entry.pendingIdentity=fileIdentity(await checkedFile(this.root,path.join(entry.directory,'pending.json')));
+    }
+    this.assertAllowed(entry.spec.sessionId);
+    entry.timer=setTimeout(()=>{
+      if(this.pending.get(entry.key)!==entry)return;
+      const task=this.disposePending(this.takePending(entry.key)).catch(()=>{}).finally(()=>this.pendingCleanup.delete(task));
+      this.pendingCleanup.add(task);
+    },Math.max(1,entry.expires-this.now()));entry.timer.unref?.();
+    this.pending.set(entry.key,entry);return true;
+  }
   async build(spec, render, { signal, estimatedBytes = 0, verifySource } = {}) {
     spec = normalized(spec); this.assertAllowed(spec.sessionId);
     if (signal?.aborted) throw cancelled();
@@ -199,24 +258,46 @@ export class RenderCache {
     const abort = () => { user.cancelled = true; if ([...work.users].every(user => user.cancelled)) work.controller.abort(); };
     signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
     try { const entry = await work.promise; if (user.cancelled) throw cancelled(); this.assertAllowed(spec.sessionId); const lease = this.lease(entry); if (!lease) throw error('PREP_STALE', '预处理缓存已更新，请重试。'); return lease; }
-    finally { signal?.removeEventListener('abort', abort); work.users.delete(user); if (work.settled && !work.users.size && this.building.get(key) === work) this.building.delete(key); this.notify(); }
+    finally { signal?.removeEventListener('abort', abort); work.users.delete(user); if (work.settled && !work.users.size && this.building.get(key) === work) this.building.delete(key); this.notify(); if(user.cancelled)await this.dropPending(entry=>entry.key===key); }
   }
   async produce(work) {
     const check = () => { this.assertAllowed(work.spec.sessionId); if (work.controller.signal.aborted) throw cancelled(); };
-    let directory, reservation = false, ownerIdentity, partialIdentity, finalIdentity;
+    let directory, reservation = false, ownerIdentity, partialIdentity, finalIdentity, pendingIdentity, retained=false, expires;
     try {
-      check(); await this.reserveSpace(work.estimate); reservation = true; check();
+      check();
+      await this.dropPending(entry=>entry.key!==work.key&&entry.spec.sessionId===work.spec.sessionId&&entry.spec.sourceId===work.spec.sourceId&&entry.spec.startMs===work.spec.startMs&&entry.spec.endMs===work.spec.endMs);
+      let candidate=this.takePending(work.key);
+      if(candidate){
+        let valid=false;
+        try{valid=candidate.expires>this.now()&&matchIdentity(await checkedFile(this.root,candidate.file),candidate.partialIdentity)&&matchIdentity(await checkedFile(this.root,path.join(candidate.directory,'owner.json')),candidate.ownerIdentity)&&matchIdentity(await checkedFile(this.root,path.join(candidate.directory,'pending.json')),candidate.pendingIdentity);}catch{}
+        if(!valid){await this.disposePending(candidate);candidate=null;}
+      }
+      if(candidate){
+        ({directory,ownerIdentity,partialIdentity,pendingIdentity,expires}=candidate);work.estimate=candidate.estimate;reservation=true;
+      }else{
+      await this.reserveSpace(work.estimate); reservation = true; check();
       const parent = path.join(this.root, work.spec.sessionId, work.key); await plainDirectory(parent, true);
       const token = randomUUID(); directory = path.join(parent, token); await fs.mkdir(directory);
       const owner = { format: OWNER_FORMAT, token, key: work.key, sessionId: work.spec.sessionId, ownerPid: process.pid };
       await durableJson(path.join(directory, 'owner.json'), owner); ownerIdentity = fileIdentity(await checkedFile(this.root, path.join(directory, 'owner.json')));
       const partial = path.join(directory, 'partial.mp4');
       await work.render(partial, { signal: work.controller.signal }); check();
-      const stat = await checkedFile(this.root, partial); if (stat.nlink !== 1n) throw error('PREP_INVALID', '预处理视频不是独占文件。'); partialIdentity = fileIdentity(stat);
-      await completeMp4(partial, Number(stat.size)); check();
-      if (work.verifySource && await work.verifySource() === false) throw error('PREP_STALE', '素材或弹幕已更新，已放弃过期预处理。'); check();
+      const stat=await checkedFile(this.root,partial);if(stat.nlink!==1n)throw error('PREP_INVALID','预处理视频不是独占文件。');partialIdentity=fileIdentity(stat);
+      await completeMp4(partial,Number(stat.size));expires=this.now()+this.pendingTtlMs;
+      }
+      check();const partial=path.join(directory,'partial.mp4'),token=path.basename(directory),stat=await checkedFile(this.root,partial);
+      if(!matchIdentity(stat,partialIdentity)||stat.nlink!==1n)throw error('PREP_STALE','预处理结果已变化。');
+      if(Number(stat.size)>work.estimate){const extra=Number(stat.size)-work.estimate;await this.reserveSpace(extra);work.estimate+=extra;}
+      const verified=work.verifySource?await work.verifySource():true;check();
+      if(verified?.pending===true){
+        const entry={key:work.key,spec:work.spec,directory,file:partial,ownerIdentity,partialIdentity,pendingIdentity,bytes:Number(stat.size),estimate:work.estimate,expires};
+        try{retained=await this.retainPending(entry);}finally{pendingIdentity=entry.pendingIdentity;}
+        if(retained){reservation=false;throw error('PREP_PENDING','正在等待弹幕索引，已保留绘制结果。');}
+        throw error('PREP_STALE','预处理验证等待已超过限额。');
+      }
+      if(verified!==true)throw error('PREP_STALE','素材或弹幕已更新，已放弃过期预处理。');check();
       if (!matchIdentity(await checkedFile(this.root, partial), partialIdentity)) throw error('PREP_STALE', '预处理结果写入期间发生变化。');
-      if (Number(stat.size) > work.estimate) { const extra = Number(stat.size) - work.estimate; await this.reserveSpace(extra); work.estimate += extra; }
+      if(pendingIdentity){if(!matchIdentity(await checkedFile(this.root,path.join(directory,'pending.json')),pendingIdentity))throw error('PREP_STALE','等待验证记录已变化。');await fs.unlink(path.join(directory,'pending.json'));pendingIdentity=undefined;}
       await this.freeSpace(Number(stat.size)); check();
       const final = path.join(directory, 'video.mp4');
       await fs.copyFile(partial, final, fs.constants.COPYFILE_EXCL);
@@ -230,17 +311,19 @@ export class RenderCache {
       if (!matchIdentity(await checkedFile(this.root, final), finalIdentity)) throw error('PREP_STALE', '预处理结果保存时发生变化。');
       if (matchIdentity(await checkedFile(this.root, partial), partialIdentity)) await fs.unlink(partial);
       const entry = { id: pathKey(directory), directory, file: final, spec: work.spec, key: work.key, bytes: manifest.bytes, fileIdentity: finalIdentity, manifestIdentity: record.identity, ownerIdentity, created: manifest.created, lastUsed: this.now(), leases: 0, deleting: false };
-      this.entries.set(entry.id, entry); return entry;
+      this.revision++; this.entries.set(entry.id, entry); return entry;
     } catch (failure) {
-      if (directory) await this.discardBuild(directory, ownerIdentity, { partialIdentity, finalIdentity });
+      if (directory&&!retained) await this.discardBuild(directory, ownerIdentity, { partialIdentity, finalIdentity, pendingIdentity });
       if (work.controller.signal.aborted || this.blocked.has(work.spec.sessionId)) throw cancelled();
       if (['ENOSPC', 'EDQUOT'].includes(failure.code)) throw error('PREP_SPACE', '磁盘空间不足，后台预处理已暂停。');
       throw failure;
     } finally { if (reservation) this.reserved -= work.estimate; }
   }
-  async discardBuild(directory, ownerIdentity, { partialIdentity, finalIdentity }) {
+  async discardBuild(directory, ownerIdentity, { partialIdentity, finalIdentity, pendingIdentity }) {
     try {
       if (!ownerIdentity || !matchIdentity(await checkedFile(this.root, path.join(directory, 'owner.json')), ownerIdentity)) return;
+      const pending=await checkedFile(this.root,path.join(directory,'pending.json'),{missing:true});
+      if(pending&&(!pendingIdentity||!matchIdentity(pending,pendingIdentity)))return;
       for (const [name, expected] of [['partial.mp4', partialIdentity], ['video.mp4', finalIdentity]]) {
         const file = path.join(directory, name), stat = await checkedFile(this.root, file, { missing: true });
         if (!stat) continue;
@@ -249,6 +332,7 @@ export class RenderCache {
       }
       const manifest = path.join(directory, 'manifest.json');
       try { const value = await readJson(this.root, manifest); if (value.value.token !== path.basename(directory)) return; await fs.unlink(manifest); } catch (failure) { if (failure.code !== 'ENOENT') return; }
+      if(pending)await fs.unlink(path.join(directory,'pending.json'));
       if ((await fs.readdir(directory)).some(name => name !== 'owner.json')) return;
       await fs.unlink(path.join(directory, 'owner.json')); await fs.rmdir(directory);
     } catch { /* Never broaden cleanup after an identity/path failure. */ }
@@ -294,7 +378,7 @@ export class RenderCache {
       control?.check();
       await fs.unlink(path.join(entry.directory, REMOVAL));
       control?.progress();
-      await fs.rmdir(entry.directory); this.entries.delete(entry.id);
+      await fs.rmdir(entry.directory); this.revision++; this.entries.delete(entry.id);
       control?.progress();
       for (const parent of [path.dirname(entry.directory), path.dirname(path.dirname(entry.directory))]) try { await plainDirectory(parent); control?.check(); await fs.rmdir(parent); control?.progress(); } catch (failure) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(failure.code)) throw failure; }
       return { freedBytes, deletedFiles, preserved: [] };
@@ -337,5 +421,5 @@ export class RenderCache {
     catch (failure) { control?.check(); if (failure.code !== 'ENOENT') result.preserved.push({ path: sessionRoot, reason: '缓存目录异常，已保留' }); }
     return result;
   }
-  async close() { this.closed = true; const ids = new Set([...this.building.values()].map(work => work.spec.sessionId)); for (const entry of this.entries.values()) if (entry.leases) ids.add(entry.spec.sessionId); await Promise.all([...ids].map(id => this.cancelSession(id))); }
+  async close() { this.closed = true; const ids = new Set([...this.building.values(),...this.pending.values()].map(work => work.spec.sessionId)); for (const entry of this.entries.values()) if (entry.leases) ids.add(entry.spec.sessionId); await Promise.all([...ids].map(id => this.cancelSession(id))); await Promise.all([...this.pendingCleanup]); }
 }

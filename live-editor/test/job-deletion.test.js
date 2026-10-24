@@ -316,8 +316,14 @@ async function publishingFixture(name, scope) {
   f.store.run('INSERT INTO keyframes VALUES(?,?,?,?)', f.source.id, 0, 0, 0);
   const media = new Media(f.store, { exportAcceleration: 'software' });
   media.work = async () => {};
-  media.probeSource = async () => ({ width: 640, height: 360, fps: 30 });
+  media.probeSource = async () => ({ width: 640, height: 360, fps: 30, audioStreams: 0 });
   const temporary = new Set();
+  // Publication tests use tiny MP4 stand-ins for both encoding routes; real
+  // CPU frame/clock/codec verification lives in cpu-export-checkpoints.test.js.
+  media.renderer.renderVideo=async(_plan,_source,_from,_to,file)=>{
+    temporary.add(path.dirname(file));await fs.writeFile(file,minimalMp4);
+    media.renderer.encodedInfo.set(file,{encodingSignature:'publication-test'});
+  };
   media.process = async (args, options = {}) => {
     assert.equal(path.dirname(options.cwd), path.join(f.store.root, 'temp'));
     temporary.add(options.cwd);

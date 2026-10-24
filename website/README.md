@@ -36,14 +36,17 @@ npm run dev:downloader
 | `npm run build` | TypeScript 检查与生产构建 |
 | `npm run check` | 格式、测试与构建 |
 | `npm run format` | 统一 TypeScript / 服务端源码格式 |
+| `npm run runtime:sync` | 从主锁文件生成下载服务与发布同步服务的最小依赖锁文件 |
 | `npm run package:deploy` | 生成独立部署归档，不连接线上服务器 |
 | `npm run sync:check` | 只读核对 GitHub 录包机发布，需联网 |
 
 部署见 [DEPLOYMENT.md](DEPLOYMENT.md)，目录边界见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)，下载行为见 [DOWNLOADER.md](DOWNLOADER.md)。
 
+`deploy/services/` 为两个后台进程分别锁定依赖：下载服务只安装图片处理、ZIP 与浏览器解析所需包；安装包同步服务只安装 COS SDK。React、Three.js、口播编码等浏览器依赖不进入后台镜像。更新主依赖后运行 `npm run runtime:sync`，再运行检查；不要单独升级服务锁文件。
+
 ## 源码与线上版本
 
-这是网站的开发源码，提交到 GitHub 不会自动替换生产服务。仓库包含本地验证阶段的抖音实况识别、预览与 MP4 保存；这部分尚未包含在现有 `20261022-1510-native-download` 线上发布中。后续发布需独立测试和部署，不能把“源码已公开”当作“全部功能已上线”。
+这是网站的开发源码，提交到 GitHub 不会自动替换生产服务。仓库包含本地验证阶段的抖音实况识别、预览与 MP4 保存；这部分尚未包含在线上发布中。`20261023-lean-web` 性能版基于 `20261022-1510-native-download` 的业务源码，仅回移工具入口按需加载和下载服务依赖精简；未附带实况功能。后续发布需独立测试和部署，不能把“源码已公开”当作“全部功能已上线”。
 
 `public/releases/catalog.json` 是公开安装包信息的本地回退快照。生产清单由同步服务独立更新，网站构建不覆盖它。`public/plugins/` 是用户直接安装的脚本，URL、元信息和第三方声明需保持兼容。
 

@@ -12,6 +12,7 @@ const measured = new DanmakuCache(2048), sprites = new DanmakuCache(20 * 1024 * 
 const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') === '1';
 let context, observer, raf = 0, videoFrame = 0, width = 0, height = 0, scale = 1;
 let layout = new Map(), boundVideo, motionPreference, buffering = false, disposed = false;
+let spareBitmap;
 let geometry=danmakuGeometry(720,props.style);
 let lastPaint = 0, lastMediaTime = 0, nextFrameAt = 0;
 let stats = { frames: 0, drawMs: 0, maxDrawMs: 0, rasterMisses: 0, measuredMisses: 0, active: 0, lateFrames: 0, minClockStep: Infinity, maxClockStep: 0, since: performance.now() };
@@ -32,12 +33,15 @@ function rebuild(reset = false) {
   timeline.set(layout); requestPaint();
 }
 
-function spriteFor(comment) {
+function spriteKey(comment) {
   const color = '#' + ((Number(comment.color) || 16777215) & 0xffffff).toString(16).padStart(6, '0');
-  const key = color + ':' + comment.text;
+  return color + ':' + comment.text;
+}
+function spriteFor(comment, protectedKeys) {
+  const key = spriteKey(comment), color = key.slice(0,7);
   const cached = sprites.get(key);
   if (cached) return cached;
-  const bitmap = document.createElement('canvas');
+  const bitmap = spareBitmap || document.createElement('canvas'); spareBitmap = undefined;
   const cssWidth = Math.ceil(comment.paintWidth??comment.textWidth) + 8, cssHeight = Math.ceil(geometry.size*1.8)+8;
   bitmap.width = Math.ceil(cssWidth * scale); bitmap.height = Math.ceil(cssHeight * scale);
   const brush = bitmap.getContext('2d');
@@ -46,7 +50,9 @@ function spriteFor(comment) {
   brush.strokeStyle = '#111111'; brush.fillStyle = color;
   brush.strokeText(comment.text, 4, 4); brush.fillText(comment.text, 4, 4);
   stats.rasterMisses++;
-  return sprites.set(key, { bitmap, width: bitmap.width / scale, height: bitmap.height / scale }, bitmap.width * bitmap.height * 4);
+  const sprite = sprites.set(key, { bitmap, width: bitmap.width / scale, height: bitmap.height / scale }, bitmap.width * bitmap.height * 4, protectedKeys);
+  if (!sprites.entries.has(key)) spareBitmap = bitmap;
+  return sprite;
 }
 
 function isMoving() {
@@ -107,10 +113,16 @@ function paint(now) {
   const time = props.base + (moving ? clock.at(now) : player.currentTime);
   context.save();context.beginPath();context.rect(0,geometry.clipTop,width,geometry.clipBottom-geometry.clipTop);context.clip();context.globalAlpha=geometry.opacity;
   let active = 0;
+  const visible = [], protectedKeys = new Set();
   for (const comment of timeline.at(time)) {
     if (props.excluded?.has(comment.id) || (motionPreference?.matches && time - comment.time > 4)) continue;
     const x = motionPreference?.matches ? 20 : commentX(comment, time, width);
-    const sprite = spriteFor(comment);
+    const paintedWidth = Math.ceil((Math.ceil(comment.paintWidth??comment.textWidth)+8)*scale)/scale;
+    if (x - 4 >= width || x - 4 + paintedWidth <= 0) continue;
+    visible.push({comment,x}); protectedKeys.add(spriteKey(comment));
+  }
+  for (const {comment,x} of visible) {
+    const sprite = spriteFor(comment, protectedKeys);
     context.drawImage(sprite.bitmap, x - 4, comment.y - 4, sprite.width, sprite.height);
     active++;
   }
@@ -152,8 +164,9 @@ function resize() {
 let fontGeneration=0,customFace;
 function updateStyle(){
   geometry=danmakuGeometry(height||720,props.style);
-  font=`${props.font?.italic?'italic ':''}${props.font?.bold?'700':'400'} ${geometry.size}px ${customFace?'"'+customFace.family+'", ':''}"Microsoft YaHei", "Segoe UI", sans-serif`;
-  measured.clear();sprites.clear();rebuild(true);
+  const nextFont=`${props.font?.italic?'italic ':''}${props.font?.bold?'700':'400'} ${geometry.size}px ${customFace?'"'+customFace.family+'", ':''}"Microsoft YaHei", "Segoe UI", sans-serif`;
+  if(font!==nextFont){font=nextFont;measured.clear();sprites.clear();}
+  rebuild(true);
 }
 async function changeFont(value){
   const generation=++fontGeneration;let face;
@@ -178,7 +191,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', visibilityChanged); bind(props.video); resize();
 });
 onBeforeUnmount(() => {
-  disposed = true; fontGeneration++;if(customFace)document.fonts.delete(customFace);bind(null); cancelAnimationFrame(raf); observer?.disconnect(); sprites.clear(); measured.clear();
+  disposed = true; fontGeneration++;if(customFace)document.fonts.delete(customFace);bind(null); cancelAnimationFrame(raf); observer?.disconnect(); sprites.clear(); measured.clear(); spareBitmap = undefined;
   document.removeEventListener('visibilitychange', visibilityChanged); motionPreference?.removeEventListener('change', requestPaint);
 });
 </script>

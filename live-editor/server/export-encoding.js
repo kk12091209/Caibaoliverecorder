@@ -45,12 +45,23 @@ export function videoMetadata(streams) {
   if(video.extradata_hash)result.encodingSignature=JSON.stringify([video.codec_name,video.profile,video.level,video.width,video.height,video.pix_fmt,video.sample_aspect_ratio,video.time_base,video.extradata_hash]);
   if(Number.isFinite(Number(video.nb_frames)))result.frames=Number(video.nb_frames);
   if(Number.isFinite(Number(video.duration)))result.duration=Number(video.duration);
+  if(Number.isInteger(video.has_b_frames))result.bFrames=video.has_b_frames;
+  if(Number.isFinite(Number(video.start_time)))result.startTime=Number(video.start_time);
   return result;
 }
 
-export function preparedEncoderArguments(encoder) {
-  return [...encoderArguments({...encoder,threads:Math.min(2,encoder.threads||2)}),'-g','120','-bf','0',
-    ...(encoder.id==='libx264'?['-sc_threshold','0']:[]),'-pix_fmt','yuv420p','-video_track_timescale','60000'];
+export function preparedEncoderArguments(encoder,threads=2) {
+  return [...encoderArguments({...encoder,threads:Math.max(1,Math.min(6,threads,encoder.threads||2))}),'-g','120','-bf','0',
+    ...(encoder.id==='libx264'?['-sc_threshold','0']:[]),'-pix_fmt','yuv420p','-video_track_timescale','60000','-movie_timescale','60000'];
+}
+
+// Foreground CPU checkpoints are never mixed with the preparation cache. Keep
+// the regular encoder's quality, B frames and bounded thread budget; each file
+// starts its own independently decodable GOP and is only remuxed at the end.
+export function checkpointEncoderArguments(encoder) {
+  // FFmpeg 8 uses the movie clock for B-frame edit-list durations. Its default
+  // 1 kHz clock truncates fractional-frame tails; keep it on the video grid.
+  return [...encoderArguments(encoder),'-pix_fmt','yuv420p','-video_track_timescale','60000','-movie_timescale','60000'];
 }
 
 export async function detectExportEncoder(run,{platform=process.platform}={}) {

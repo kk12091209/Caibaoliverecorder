@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { acquireReader, checkedFile, fingerprint, originalTags, isMedia, isCodecHeader } from './storage-files.js';
 import { chatRate, isLongChat } from './chat-rules.js';
+import {mediaDigest,keyframesDigest,codecHeaderSignature,readSealedChunk,verifyDirectKeyframes} from './source-range-identity.js';
 
 export const FLV_HEADER = Buffer.from([70,76,86,1,5,0,0,0,9,0,0,0,0]);
 export function timestamp(tag) { return tag.readUIntBE(4, 3) + tag[7] * 16777216; }
@@ -25,7 +26,16 @@ function keyframe(b) { return videoData(b) && b[11] >> 4 === 1; }
 const decodeXML = s => s.replace(/&#x([0-9a-f]+);|&#(\d+);|&(lt|gt|quot|apos|amp);/gi, (_, x, d, n) => x || d ? String.fromCodePoint(Math.min(0x10ffff, parseInt(x || d, x ? 16 : 10))) : ({lt:'<',gt:'>',quot:'"',apos:"'",amp:'&'}[n] || ''));
 
 export class Ingestor {
-  constructor(store, { now = Date.now, xmlRetryMs = 30000 } = {}) { this.store = store; this.states = new Map(); this.xmlStates = new Map(); this.now = now; this.xmlRetryMs = xmlRetryMs; this.busy = false; this.timer = null; }
+  constructor(store, { now = Date.now, xmlRetryMs = 30000 } = {}) { this.store = store; this.states = new Map(); this.xmlStates = new Map(); this.health = new Map(); this.now = now; this.xmlRetryMs = xmlRetryMs; this.busy = false; this.timer = null; }
+  healthSnapshot(sourceId) {const value=this.health.get(sourceId);return value?{...value}:null;}
+  healthState(sourceId) {
+    let value=this.health.get(sourceId);
+    if(!value) {
+      if(this.health.size>=64)this.health.delete(this.health.keys().next().value);
+      value={observedAt:0,unreadBytes:0,lastIngestAt:0,lastProgressAt:0,writeLatencyMs:0,inFlightWriteSince:null};this.health.set(sourceId,value);
+    }
+    return value;
+  }
   start() { this.timer = setInterval(() => this.tick().catch(e => { this.lastError = e.message; }), 250); }
   stop() { clearInterval(this.timer); }
   async tick() {
@@ -50,6 +60,8 @@ export class Ingestor {
     const file = await fs.open(source.path, 'r');
     try {
       const stat = await file.stat();
+      const health=this.healthState(source.id),initialPos=state.pos;
+      health.observedAt=this.now();health.lastIngestAt=health.observedAt;health.unreadBytes=Math.max(0,stat.size-state.pos);
       if (stat.size < 13) return;
       if (state.pos === 13 && !state.parts.length) {
         const head = Buffer.alloc(13); await file.read(head, 0, 13, 0);
@@ -66,7 +78,13 @@ export class Ingestor {
           if (type === 8 || type === 9) {
             if (type === 9 && (tag[11] & 15) !== 7) throw new Error('当前剪辑预览仅支持 H.264。请将录制画质设为 AVC；原始录制不会被停止。');
             const isHeader = (type === 9 || tag[11] >> 4 === 10) && tag[12] === 0;
-            if (isHeader) { state.header[type === 9 ? 'video' : 'audio'] = tag.toString('base64'); }
+            if (isHeader) {
+              const name=type===9?'video':'audio',next={...state.header,[name]:tag.toString('base64')};
+              // Do not attach a newly arrived SPS/PPS or AAC config to media
+              // buffered under the previous codec epoch.
+              if(state.parts.length&&codecHeaderSignature(next)!==codecHeaderSignature(state.header))await this.flush(source,state);
+              state.header=next;
+            }
             else {
               if (state.parts.length && time >= state.boundary) await this.flush(source, state);
               if (state.start === null) { state.start = time; state.boundary = Math.floor(time) + 1; }
@@ -75,6 +93,7 @@ export class Ingestor {
             }
           }
           state.pos += tag.length;
+          health.unreadBytes=Math.max(0,stat.size-state.pos);
         }
         scanned += consumed;
       }
@@ -87,23 +106,29 @@ export class Ingestor {
         await this.flush(source, state);
         this.store.run('UPDATE sources SET closed=2,error=? WHERE id=?', '末尾存在未写完整的数据包；已保留原文件。', source.id);
       }
+      if(state.pos>initialPos)health.lastProgressAt=this.now();
     } finally { await file.close(); }
   }
   async flush(source, state) {
     if (!state.parts.length) return;
+    const health=this.healthState(source.id),started=this.now();health.inFlightWriteSince=started;
+    try {
     const folder = path.join(this.store.root, 'chunks', source.id); await fs.mkdir(folder, { recursive: true });
     const target = path.join(folder, `${String(state.seq).padStart(8, '0')}.flvpart`);
-    const out = await fs.open(target + '.tmp', 'w');
-    try { await out.writeFile(Buffer.concat(state.parts)); await out.sync(); } finally { await out.close(); }
+    const data=Buffer.concat(state.parts),out = await fs.open(target + '.tmp', 'w');
+    try { await out.writeFile(data); await out.sync(); } finally { await out.close(); }
     await fs.rename(target + '.tmp', target);
+    const sealed=fingerprint(await fs.stat(target,{bigint:true}));
     const start = source.start + state.start, end = source.start + state.end;
     this.store.transaction(() => {
       this.store.run('INSERT INTO chunks VALUES(?,?,?,?,?,?)', source.id, state.seq, start, end, target, state.bytes);
+      this.store.run('INSERT INTO chunk_identities VALUES(?,?,?,?,?,?)',source.id,state.seq,mediaDigest(data),sealed,JSON.stringify(state.header),keyframesDigest(state.keys));
       for (const key of state.keys) this.store.run('INSERT INTO keyframes VALUES(?,?,?,?)', source.id, key.time, state.seq, key.offset);
       this.store.run('UPDATE sources SET pos=?,header=?,duration=MAX(duration,?) WHERE id=?', state.pos, JSON.stringify(state.header), state.end, source.id);
       this.store.run('UPDATE sessions SET duration=MAX(duration,?) WHERE id=?', end, source.session);
     });
     state.seq++; state.parts = []; state.keys = []; state.bytes = 0; state.start = null;
+    } finally {health.writeLatencyMs=Math.max(0,this.now()-started);health.inFlightWriteSince=null;}
   }
   async readDanmaku(source) {
     const previous = this.xmlStates.get(source.id);
@@ -178,31 +203,41 @@ export class Ingestor {
   }
 }
 
-export async function* sourceStream(store, sourceId, from, to, { follow = false, signal } = {}) {
+export async function* sourceStream(store, sourceId, from, to, { follow = false, signal, wholeSource = false } = {}) {
   let source = store.get('SELECT * FROM sources WHERE id=?', sourceId);
   if(!source||!store.session(source.session))throw new Error('素材不存在或已经删除。');
   const reader=acquireReader(store,sourceId);let original;
   try {
   const key = store.get('SELECT * FROM keyframes WHERE source=? AND time<=? ORDER BY time DESC LIMIT 1', sourceId, from) || store.get('SELECT * FROM keyframes WHERE source=? ORDER BY time LIMIT 1', sourceId);
   if (!key) throw new Error('正在等待可解码的关键帧。');
-  const base = key.time;
+  if(wholeSource&&(source.closed!==2||Math.abs(from-source.start)>.001||key.seq!==0))throw new Error('完整来源复制需要已封口且从首片段开始的素材。');
+  const base = wholeSource?source.start:key.time;
+  let firstVideo=wholeSource;
   let absolute;
   if(reader.mode==='direct') {
+    verifyDirectKeyframes(store,sourceId,key.seq);
     absolute=store.get('SELECT raw_offset FROM direct_keyframes WHERE source=? AND seq=? AND chunk_offset=?',sourceId,key.seq,key.offset)?.raw_offset;
     if(!Number.isSafeInteger(absolute)||absolute<13)throw new Error('完整原片的定位索引缺失，请检查素材。');
     const stat=await checkedFile(path.join(store.root,'originals'),source.path);
     if(fingerprint(stat)!==reader.storage.fingerprint)throw new Error('完整原片在整理后发生变化，无法安全读取，请恢复原文件。');
+    if(wholeSource)absolute=13;
     original=await fs.open(source.path,'r');
     if(fingerprint(await original.stat({bigint:true}))!==reader.storage.fingerprint)throw new Error('完整原片在打开时发生变化，请恢复原文件。');
   }
   yield FLV_HEADER;
-  const header = JSON.parse(source.header);
+  let header = JSON.parse(store.get('SELECT header FROM chunk_identities WHERE source=? AND seq=?',sourceId,key.seq)?.header||source.header);
   for (const name of ['video', 'audio']) if (header[name]) yield retime(Buffer.from(header[name], 'base64'), 0);
   if(original) {
     for await(const {tag} of originalTags(original,absolute,{signal})) {
-      if(!isMedia(tag)||isCodecHeader(tag))continue;
+      if(!isMedia(tag))continue;
       const global=source.start+timestamp(tag)/1000;
       if(global>to+.1)return;
+      if(isCodecHeader(tag)) {
+        const name=tag[0]===9?'video':'audio',next={...header,[name]:tag.toString('base64')};
+        if(codecHeaderSignature(next)!==codecHeaderSignature(header))yield retime(tag,(global-base)*1000);
+        header=next;continue;
+      }
+      if(firstVideo&&tag[0]===9){if(!keyframe(tag))throw new Error('完整来源的首帧不是关键帧，无法直接复制。');firstVideo=false;}
       yield retime(tag,(global-base)*1000);
     }
     return;
@@ -216,13 +251,22 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
       if (!follow || source.closed === 2 || source.error) return;
       await new Promise(resolve => setTimeout(resolve, 120)); continue;
     }
-    const data = await fs.readFile(chunk.path); const part = first ? data.subarray(key.offset) : data;
+    if(chunk.start>to+.1)return;
+    const sealed=await readSealedChunk(store,chunk),data=sealed.data,part=first&&!wholeSource?data.subarray(key.offset):data;
+    if(sealed.header&&codecHeaderSignature(sealed.header)!==codecHeaderSignature(header)) {
+      for(const name of ['video','audio'])if(sealed.header[name]&&codecHeaderSignature({[name]:sealed.header[name]})!==codecHeaderSignature({[name]:header[name]})) {
+        const tag=Buffer.from(sealed.header[name],'base64');
+        yield retime(tag,(source.start+timestamp(tag)/1000-base)*1000);
+      }
+      header=sealed.header;
+    }
     // readFile owns this buffer. Retiming it never changes the stored chunk.
     // Keep complete FLV tags together and flush each chunk's tail immediately
     // so a live preview never waits for a future chunk to fill a batch.
     let batchStart = 0, batchEnd = 0;
     for (const { tag, offset } of tags(part).items) {
       if (signal?.aborted) return;
+      if(firstVideo&&tag[0]===9){if(!keyframe(tag))throw new Error('完整来源的首帧不是关键帧，无法直接复制。');firstVideo=false;}
       const global = source.start + timestamp(tag) / 1000;
       if (global > to + 0.1) {
         if (batchEnd > batchStart) yield part.subarray(batchStart, batchEnd);

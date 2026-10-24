@@ -136,7 +136,7 @@ test('冷缓存 65 秒均分为两段 32.5 秒，非整秒边界仍严格按 60 
 });
 
 function exportFixture({ encoder = hardware, duration = 65, mode = 'danmaku', ready = false, renderError } = {}) {
-  const calls = { renderer: 0, legacy: [], ready: 0, releases: 0 };
+  const calls = { renderer: 0, renderSelections: [], legacy: [], ready: 0, releases: 0 };
   const job = { id: 'job', session: 'session', scope: 'clips', mode,
     ranges: [{ start: 0, end: duration }], outputRoot: workDir, output: { file: path.join(workDir, 'final.mp4') } };
   const media = {
@@ -146,7 +146,11 @@ function exportFixture({ encoder = hardware, duration = 65, mode = 'danmaku', re
     store: { sources: () => [source], session: () => ({ status: 'finished' }), get: () => ({ time: 0 }), run() {} },
     probeSource: async () => ({}),
     renderCache: { hasReady: async () => { calls.ready++; return ready; } },
-    renderer: { exportJob: async (_job, selected) => { calls.renderer++; assert.equal(selected, encoder); if (renderError) throw renderError; return 'renderer.mp4'; } },
+    renderer: { exportJob: async (_job, selected, _plan, options) => {
+      calls.renderer++;calls.renderSelections.push({selected,options});
+      if(options?.cpuCheckpoints){assert.equal(selected.hardware,false);return 'cpu-renderer.mp4';}
+      assert.equal(selected, encoder);if(renderError)throw renderError;return 'renderer.mp4';
+    } },
     encodeJob: async (_job, selected) => { calls.legacy.push(selected); return 'legacy.mp4'; },
     releaseReservation: async () => { calls.releases++; },
   };
@@ -162,13 +166,19 @@ for (const mode of ['danmaku', 'dual']) {
     assert.equal(f.calls.ready, 0); assert.equal(f.calls.releases, 1);
   });
 }
-for (const variant of [{ name: '短片', duration: 59.99 }, { name: '纯净版', mode: 'clean' }, { name: '软件编码', encoder: software }]) {
+for (const variant of [{ name: '短片', duration: 59.99 }, { name: '硬件纯净版', mode: 'clean' }, {name:'软件短片',encoder:software,duration:59.99}]) {
   test(`冷缓存${variant.name}保持常规导出`, async () => {
     const f = exportFixture(variant);
     assert.equal(await f.run(), 'legacy.mp4'); assert.equal(f.calls.renderer, 0);
     assert.equal(f.calls.legacy.length, 1); assert.equal(f.calls.releases, 1);
   });
 }
+
+for(const mode of ['danmaku','dual','clean'])test(`冷缓存 CPU ${mode} 长导出进入有检查点的前台流程`,async()=>{
+  const f=exportFixture({encoder:software,mode,duration:60});
+  assert.equal(await f.run(),'cpu-renderer.mp4');assert.equal(f.calls.renderer,1);assert.equal(f.calls.legacy.length,0);
+  assert.equal(f.calls.renderSelections[0].options.cpuCheckpoints,true);assert.equal(f.calls.releases,1);
+});
 
 test('已经完成编码的 savePending 错误不会回退重编码', async () => {
   const error = Object.assign(new Error('destination unavailable'), { savePending: true, hardwareEncoderFailure: true });
@@ -178,10 +188,10 @@ test('已经完成编码的 savePending 错误不会回退重编码', async () =
   assert.equal(f.job.encoderFallback, undefined); assert.equal(f.calls.releases, 1);
 });
 
-test('renderer 的 hardwareEncoderFailure 触发 CPU 常规导出', async () => {
+test('renderer 的 hardwareEncoderFailure 触发 CPU 分块导出', async () => {
   const f = exportFixture({ renderError: Object.assign(new Error('GPU unavailable'), { hardwareEncoderFailure: true }) });
-  assert.equal(await f.run(), 'legacy.mp4'); assert.equal(f.calls.renderer, 1);
-  assert.equal(f.calls.legacy.length, 1); assert.equal(f.calls.legacy[0].hardware, false);
-  assert.equal(f.calls.legacy[0].id, 'libx264'); assert.equal(f.job.encoderFallback, true);
+  assert.equal(await f.run(), 'cpu-renderer.mp4'); assert.equal(f.calls.renderer, 2);
+  assert.equal(f.calls.legacy.length, 0); assert.equal(f.calls.renderSelections[1].selected.hardware, false);
+  assert.equal(f.calls.renderSelections[1].selected.id, 'libx264');assert.equal(f.calls.renderSelections[1].options.cpuCheckpoints,true); assert.equal(f.job.encoderFallback, true);
   assert.equal((await f.media.exportEncoder).id, 'libx264');
 });

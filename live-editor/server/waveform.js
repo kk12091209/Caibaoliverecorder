@@ -154,6 +154,9 @@ export class WaveformService {
       source.id, block, work.signature, state === 'error' ? work.row?.covered ?? source.start + block * BLOCK : to, state, state === 'error' ? dataOf(work.row) : data, error, retry);
   }
   async decode(source, from, to, signal, onFrame) {
+    return this.media.scheduled('interactive',signal,()=>this.decodeInternal(source,from,to,signal,onFrame),'waveform');
+  }
+  async decodeInternal(source, from, to, signal, onFrame) {
     if (signal.aborted) return;
     const base = seekBase(this.store, source.id, from);
     if (!Number.isFinite(base)) throw new Error('正在等待可解码的音频数据。');

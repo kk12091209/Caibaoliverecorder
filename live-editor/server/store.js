@@ -6,6 +6,7 @@ import { assertDeletable, prepareDeletion, removeDeletionFiles } from './deletio
 import { sourceReaderCount } from './storage-files.js';
 import { isStickerPlaceholder } from './chat-filter.js';
 import { ChatRuleIndex } from './chat-rules.js';
+import { installLayoutTracking } from './layout-tracking.js';
 const sourcePathKey = file => process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
 
 export class Store {
@@ -24,6 +25,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS chunks(source TEXT REFERENCES sources(id), seq INTEGER, start REAL, end REAL,
         path TEXT, bytes INTEGER, PRIMARY KEY(source, seq));
       CREATE INDEX IF NOT EXISTS chunk_time ON chunks(source,start);
+      CREATE TABLE IF NOT EXISTS chunk_identities(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,sha256 TEXT NOT NULL,fingerprint TEXT NOT NULL,header TEXT NOT NULL,keys_hash TEXT NOT NULL,
+        PRIMARY KEY(source,seq));
       CREATE TABLE IF NOT EXISTS keyframes(source TEXT, time REAL, seq INTEGER, offset INTEGER,
         PRIMARY KEY(source,seq,offset));
       CREATE INDEX IF NOT EXISTS key_time ON keyframes(source,time);
@@ -58,9 +62,11 @@ export class Store {
     for (const name of ['purged_at','purge_started_at','purge_error']) if (!this.all('PRAGMA table_info(sessions)').some(c => c.name === name)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     if (!this.all('PRAGMA table_info(jobs)').some(c => c.name === 'mode')) this.db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'clean'");
     if (!this.all('PRAGMA table_info(source_storage)').some(c => c.name === 'eligible')) this.db.exec('ALTER TABLE source_storage ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0');
+    if (!this.all('PRAGMA table_info(compact_chunks)').some(c => c.name === 'keys_hash')) this.db.exec("ALTER TABLE compact_chunks ADD COLUMN keys_hash TEXT NOT NULL DEFAULT ''");
     for(const name of ['avatar','avatar_key'])if(!this.all('PRAGMA table_info(linkmic_people)').some(c=>c.name===name))this.db.exec(`ALTER TABLE linkmic_people ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS jobs_session_status_created ON jobs(session,status,created);
       CREATE INDEX IF NOT EXISTS sources_session_start ON sources(session,start);`);
+    installLayoutTracking(this);
     this.recoveryCount=0;
     this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();

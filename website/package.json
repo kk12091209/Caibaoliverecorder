@@ -11,6 +11,7 @@
     "test": "node --test",
     "sync:check": "node scripts/sync-releases.mjs --dry-run",
     "sync:releases": "node scripts/sync-releases.mjs",
+    "runtime:sync": "node scripts/runtime-packages.mjs",
     "package:deploy": "npm run build && node scripts/package-deploy.mjs",
     "build:tutorial": "tsc --noEmit && vite build --mode tutorial",
     "package:deploy:tutorial": "npm run build:tutorial && node scripts/package-deploy.mjs",
