@@ -17,6 +17,27 @@ async function call(api,path,{method='GET',headers={},body}={}){
   const res=new Response();res.on('error',()=>{});await api.handler(req,res,()=>assert.fail('API route should be handled'));return {status:res.statusCode,headers:res.headers,error:res.errored,body:res.headers['content-type']?.includes('application/json')?res.value():Buffer.concat(res.chunks)};
 }
 const resolver={async resolve(){return {platform:'douyin',kind:'images',id:'123',title:'测试图片',author:'作者',url:'https://www.douyin.com/note/123',cover:'',avatar:'',assets:[{index:1,type:'image',title:'图片 1',width:100,height:100,urls:[],thumbnail:'https://p11-sign.douyinpic.com/fixture.webp'}]};}};
+test('ready album files retain owner authorization during processing and service drain',async()=>{
+  let release;const blocked=new Promise(resolve=>{release=resolve;});
+  const multiple={resolve:async()=>{const result=await resolver.resolve();result.assets=[1,2].map(index=>({...result.assets[0],index,urls:[String(index)]}));return result;}};
+  const images={download:async(urls,{onProgress})=>{if(urls[0]==='2')await blocked;onProgress(3,3);return {data:Buffer.from('jpg'),extension:'jpg',type:'image/jpeg'};}};
+  const api=createDownloaderApi({resolver:multiple,publicOrigins:['https://caibao.media'],jobOptions:{images}});
+  try {
+    const a=await call(api,'config'),b=await call(api,'config');
+    const owner={cookie:a.headers['set-cookie'].split(';')[0],'x-downloader-token':a.body.token,origin:'https://caibao.media'},other={cookie:b.headers['set-cookie'].split(';')[0]};
+    const resolved=await call(api,'resolve',{method:'POST',headers:owner,body:{text:'test'}});
+    const body={sessionId:resolved.body.sessionId,indices:[1,2],delivery:'album'};
+    const created=await call(api,'jobs',{method:'POST',headers:owner,body});let state;
+    for(let n=0;n<100;n++){state=(await call(api,`jobs/${created.body.id}`,{headers:owner})).body;if(state.files.length)break;await new Promise(r=>setTimeout(r,5));}
+    assert.equal(state.status,'running');assert.equal(state.files.length,1);
+    const file=state.files[0].url.replace('/api/downloader/','');
+    assert.equal((await call(api,file,{headers:other})).status,404);
+    api.beginDrain();assert.equal((await call(api,'health')).status,503);
+    assert.equal((await call(api,'jobs',{method:'POST',headers:owner,body})).status,503);
+    const download=await call(api,file,{headers:owner});assert.equal(download.status,200);assert.equal(download.body.toString(),'jpg');
+    release();await api.idle();assert.equal((await call(api,`jobs/${created.body.id}`,{headers:owner})).body.status,'done');
+  } finally {release();await api.close();}
+});
 test('public download API scopes works, jobs, media and cancellation to the visitor cookie',async()=>{
   const api=createDownloaderApi({resolver,publicOrigins:['https://caibao.media']});
   try{

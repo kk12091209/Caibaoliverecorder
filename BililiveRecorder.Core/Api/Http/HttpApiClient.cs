@@ -22,12 +22,14 @@ namespace BililiveRecorder.Core.Api.Http
         internal const string HttpHeaderReferer = "https://live.bilibili.com/";
         internal const string HttpHeaderOrigin = "https://live.bilibili.com";
         internal const string HttpHeaderUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0";
-        private static readonly Regex matchCookieUidRegex = new Regex(@"DedeUserID=(\d+?);?(?=\b|$)", RegexOptions.Compiled);
-        private static readonly Regex matchCookieBuvid3Regex = new Regex(@"buvid3=(.+?);?(?=\b|$)", RegexOptions.Compiled);
+        private static readonly Regex matchCookieUidRegex = new Regex(@"(?:^|;\s*)DedeUserID=(\d+)(?:;|$)", RegexOptions.Compiled);
+        private static readonly Regex matchCookieBuvid3Regex = new Regex(@"(?:^|;\s*)buvid3=([^;]+)", RegexOptions.Compiled);
         private long uid;
         private string? buvid3;
 
         private readonly GlobalConfig config;
+        private readonly RuntimeCookie? runtimeCookie;
+        private string ApiHost => this.runtimeCookie?.Enabled == true ? "https://api.live.bilibili.com" : this.config.LiveApiHost ?? "https://api.live.bilibili.com";
 
         private readonly Wbi wbi = new Wbi();
         private DateTimeOffset wbiLastUpdate = DateTimeOffset.MinValue;
@@ -36,9 +38,11 @@ namespace BililiveRecorder.Core.Api.Http
         private HttpClient client;
         private bool disposedValue;
 
-        public HttpApiClient(GlobalConfig config)
+        public HttpApiClient(GlobalConfig config, RuntimeCookie? runtimeCookie = null)
         {
             this.config = config ?? throw new ArgumentNullException(nameof(config));
+            this.runtimeCookie = runtimeCookie;
+            if (runtimeCookie is not null) runtimeCookie.Changed += this.RuntimeCookie_Changed;
 
             config.PropertyChanged += this.Config_PropertyChanged;
 
@@ -48,7 +52,7 @@ namespace BililiveRecorder.Core.Api.Http
 
         private void UpdateHttpClient()
         {
-            var handler = HttpClientWithBindAddress.CreateHandler(this.config.NetworkTransportBindAddress, false);
+            var handler = HttpClientWithBindAddress.CreateHandler(this.config.NetworkTransportBindAddress, false, this.runtimeCookie?.Enabled != true);
 
             var client = new HttpClient(handler)
             {
@@ -61,7 +65,7 @@ namespace BililiveRecorder.Core.Api.Http
             headers.Add("Referer", HttpHeaderReferer);
             headers.Add("User-Agent", HttpHeaderUserAgent);
 
-            var cookie_string = this.config.Cookie;
+            var cookie_string = this.runtimeCookie?.Enabled == true ? this.runtimeCookie.Value : this.config.Cookie;
             if (!string.IsNullOrWhiteSpace(cookie_string))
             {
                 headers.Add("Cookie", cookie_string);
@@ -88,6 +92,11 @@ namespace BililiveRecorder.Core.Api.Http
         {
             if (e.PropertyName is (nameof(this.config.Cookie)) or (nameof(this.config.TimingApiTimeout)) or (nameof(this.config.NetworkTransportBindAddress)))
                 this.UpdateHttpClient();
+        }
+
+        private void RuntimeCookie_Changed(object? sender, EventArgs e)
+        {
+            if (!this.disposedValue) this.UpdateHttpClient();
         }
 
         private readonly SemaphoreSlim wbiSemaphoreSlim = new SemaphoreSlim(1, 1);
@@ -173,7 +182,7 @@ namespace BililiveRecorder.Core.Api.Http
 
             await this.UpdateWbiKeyAsync().ConfigureAwait(false);
 
-            Url url = $@"{this.config.LiveApiHost}/xlive/web-room/v1/index/getInfoByRoom?room_id={roomid}&web_location=444.8";
+            Url url = $@"{this.ApiHost}/xlive/web-room/v1/index/getInfoByRoom?room_id={roomid}&web_location=444.8";
             var q = url.QueryParams;
 
             var sign = this.wbi.Sign(q.Select(static x => new KeyValuePair<string, string>(x.Name, x.Value?.ToString() ?? string.Empty)));
@@ -199,7 +208,7 @@ namespace BililiveRecorder.Core.Api.Http
             if (this.disposedValue)
                 throw new ObjectDisposedException(nameof(HttpApiClient));
 
-            Url url = $@"{this.config.LiveApiHost}/xlive/web-room/v2/index/getRoomPlayInfo?room_id=0&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1&hdr_type=0,1&web_location=444.8";
+            Url url = $@"{this.ApiHost}/xlive/web-room/v2/index/getRoomPlayInfo?room_id=0&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1&hdr_type=0,1&web_location=444.8";
             var q = url.QueryParams;
 
             q.AddOrReplace("room_id", roomid);
@@ -238,7 +247,7 @@ BUVID3 (from Cookie): {this.GetBuvid3()}";
 
             await this.UpdateWbiKeyAsync().ConfigureAwait(false);
 
-            Url url = $@"{this.config.LiveApiHost}/xlive/web-room/v1/index/getDanmuInfo?id={roomid}&type=0&web_location=444.8";
+            Url url = $@"{this.ApiHost}/xlive/web-room/v1/index/getDanmuInfo?id={roomid}&type=0&web_location=444.8";
             var q = url.QueryParams;
 
             var sign = this.wbi.Sign(q.Select(static x => new KeyValuePair<string, string>(x.Name, x.Value?.ToString() ?? string.Empty)));
@@ -256,6 +265,7 @@ BUVID3 (from Cookie): {this.GetBuvid3()}";
                 {
                     // dispose managed state (managed objects)
                     this.config.PropertyChanged -= this.Config_PropertyChanged;
+                    if (this.runtimeCookie is not null) this.runtimeCookie.Changed -= this.RuntimeCookie_Changed;
                     this.client.Dispose();
                     this.wbiSemaphoreSlim.Dispose();
                 }

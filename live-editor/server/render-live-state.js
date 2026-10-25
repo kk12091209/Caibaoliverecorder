@@ -7,7 +7,8 @@ export function liveLayoutWithinBudget(store,id) {
   const comments=store.get('SELECT COUNT(*) AS count FROM (SELECT 1 FROM danmaku WHERE session=? LIMIT 50001)',id).count;
   if(comments>50000)return false;
   const frames=store.get('SELECT COUNT(*) AS count FROM (SELECT 1 FROM linkmic_frames f JOIN sources s ON s.id=f.source WHERE s.session=? LIMIT 10001)',id).count;
-  return frames<=10000;
+  const cameras=store.get('SELECT COUNT(*) AS count FROM (SELECT 1 FROM camera_frames f JOIN sources s ON s.id=f.source WHERE s.session=? LIMIT 10001)',id).count;
+  return frames+cameras<=10000;
 }
 
 // Only sealed full blocks may run while the writer is active. The tail is a

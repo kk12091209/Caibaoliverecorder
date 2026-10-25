@@ -14,10 +14,10 @@ export class DouyinChat {
     const client={details,write,status,pending:Promise.resolve(),stopping:false};this.clients.set(key,client);
     this.ensureWorker();this.worker.postMessage({type:'start',key,...details});
   }
-  update(key,{cookie,userUniqueId}) {
+  update(key,{cookie,userUniqueId},{reauthenticate=false}={}) {
     const client=this.clients.get(key);if(!client||client.stopping)return;
     if(client.details.cookie===cookie&&client.details.userUniqueId===userUniqueId)return;
-    Object.assign(client.details,{cookie,userUniqueId});this.worker?.postMessage({type:'credentials',key,cookie,userUniqueId});
+    Object.assign(client.details,{cookie,userUniqueId});this.worker?.postMessage({type:'credentials',key,cookie,userUniqueId,reauthenticate});
   }
   ensureWorker() {
     if(this.worker||this.closed)return;

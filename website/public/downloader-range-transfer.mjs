@@ -21,11 +21,17 @@ function responseHeaders(response,total){
   headers.set('Cache-Control','private, no-store');
   return headers;
 }
+function attachmentResponse(response){
+  // A job can finish between creating /stream and opening it. Fetch follows
+  // its redirect, but Chrome cannot use that redirected response for a worker
+  // navigation. Wrap the same stream and headers without buffering the file.
+  return response.redirected?new Response(response.body,{status:response.status,statusText:response.statusText,headers:response.headers}):response;
+}
 
 export async function acceleratedDownload(request,{fetcher=fetch,parallel=3,minBytes=2*MiB,chunkBytes,idleMs=12000,retries=2,pollMs=4000}={}){
   const origin=new URL(request.url).origin,address=downloadAddress(request.url,origin);
   if(!address)throw new Error('Invalid download address');
-  const direct=()=>fetcher(address.url,{credentials:'same-origin',cache:'no-store',headers:request.headers,signal:request.signal});
+  const direct=async()=>attachmentResponse(await fetcher(address.url,{credentials:'same-origin',cache:'no-store',headers:request.headers,signal:request.signal}));
   if(request.method!=='GET'||request.headers.has('range'))return direct();
   const operation=new AbortController(),signal=operation.signal;
   const abort=()=>operation.abort(request.signal.reason);
@@ -90,7 +96,7 @@ export async function acceleratedDownload(request,{fetcher=fetch,parallel=3,minB
     if(address.stream){
       const initial=await fetcher(address.url,{credentials:'same-origin',cache:'no-store',signal});
       const total=Number(initial.headers.get('content-length'));
-      if(!initial.ok||!initial.body||total&&total<minBytes){request.signal.removeEventListener('abort',abort);return initial;}
+      if(!initial.ok||!initial.body||total&&total<minBytes){request.signal.removeEventListener('abort',abort);return attachmentResponse(initial);}
       if(total>0&&initial.headers.get('accept-ranges')==='bytes'){
         const resolved=downloadAddress(initial.url||address.url,origin);
         if(!resolved||resolved.job!==address.job)throw new Error('下载地址不一致');
@@ -132,7 +138,7 @@ export async function acceleratedDownload(request,{fetcher=fetch,parallel=3,minB
     // A one-byte probe gets the actual immutable size, filename and validator.
     const probe=await fetcher(address.url,{headers:{Range:'bytes=0-0'},credentials:'same-origin',cache:'no-store',signal});
     const range=rangeInfo(probe);
-    if(probe.status===200){request.signal.removeEventListener('abort',abort);return probe;}
+    if(probe.status===200){request.signal.removeEventListener('abort',abort);return attachmentResponse(probe);}
     if(probe.status!==206||!range||range.start!==0||range.end!==0||range.total<minBytes){await probe.body?.cancel();finish();return direct();}
     const prefix=new Uint8Array(await probe.arrayBuffer());
     if(prefix.length!==1){finish();return direct();}

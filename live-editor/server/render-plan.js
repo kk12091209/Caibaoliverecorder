@@ -9,6 +9,7 @@ import {copyFullAudio,audioSourceStream} from './export-audio.js';
 import {cachedVideoIndex,splitCachedVideo} from './cached-video-slice.js';
 import {videoReadStart,sequenceEligible,renderRendezvous} from './render-sequence.js';
 import {mediaFailure} from './media-retry.js';
+import {foregroundRenderConcurrency} from './foreground-render-policy.js';
 export {exportSegments} from './export-plan.js';
 import { preparedEncoderArguments, checkpointEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
@@ -19,6 +20,8 @@ import { scrollingTracks, scrollingTrackEvents } from '../shared/danmaku-tracks.
 import {chatRate,validateChatRate} from './chat-rules.js';
 import { stableSourceFingerprint, stableSourceRangeStatus, codecHeaderSignature } from './source-range-identity.js';
 import { liveRenderBlocks, liveMetadataReady, blockLinkmicEvents, liveLayoutWithinBudget } from './render-live-state.js';
+import { savedRecordingStyle, normalizedRecordingStyle, originalRecordingStyle, blockCameraEvents } from '../shared/recording-style.js';
+import { recordingLayoutFilter } from './recording-layout.js';
 
 export const RENDER_VERSION = 9;
 export const CPU_EXPORT_ROUTE = 'cpu-chunks-v1';
@@ -231,8 +234,11 @@ export class RenderPipeline {
     if(!live&&!Object.hasOwn(snapshot,'linkmicEvents'))await this.store.linkmic?.ensure(id);
     if(live&&!await liveMetadataReady(this.store,sources,options.signal))return {waiting:'metadata',live:true,blocks:[],allBlocks};
     const linkmicEvents=structuredClone(snapshot.linkmicEvents??this.store.linkmic?.events(id)??[]);
+    const recordingStyle=Object.hasOwn(snapshot,'mode')?normalizedRecordingStyle(snapshot.recordingStyle??originalRecordingStyle()):savedRecordingStyle(this.store);
+    const cameraEvents=recordingStyle.cameraPosition==='original'?[]:structuredClone(snapshot.cameraEvents??(Object.hasOwn(snapshot,'mode')?[]:this.store.linkmic?.cameraEvents?.(id)??[]));
     const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
+    if(cameraEvents.length)profile.recordingStyle=recordingStyle;
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
   }
   async sourceFingerprint(source,from,to) {
     const stable=await stableSourceFingerprint(this.store,source,from,to);
@@ -259,8 +265,10 @@ export class RenderPipeline {
   async spec(plan,block) {
     const span=frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps);
     const events=visibleComments(plan.layout,plan.snapshot,span.from,span.to);
+    const signatures=[commentSignature(events),blockLinkmicEvents(plan.linkmicEvents,block.source.id,span.from,span.to)];
+    const cameras=blockCameraEvents(plan.cameraEvents,block.source.id,span.from,span.to);if(cameras.length)signatures.push(cameras);
     return {sessionId:plan.id,sourceId:block.source.id,startMs:block.startMs,endMs:block.endMs,
-      sourceFingerprint:await this.sourceFingerprint(block.source,span.from,span.to),profileHash:plan.profileHash,assHash:hashRender([commentSignature(events),blockLinkmicEvents(plan.linkmicEvents,block.source.id,span.from,span.to)]),version:1};
+      sourceFingerprint:await this.sourceFingerprint(block.source,span.from,span.to),profileHash:plan.profileHash,assHash:hashRender(signatures),version:1};
   }
   async inspect(file,options={}) {
     const previous=this.encodedInfo.get(file);if(previous)return previous;
@@ -284,7 +292,8 @@ export class RenderPipeline {
       const events=plan.cleanVideo?[]:visibleComments(plan.layout,plan.snapshot,span.from,span.to);
       if(!plan.cleanVideo)await fs.writeFile(path.join(workDir,'part-0.ass'),this.assText(events,plan.profile.width,plan.profile.height,plan.font,plan.profile.danmakuStyle));
       const fontDirectory=plan.cleanVideo?null:await m.fonts.stage(plan.font,workDir);
-      const geometry=videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height);
+      const geometry=recordingLayoutFilter(blockCameraEvents(plan.cameraEvents,source.id,span.from,span.to),plan.recordingStyle??originalRecordingStyle(),plan.profile.width,plan.profile.height,
+        {sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height,from:span.from,to:span.to,fallback:videoGeometryFilter(sourceInfo,plan.profile.width,plan.profile.height)||'null'});
       const labels=(plan.linkmicEvents||[]).filter(e=>e.source===source.id&&e.time<span.to&&e.end>span.from&&e.participants.length);
       if(labels.length)await fs.writeFile(path.join(workDir,'names.ass'),linkmicAss(labels,plan.profile.width,plan.profile.height,{from:span.from,to:span.to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height}));
       const cards=await avatarFilter(this.store,labels,plan.profile.width,plan.profile.height,workDir,{from:span.from,to:span.to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height});
@@ -350,7 +359,8 @@ export class RenderPipeline {
     const flags=this.store.all('SELECT f.message,f.reason FROM danmaku_filters f JOIN danmaku d ON d.id=f.message WHERE d.session=? AND d.time<? ORDER BY f.message',id,to);
     const edit=this.store.edit(id);
     return hashRender([stamp,this.store.layoutContentRevision,this.store.get('PRAGMA data_version').data_version,flags,[...(edit.excluded||[])].sort(),edit.filterLottery!==false,savedDanmakuStyle(this.store),chatRate(this.store),this.media.fonts.selected()?.id||null,
-      blockLinkmicEvents(this.store.linkmic?.events(id)||[],block.source.id,block.startMs/1000,to)]);
+      blockLinkmicEvents(this.store.linkmic?.events(id)||[],block.source.id,block.startMs/1000,to),savedRecordingStyle(this.store),
+      blockCameraEvents(this.store.linkmic?.cameraEvents?.(id)||[],block.source.id,block.startMs/1000,to)]);
   }
   async acquire(plan,block,options={}) {
     const spec=await this.spec(plan,block),cache=this.media.renderCache,span=frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps);
@@ -377,16 +387,16 @@ export class RenderPipeline {
       plan.preparing=true;operation.plan=plan;
       const seconds=block=>frameSpan(block.startMs/1000,block.endMs/1000,plan.profile?.fps).duration;
       const totalSeconds=(plan.allBlocks||plan.blocks).reduce((sum,b)=>sum+seconds(b),0);
-      const fingerprints=[],liveComments=live?[]:null,liveLabels=live?[]:null;
+      const fingerprints=[],liveComments=live?[]:null,liveLabels=live?[]:null,liveCameras=live?[]:null;
       for(const source of plan.sources){
         canceled(signal);
         const selected=live?plan.blocks.filter(block=>block.source.id===source.id):null;
         if(live&&!selected.length)continue;
         const from=live?selected[0].startMs/1000:source.start,to=live?selected.at(-1).endMs/1000:source.start+source.duration;
         fingerprints.push(await this.sourceFingerprint(source,from,to));
-        if(live){liveComments.push(commentSignature(visibleComments(plan.layout,plan.snapshot,from,to)));liveLabels.push(blockLinkmicEvents(plan.linkmicEvents,source.id,from,to));}
+        if(live){liveComments.push(commentSignature(visibleComments(plan.layout,plan.snapshot,from,to)));liveLabels.push(blockLinkmicEvents(plan.linkmicEvents,source.id,from,to));liveCameras.push(blockCameraEvents(plan.cameraEvents,source.id,from,to));}
       }
-      const signature=hashRender([plan.profileHash,[...plan.snapshot.excluded].sort(),plan.snapshot.filterLottery,live?liveLabels:plan.linkmicEvents,fingerprints,liveComments,this.blockSeconds]);
+      const signature=hashRender([plan.profileHash,[...plan.snapshot.excluded].sort(),plan.snapshot.filterLottery,live?liveLabels:plan.linkmicEvents,fingerprints,liveComments,this.blockSeconds,live?liveCameras:plan.cameraEvents]);
       const cache=this.media.renderCache;
       let state=this.preparationPlans.get(id);
       if(!state||state.signature!==signature||(!live&&state.layout!==plan.layout)||state.revision!==cache.revision) {
@@ -507,9 +517,9 @@ export class RenderPipeline {
   async renderForegroundParts(plan,parts,workDir,{onProgress,checkpoint}={}) {
     const prepared=parts.map((part,index)=>({...part,file:part.file||path.join(workDir,`part-${index}${plan.cleanVideo?'-danmaku':''}.mp4`),duration:frameSpan(part.from,part.to,plan.profile?.fps).duration}));
     const missing=prepared.filter(part=>!part.cached),cachedDuration=prepared.filter(part=>part.cached).reduce((sum,part)=>sum+part.duration,0),completedParts=new Set();
-    const parallel=plan.profile.encoder.hardware&&missing.length>1;let reported=0;
+    const concurrency=await foregroundRenderConcurrency(plan,missing,{recording:this.media.isRecording?.()===true,resources:this.media.idlePolicy?.resources});let reported=0;
     const progress=value=>{reported=Math.max(reported,value);onProgress?.(reported);};
-    const attempt=async concurrency=>{
+    const renderAttempt=async concurrency=>{
       const pending=missing.filter(part=>!completedParts.has(part)),remaining=[];
       for(let i=0;i<pending.length;i++){
         const pair=pending.slice(i,i+2);
@@ -571,14 +581,23 @@ export class RenderPipeline {
     const result=files=>({files,reused:prepared.filter(p=>p.cached||p.reusedSlice).length,
       reusedSeconds:prepared.filter(p=>p.cached||p.reusedSlice).reduce((sum,p)=>sum+p.duration,0),
       renderedSeconds:prepared.filter(p=>!p.cached&&!p.reusedSlice).reduce((sum,p)=>sum+p.duration,0)});
-    try{return result(await attempt(parallel?2:1));}
+    const cannotRetry=error=>this.media.closed||error?.name==='AbortError'||
+      ['PREP_INCOMPATIBLE','EXPORT_CANCELLED','PREP_CANCELLED','ABORT_ERR'].includes(error?.code)||['action','temporary'].includes(mediaFailure(error));
+    const attempt=capacity=>this.media.withForegroundBatch?this.media.withForegroundBatch(capacity,()=>renderAttempt(capacity)):renderAttempt(capacity);
+    try{return {...result(await attempt(concurrency)),workers:concurrency};}
     catch(error) {
       this.media.assertExportActive?.();
-      if(this.media.closed||!parallel||error.code==='PREP_INCOMPATIBLE'||['action','temporary'].includes(mediaFailure(error)))throw error;
+      if(concurrency===1||cannotRetry(error))throw error;
       // The first attempt has fully settled, including aborted siblings. A
-      // device with only one available encoding session may still work serially.
-      try{return {...result(await attempt(1)),serialRetry:true,serialReason:error.message};}
-      catch(retry){if(!this.media.closed&&retry.code!=='PREP_INCOMPATIBLE'&&!['action','temporary'].includes(mediaFailure(retry)))retry.hardwareEncoderFailure=true;throw retry;}
+      // busy GPU may still support two sessions, or one. Keep completed blocks.
+      for(const capacity of concurrency>2?[2,1]:[1]) {
+        try{return {...result(await attempt(capacity)),workers:capacity,parallelRetry:true,serialRetry:capacity===1,serialReason:error.message};}
+        catch(retry){
+          this.media.assertExportActive?.();
+          if(cannotRetry(retry))throw retry;
+          if(capacity===1){retry.hardwareEncoderFailure=true;throw retry;}
+        }
+      }
     }
   }
   async audio(segments,plan,workDir,job,checkpoint) {
@@ -648,7 +667,8 @@ export class RenderPipeline {
           {cwd:workDir,input:sourceStream(this.store,source.id,from,to)});
         files.push({file:path.join(workDir,name),duration:span.duration});continue;
       }
-      const geometry=videoGeometryFilter(info,plan.profile.width,plan.profile.height);
+      const geometry=recordingLayoutFilter(blockCameraEvents(plan.cameraEvents,source.id,from,to),plan.recordingStyle??originalRecordingStyle(),plan.profile.width,plan.profile.height,
+        {sourceWidth:info.width,sourceHeight:info.height,base,from,to,fallback:videoGeometryFilter(info,plan.profile.width,plan.profile.height)||'null'});
       const labelFile=`clean-names-${i}.ass`;
       if(labels.length)await fs.writeFile(path.join(workDir,labelFile),linkmicAss(labels,plan.profile.width,plan.profile.height,{base,from,to,sourceWidth:info.width,sourceHeight:info.height}));
       const cards=await avatarFilter(this.store,labels,plan.profile.width,plan.profile.height,workDir,{base,from,to,sourceWidth:info.width,sourceHeight:info.height});
@@ -685,9 +705,10 @@ export class RenderPipeline {
       checkpoint=await m.exportWorkspace(job,{route:cpuCheckpoints?CPU_EXPORT_ROUTE:'prepared-v9',encoder,profile:plan.profile,comments:commentSignature(plan.layout),segments});
       const workDir=checkpoint.directory;
       if(cpuCheckpoints)job.cpuCheckpointSeconds=CPU_CHECKPOINT_SECONDS;
-      const {files,reused,reusedSeconds,renderedSeconds,serialRetry,serialReason}=cleanOnly?{files:[],reused:0,reusedSeconds:0,renderedSeconds:0}:await this.renderForegroundParts(plan,parts,workDir,{checkpoint,onProgress:processed=>
+      const {files,reused,reusedSeconds,renderedSeconds,workers,parallelRetry,serialRetry,serialReason}=cleanOnly?{files:[],reused:0,reusedSeconds:0,renderedSeconds:0}:await this.renderForegroundParts(plan,parts,workDir,{checkpoint,onProgress:processed=>
         this.store.run('UPDATE jobs SET progress=MAX(progress,?) WHERE id=?',Math.min(.8,.05+.75*processed/total),job.id)});
-      if(serialRetry){job.parallelRenderFallback=true;job.parallelRenderFallbackReason=serialReason;}
+      if(workers)job.foregroundRenderWorkers=workers;
+      if(serialRetry||parallelRetry){job.parallelRenderFallback=true;job.parallelRenderFallbackReason=serialReason;}
       if(!cleanOnly&&!files.length)throw new Error('选段中没有完整视频帧。');
       const dual=job.mode==='dual';let audio,originalCopied=false;
       if((dual||cleanOnly)&&sourcePlan.canCopyOriginal){

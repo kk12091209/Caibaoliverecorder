@@ -49,11 +49,12 @@ export function createDownloaderApi({
   resolver: providedResolver,
   publicOrigins = [],
   trustProxy = false,
+  galleryMode = 'complete',
   jobOptions = {},
 } = {}) {
   const access = new DownloadAccess({ publicOrigins, trustProxy })
   const images = new MediaImages(),
-    resolver = providedResolver || new PlatformResolver({ browserResolve }),
+    resolver = providedResolver || new PlatformResolver({ browserResolve, galleryMode }),
     jobs = new DownloadJobs(resolver, { images, publicMode: access.publicMode, ...jobOptions }),
     sessions = new Map()
   let resolving = 0
@@ -95,7 +96,10 @@ export function createDownloaderApi({
     if (!job || job.session.owner !== visitor.id)
       throw Object.assign(new Error('下载已过期，请重新解析。'), { status: 404 })
     if (parts[4] === 'download') await jobs.wait(job, signal)
-    if (job.status !== 'done')
+    if (
+      job.status !== 'done' &&
+      !(parts[4] === 'files' && job.album && ['running', 'failed'].includes(job.status))
+    )
       throw Object.assign(new Error(job.error || '文件尚未准备完成或已取消。'), {
         status: 409,
       })
@@ -124,8 +128,8 @@ export function createDownloaderApi({
         health: parts.length === 3 && parts[2] === 'health',
       })
       if (req.method === 'GET' && parts.length === 3 && parts[2] === 'health')
-        return json(res, 200, {
-          status: 'ok',
+        return json(res, jobs.draining ? 503 : 200, {
+          status: jobs.draining ? 'draining' : 'ok',
           build: process.env.DOWNLOADER_BUILD || 'local',
         })
       if (req.method === 'GET' && parts.length === 3 && parts[2] === 'config')
@@ -164,24 +168,41 @@ export function createDownloaderApi({
         return res.end()
       }
       if (req.method === 'POST' && parts.length === 3 && parts[2] === 'resolve') {
+        if (jobs.draining) return json(res, 503, { error: '下载服务正在维护，请稍后重试。' })
         if (resolving >= 2) return json(res, 429, { error: '正在解析其他作品，请稍后重试。' })
         access.consume(visitor, 'resolve', 20, 600000)
         const input = await body(req)
         resolving++
         try {
+          let timing
           const result = await resolver.resolve(input.text, {
               signal: controller.signal,
+              onTiming: (value) => {
+                timing = value
+              },
             }),
             id = newId()
           const session = { id, result, owner: visitor.id, created: Date.now() }
           sessions.set(id, session)
           if (sessions.size > 80) sessions.delete(sessions.keys().next().value)
+          if (timing)
+            res.setHeader(
+              'Server-Timing',
+              [
+                `resolve;dur=${timing.elapsedMs}`,
+                ...Object.entries(timing.stages)
+                  .filter(([name]) => /^[a-z]+$/.test(name))
+                  .map(([name, ms]) => `${name};dur=${ms}`),
+              ].join(', '),
+            )
+          resolver.prefetch?.(result)
           return json(res, 200, publicResult(session))
         } finally {
           resolving--
         }
       }
       if (req.method === 'POST' && parts.length === 3 && parts[2] === 'jobs') {
+        if (jobs.draining) return json(res, 503, { error: '下载服务正在维护，请稍后重试。' })
         const data = await body(req),
           session = sessions.get(data.sessionId)
         if (!session || session.owner !== visitor.id)
@@ -304,6 +325,7 @@ export function createDownloaderApi({
           {
             referer: session.result.url,
             signal: controller.signal,
+            owner: visitor.id,
             size: full ? 'full' : key === 'cover' ? 'cover' : key === 'avatar' ? 'avatar' : 'thumb',
           },
         )
@@ -328,8 +350,11 @@ export function createDownloaderApi({
   }
   return {
     handler,
+    beginDrain: () => jobs.beginDrain(),
+    idle: () => jobs.idle(),
     close: async () => {
       clearInterval(cleanup)
+      if (!providedResolver) await resolver.close()
       await closeBrowser()
       await jobs.close()
       await images.close()

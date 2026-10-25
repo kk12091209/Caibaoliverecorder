@@ -31,6 +31,9 @@ import { savedDanmakuStyle, validateDanmakuStyle, DANMAKU_STYLE_SETTING } from '
 import { listenLocal } from './local-endpoint.js';
 import { DanmakuStylePreview } from './danmaku-style-preview.js';
 import { LinkmicIndex } from './linkmic.js';
+import { savedRecordingStyle, validateRecordingStyle, RECORDING_STYLE_SETTING } from '../shared/recording-style.js';
+import { savedTimestampStyle, validateTimestampStyle, TIMESTAMP_STYLE_SETTING, savedTimestampPosition, validateTimestampPosition, TIMESTAMP_POSITION_SETTING } from '../shared/timestamp-style.js';
+import {PlatformCredentials} from './platform-credentials.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -56,12 +59,15 @@ async function createManagedApp(options,runtime) {
   const executable=options.noRecorder?'':resolveRuntimeTool(projectRoot,'recorder',{override:options.recorder,required:false});
   await runtime.startup('打开素材数据库');
   const store=await openRecoveredStore(root,diagnostics);
+  const credentials=await new PlatformCredentials(root,{diagnostics,...options.credentialOptions}).initialize();
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
-  const recorder=new MultiPlatformRecorder(store,{executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  const credentialChecks={bilibili:'unknown',douyin:'unknown'};
+  const credentialSnapshot=()=>({...credentials.snapshot(),checks:{...credentialChecks},bilibiliCore:{...recorder.credentialStatus}});
   media.isRecording=()=>recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
   const linkmic=new LinkmicIndex(store,{resolver:recorder.douyin.resolver,ffmpeg});store.linkmic=linkmic;
   const clients=new Set(); let closing=false,app,closePromise,startupRecovery;
@@ -90,6 +96,12 @@ async function createManagedApp(options,runtime) {
   store.temporaryWorkspaces=media.temporaryWorkspaces;
   const closeAction=()=>{const saved=store.setting('window-close-action');return ['exit','background'].includes(saved)?saved:'ask';};
   const previewTimestamp=()=>store.setting('preview-timestamp')===true;
+  function settingsSnapshot(){return {
+    paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),
+    previewTimestampStyle:savedTimestampStyle(store),previewTimestampPosition:savedTimestampPosition(store),
+    recordingStyle:savedRecordingStyle(store),danmakuPerSecond:chatRate(store),
+    danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()
+  };}
   function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
   function activity(){
     const recording=recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
@@ -105,16 +117,17 @@ async function createManagedApp(options,runtime) {
   const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
   await runtime.startup('检查上次更新状态');
   try{await updates.recover();}
-  catch(error){liveHealth.close();await updates.close();media.close();await recorder.close();store.close();throw error;}
+  catch(error){liveHealth.close();await updates.close();media.close();await recorder.close();await credentials.close();store.close();throw error;}
   const desktopExit=new DesktopExit({runtime,activity,recorder,media,preparation,close:()=>app.close()});
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},danmakuFont:media.fonts.snapshot(),danmakuStyle:savedDanmakuStyle(store),updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),danmakuPerSecond:chatRate(store)};}
+  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,...settingsSnapshot()};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
-  async function body(req){
+  async function body(req,maxBytes=8*1024*1024){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
-    const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>8*1024*1024)throw new Error('请求数据过大。');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');
+    const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>maxBytes)throw new Error('请求数据过大。');chunks.push(chunk);}
+    try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw new Error('JSON 请求格式无效。');}
   }
   async function sendFile(req,res,file){
     const stat=await fs.stat(file);let start=0,end=stat.size-1,status=200;
@@ -168,6 +181,24 @@ async function createManagedApp(options,runtime) {
         return json(res,updates.ignoreVersion(input.key));
       }
       if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
+      if(p==='/api/platform-credentials'&&req.method==='GET')return json(res,credentialSnapshot());
+      if((match=/^\/api\/platform-credentials\/(bilibili|douyin)\/(save|delete|verify)$/.exec(p))&&req.method==='POST'){
+        const [,platform,action]=match,input=await body(req,65536);
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>action!=='save'||key!=='cookie'))throw new Error('登录信息请求无效。');
+        if(action==='save')await credentials.save(platform,input.cookie);
+        else if(action==='delete')await credentials.remove(platform);
+        else {
+          if(!credentials.get(platform))throw new Error('请先保存 Cookie。');
+          const before=credentials.get(platform);
+          try{const resolver=platform==='bilibili'?recorder.bilibiliResolver:recorder.douyin.resolver;const valid=await resolver.verifyCookie();if(before===credentials.get(platform))credentialChecks[platform]=valid?'valid':'invalid';}
+          catch{if(before===credentials.get(platform))credentialChecks[platform]='unavailable';}
+          return json(res,credentialSnapshot());
+        }
+        credentialChecks[platform]='unknown';
+        if(platform==='bilibili'){if(recorder.online)await recorder.applyCredentials();else recorder.credentialStatus={applied:false,error:credentials.get(platform)?'已安全保存，连接录制核心后应用。':''};}
+        else await recorder.douyin.credentialsChanged();
+        return json(res,credentialSnapshot());
+      }
       if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));
       if((p==='/api/danmaku-font'||p==='/api/danmaku-font/draft')&&req.method==='POST'){
         const draft=p.endsWith('/draft');let imported;
@@ -227,30 +258,37 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont','previewTimestamp'].includes(key)))throw new Error('不支持的设置项。');
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont','previewTimestamp','previewTimestampStyle','previewTimestampPosition','recordingStyle'].includes(key)))throw new Error('不支持的设置项。');
         if('closeAction' in input)validateCloseAction(input.closeAction);
         if('previewTimestamp' in input&&typeof input.previewTimestamp!=='boolean')throw new Error('请选择是否显示预览时间戳。');
+        const timestampStyle='previewTimestampStyle' in input?validateTimestampStyle(input.previewTimestampStyle):undefined;
+        const timestampPosition='previewTimestampPosition' in input?validateTimestampPosition(input.previewTimestampPosition):undefined;
         if('danmakuPerSecond' in input)validateChatRate(input.danmakuPerSecond);
         const style='danmakuStyle' in input?validateDanmakuStyle(input.danmakuStyle):null;
+        const recordingStyle='recordingStyle' in input?validateRecordingStyle(input.recordingStyle):null;
         if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
         media.fonts.changing=true;
         try{
           const font='danmakuFont' in input?await media.fonts.selection(input.danmakuFont):undefined;
           const directory='exportDirectory' in input?await writableDirectory(input.exportDirectory):undefined;
           const changed=(style&&JSON.stringify(style)!==JSON.stringify(savedDanmakuStyle(store)))||
+            (recordingStyle&&JSON.stringify(recordingStyle)!==JSON.stringify(savedRecordingStyle(store)))||
             (font!==undefined&&(font?.id||null)!==(media.fonts.snapshot()?.id||null))||
             ('danmakuPerSecond' in input&&input.danmakuPerSecond!==chatRate(store));
           store.transaction(()=>{
             if(directory!==undefined)store.setting('export-directory',directory);
             if('closeAction' in input)store.setting('window-close-action',input.closeAction);
             if('previewTimestamp' in input)store.setting('preview-timestamp',input.previewTimestamp);
+            if(timestampStyle!==undefined)store.setting(TIMESTAMP_STYLE_SETTING,timestampStyle);
+            if(timestampPosition!==undefined)store.setting(TIMESTAMP_POSITION_SETTING,timestampPosition);
             if('danmakuPerSecond' in input)store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);
             if(style)store.setting(DANMAKU_STYLE_SETTING,style);
+            if(recordingStyle)store.setting(RECORDING_STYLE_SETTING,recordingStyle);
             if(font!==undefined)store.setting('danmaku-font',font);
           });
           if('danmakuPerSecond' in input)recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);
           if(changed)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
-          return json(res,{ok:true,paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),danmakuPerSecond:chatRate(store),danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()});
+          return json(res,{ok:true,...settingsSnapshot()});
         }finally{media.fonts.changing=false;}
       }
       if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
@@ -271,7 +309,7 @@ async function createManagedApp(options,runtime) {
         const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||from+60);
         if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from||to-from>120)throw new Error('名牌预览范围无效。');
         linkmic.request(session.id);
-        return json(res,{events:linkmic.events(session.id,from,to)});
+        return json(res,{events:linkmic.events(session.id,from,to),cameraEvents:linkmic.cameraEvents(session.id,from,to)});
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
         const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
@@ -335,10 +373,10 @@ async function createManagedApp(options,runtime) {
   });
   await runtime.startup('连接本地界面服务');
   try{port=await listenLocal(server,port);}
-  catch(error){liveHealth.close();media.close();await recorder.close();store.close();throw error;}
+  catch(error){liveHealth.close();media.close();await recorder.close();await credentials.close();store.close();throw error;}
   port=server.address().port;recorder.editorPort=port;
   try{await runtime.publish(port);await runtime.startup('本地界面服务已就绪',{ready:true});}
-  catch(error){liveHealth.close();media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));store.close();throw error;}
+  catch(error){liveHealth.close();media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));await credentials.close();store.close();throw error;}
 
   let nextTemporarySweep=0;
   const maintain=()=>{
@@ -383,8 +421,8 @@ async function createManagedApp(options,runtime) {
     }catch(error){diagnostics.record('运行检查',error,{level:'错误'});}
   };
   const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
-  if(!options.noRecorder)void recorder.start().catch(e=>{recorder.error=e.message;});
-  app={diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+  if(!options.noRecorder){void recorder.start().catch(e=>{recorder.error=e.message;});}
+  app={credentials,diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
     closing=true;liveHealth.close();await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
@@ -401,6 +439,7 @@ async function createManagedApp(options,runtime) {
     await httpClosed;
     await recorderClosed;
     while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
+    await credentials.close();
     await diagnostics.close();
     store.close();
     await runtime.release();

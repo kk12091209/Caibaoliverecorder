@@ -15,8 +15,9 @@ export const CHAT_ONLY_CONFIG={
 };
 
 export class Recorder {
-  constructor(store,{executable,port=17861,editorPort=17860,lifecycle={}}={}) {
+  constructor(store,{executable,port=17861,editorPort=17860,lifecycle={},credentials}={}) {
     this.store=store;this.executable=executable;this.port=port;this.editorPort=editorPort;
+    this.credentials=credentials;this.credentialStatus={applied:false,error:''};
     this.roomState=new BilibiliRooms(store);
     this.directory=path.join(store.root,'originals');this.rooms=this.roomState.snapshot();this.online=false;this.error='';this.log='';
     this.secret=store.setting('recorder-secret')||randomBytes(24).toString('hex');store.setting('recorder-secret',this.secret);
@@ -109,6 +110,7 @@ export class Recorder {
       }
     }
     this.assertOpen();
+    await this.applyCredentials();
     await this.api('config/global',{
       optionalWebHookUrlsV2:{hasValue:true,value:`http://127.0.0.1:${this.editorPort}/internal/recorder-event?token=${this.webhookSecret}`},
       ...CHAT_ONLY_CONFIG,
@@ -124,6 +126,22 @@ export class Recorder {
     for(const room of rooms){this.assertOpen();await this.api(`room/${room.roomId}/config`,CHAT_ONLY_CONFIG);}
     this.assertOpen();this.rooms=this.roomState.capture(await this.api('room'),{prune:true});this.recovery.rooms.clear();
   }
+  applyCredentials(){
+    if(!this.credentials)return Promise.resolve();
+    const operation=(this.credentialPending||Promise.resolve()).catch(()=>{}).then(async()=>{
+      const cookie=this.credentials.get('bilibili');
+      try{const result=await this.api('credentials/cookie',{cookie});
+        if(result?.supported!==true||result.configured!==!!cookie)throw new Error('Unsupported runtime credentials');
+        this.credentialStatus={applied:!!cookie,error:''};this.credentialRetry=false;
+      }catch(error){
+        const wasApplied=this.credentialStatus.applied;
+        this.credentialStatus={applied:wasApplied,error:cookie?(error.coreStatus===404?'当前录制核心尚不支持安全登录态，请使用配套的新核心。':'Cookie 已安全保存，等待录制核心连接后应用。'):wasApplied?'本机保存已删除，等待核心连接后清除运行中的登录态。':''};
+        this.credentialRetry=true;this.credentialRetryAt=this.lifecycle.now()+30000;
+      }
+    });
+    this.credentialPending=operation;
+    return operation.finally(()=>{if(this.credentialPending===operation)this.credentialPending=null;});
+  }
   async restoreRoom(raw,resume=false){
     this.assertOpen();const room=this.roomState.get(raw.roomId);if(!room)return;
     const automatic=room.enabled&&room.autoRecord;
@@ -138,7 +156,7 @@ export class Recorder {
       this.assertOpen();this.childFailure=null;this.coreStopReason='';
       await this.roomState.prepareLaunch(this.directory,()=>this.assertOpen());this.assertOpen();
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
-      const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1',BILILIVERECORDER_DISABLE_FILE_LOG:'1'}});
+      const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1',BILILIVERECORDER_DISABLE_FILE_LOG:'1',BREC_EPHEMERAL_AUTH:'1'}});
       this.store.diagnostics?.attach(child.stdout,'B站核心输出');this.store.diagnostics?.attach(child.stderr,'B站核心错误');
       // Always drain the pipes, including embedded/test users without diagnostics.
       if(!this.store.diagnostics){child.stdout?.resume();child.stderr?.resume();}
@@ -166,6 +184,7 @@ export class Recorder {
     if(this.closed||this.quitting||this.pollBusy)return;this.pollBusy=true;
     try{
       if(!this.online){await this.ensureReady();return;}
+      if(this.credentialRetry&&this.lifecycle.now()>=this.credentialRetryAt)await this.applyCredentials();
       let rooms=await this.api('room');this.assertOpen();this.roomState.capture(rooms);
       let repaired=false;
       for(const raw of rooms)if(this.roomState.get(raw.roomId)?.enabled===false&&(raw.autoRecord||raw.recording||raw.autoRecordForThisSession!==false)){

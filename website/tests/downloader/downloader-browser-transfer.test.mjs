@@ -78,6 +78,15 @@ test('servers that ignore Range fall back to their original streaming body',asyn
   const fake=source({ignore:true}),response=await acceleratedDownload(request(),{...settings,fetcher:fake.fetcher});
   assert.equal(hash(new Uint8Array(await response.arrayBuffer())),hash(data));assert.equal(fake.calls.length,1);
 });
+for(const route of ['stream','download'])test(`completed ${route} redirect keeps native attachment headers and bytes without a redirected navigation response`,async()=>{
+  const fetcher=async()=>{
+    const response=new Response(data,{headers:{'Content-Type':'video/mp4','Content-Length':String(data.length),'Content-Disposition':'attachment; filename="ready.mp4"'}});
+    Object.defineProperty(response,'redirected',{value:true});return response;
+  };
+  const response=await acceleratedDownload(new Request(`${origin}/api/downloader/jobs/${job}/${route}?parallel=2`),{fetcher});
+  assert.equal(response.redirected,false);assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),/ready.mp4/);assert.equal(Number(response.headers.get('content-length')),data.length);
+  assert.equal(hash(new Uint8Array(await response.arrayBuffer())),hash(data));
+});
 test('browser cancellation aborts every outstanding segment without issuing a fallback download',async()=>{
   const fake=source({delay:40}),response=await acceleratedDownload(request(),{...settings,fetcher:fake.fetcher}),reader=response.body.getReader();
   await reader.read();const reading=reader.read();await pause(5);await reader.cancel();await reading;

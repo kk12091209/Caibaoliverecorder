@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   getDownloadJob,
   mediaPost,
+  prepareDownloaderSession,
   type DownloadJob,
   type MediaResult,
 } from './lib/media-downloader'
@@ -50,6 +51,7 @@ export function useMediaDownloader() {
   useEffect(() => {
     document.title = '菜包下载助手 · 菜包宇宙'
     void prepareParallelDownloads()
+    void prepareDownloaderSession().catch(() => {})
     const downloads = browserDownloads.current
     return () => {
       activeResolve.current?.abort()
@@ -176,7 +178,7 @@ export function useMediaDownloader() {
         {
           sessionId: result.sessionId,
           indices,
-          delivery: intent === 'album' ? 'album' : intent === 'download' ? 'stream' : 'file',
+          delivery: intent === 'album' ? 'album' : intent === 'download' ? 'stream' : 'preview',
         },
         controller.signal,
       )
@@ -194,12 +196,18 @@ export function useMediaDownloader() {
         return
       }
       while (job.status === 'queued' || job.status === 'running') {
+        if (intent === 'album' && job.files.length) {
+          setAlbum(job)
+          setNotice('')
+          return
+        }
         setNotice(intent === 'preview' ? '正在准备动态预览…' : `正在准备相册文件 · ${job.phase}`)
         await pauseDownload(controller.signal, 900)
         job = await getDownloadJob(job.id, controller.signal)
       }
-      if (job.status !== 'done') throw new Error(job.error || '下载已取消，请重试。')
-      rememberDownload(key, job)
+      if (job.status !== 'done' && !(intent === 'album' && job.files.length))
+        throw new Error(job.error || '下载已取消，请重试。')
+      if (job.status === 'done') rememberDownload(key, job)
       if (intent === 'album') {
         setAlbum(job)
         setNotice('')

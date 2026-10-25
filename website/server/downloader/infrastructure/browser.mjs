@@ -2,6 +2,7 @@ import { chromium } from 'playwright-core'
 import { access } from 'node:fs/promises'
 import { DESKTOP_UA } from './network.mjs'
 import { findDouyinItem, douyinScriptItem } from '../platforms/douyin.mjs'
+import { needsGalleryHydration } from '../platforms/resolver.mjs'
 
 let browserPromise
 async function executable() {
@@ -37,31 +38,45 @@ async function browser() {
       .then((executablePath) =>
         chromium.launch({ executablePath, headless: true, chromiumSandbox: true }),
       )
+      .then((instance) => {
+        const launched = browserPromise
+        instance.once('disconnected', () => {
+          if (browserPromise === launched) browserPromise = null
+        })
+        return instance
+      })
       .catch((error) => {
         browserPromise = null
         throw error
       })
   return browserPromise
 }
-export async function browserResolve(id, type, signal) {
+export async function browserResolve(
+  id,
+  type,
+  signal,
+  { getBrowser = browser, timeout = 25000, galleryMode = 'complete' } = {},
+) {
   signal?.throwIfAborted()
-  const instance = await browser()
+  const instance = await getBrowser()
+  signal?.throwIfAborted()
   const context = await instance.newContext({
     userAgent: DESKTOP_UA,
     locale: 'zh-CN',
     viewport: { width: 1280, height: 900 },
   })
   const page = await context.newPage()
-  let timer, found, settle
+  let timer, found, settle, navigation
   const waiting = new Promise((resolve) => {
     settle = resolve
-    timer = setTimeout(() => resolve(null), 45000)
+    timer = setTimeout(() => resolve(null), timeout)
   })
   const abort = () => {
     settle(null)
-    void context.close()
+    void context.close().catch(() => {})
   }
   signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
   page.on('response', async (response) => {
     if (
       found ||
@@ -71,7 +86,7 @@ export async function browserResolve(id, type, signal) {
       return
     try {
       const item = findDouyinItem(await response.json(), id)
-      if (item) {
+      if (item && (galleryMode === 'images' || !needsGalleryHydration(item))) {
         found = item
         settle(item)
       }
@@ -81,26 +96,32 @@ export async function browserResolve(id, type, signal) {
   })
   try {
     await page.route('**/*', (route) =>
-      ['font', 'media'].includes(route.request().resourceType()) ? route.abort() : route.continue(),
+      ['font', 'media', 'image'].includes(route.request().resourceType())
+        ? route.abort()
+        : route.continue(),
     )
-    await page.goto(`https://www.douyin.com/${type === 'note' ? 'note' : 'video'}/${id}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 45000,
+    // A validated detail response may arrive before DOMContentLoaded. Let it
+    // finish the request immediately; hydration is only the competing fallback.
+    navigation = (async () => {
+      await page.goto(`https://www.douyin.com/${type === 'note' ? 'note' : 'video'}/${id}`, {
+        waitUntil: 'domcontentloaded',
+        timeout,
+      })
+      if (found) return
+      const hydrated = douyinScriptItem(await page.locator('script').allTextContents(), id)
+      if (hydrated && (galleryMode === 'images' || !needsGalleryHydration(hydrated))) {
+        found = hydrated
+        settle(hydrated)
+      }
+    })().catch(() => {
+      /* A detail response can still arrive after navigation fails. */
     })
-    // Public hydration scripts are part of the response, and can contain the
-    // main item before the browser issues an asynchronous detail request.
-    const scripts = await page.locator('script').allTextContents()
-    const hydrated = douyinScriptItem(scripts, id)
-    if (hydrated) {
-      found = hydrated
-      settle(hydrated)
-    }
-    const item = found || (await waiting)
+    const item = await waiting
     signal?.throwIfAborted()
     if (!item) {
       const text = await page
         .locator('body')
-        .innerText()
+        .innerText({ timeout: 1000 })
         .catch(() => '')
       if (/验证|验证码|安全检测/.test(text) && !/愿人随春好/.test(text))
         throw new Error('抖音要求网页验证，暂时无法自动解析这条作品，请稍后重试。')
@@ -110,7 +131,8 @@ export async function browserResolve(id, type, signal) {
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', abort)
-    await context.close()
+    await context.close().catch(() => {})
+    await navigation
   }
 }
 export async function closeBrowser() {

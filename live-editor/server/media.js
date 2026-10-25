@@ -19,6 +19,8 @@ import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments, CPU_EXPORT_ROUTE, CPU_CHECKPOINT_SECONDS } from './render-plan.js';
 import { danmakuGeometry, assOpacity, savedDanmakuStyle, normalizedDanmakuStyle, danmakuDuration } from '../shared/danmaku-style.js';
+import { savedRecordingStyle, originalRecordingStyle, blockCameraEvents } from '../shared/recording-style.js';
+import { recordingLayoutFilter } from './recording-layout.js';
 import { chatRate } from './chat-rules.js';
 import { scrollingTracks, danmakuText } from '../shared/danmaku-tracks.js';
 import { PreviewRequests } from './preview-requests.js';
@@ -54,6 +56,7 @@ export class Media {
   preparationCalls = new Map();
   preparationMetrics = new Map();
   backgroundBatches = new Set();
+  foregroundBatches = new Set();
   exportOperations = new Map();
   preparationHandoffs = new Map();
   checkpoints = new ExportCheckpoints(this);
@@ -98,6 +101,7 @@ export class Media {
       inputs.push([source.id,from,to,fingerprint]);
     }
     const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents];
+    if(Object.hasOwn(job,'recordingStyle'))snapshot.push(job.recordingStyle,job.cameraEvents);
     const checkpoint=await this.checkpoints.open(job,hashRender([details.route,details.encoder,details.profile,details.comments,inputs,snapshot]));
     job.processingRecovery.route=details.route;this.persistExportJob(job);return checkpoint;
   }
@@ -155,6 +159,10 @@ export class Media {
     const batch={capacity:Math.max(1,Math.min(2,capacity))};this.backgroundBatches.add(batch);
     try{return await work();}finally{this.backgroundBatches.delete(batch);this.scheduler?.drain();}
   }
+  async withForegroundBatch(capacity,work){
+    const batch={capacity:Math.max(1,Math.min(4,capacity))};this.foregroundBatches.add(batch);
+    try{return await work();}finally{this.foregroundBatches.delete(batch);this.scheduler?.drain();}
+  }
   invalidatePreparation(id){this.renderer.invalidate(id);}
   discardPendingPreparation(id){return this.renderCache.dropPending(entry=>!id||entry.spec.sessionId===id);}
   async liveHardwareAvailable(){
@@ -198,7 +206,9 @@ export class Media {
   }
   scheduled(kind,signal,work,stage=kind) {
     if(this.closed)return Promise.reject(new Error('视频服务已关闭。'));
-    this.scheduler??=new MediaScheduler({recording:()=>this.isRecording?.()===true,backgroundLimit:()=>Math.max(1,...[...(this.backgroundBatches||[])].map(batch=>batch.capacity))});
+    this.scheduler??=new MediaScheduler({recording:()=>this.isRecording?.()===true,
+      backgroundLimit:()=>Math.max(1,...[...(this.backgroundBatches||[])].map(batch=>batch.capacity)),
+      foregroundLimit:()=>Math.max(2,...[...(this.foregroundBatches||[])].map(batch=>batch.capacity))});
     const operation=this.exportContext?.getStore()||this.preparationContext?.getStore();
     if(kind==='background'&&operation?.live)kind='live-background';
     return this.scheduler.run(kind,signal,work,({waitMs,workMs})=>{
@@ -344,10 +354,15 @@ export class Media {
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
     await this.store.linkmic?.ensure(id);
     const linkmicEvents=this.store.linkmic?.events(id)||[];
+    const cameraEvents=this.store.linkmic?.cameraEvents?.(id)||[];
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
     const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
-    for(const job of jobs)job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
+    for(const job of jobs) {
+      job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
+      job.recordingStyle=savedRecordingStyle(this.store);
+      job.cameraEvents=cameraEvents.filter(event=>job.ranges.some(range=>event.time<range.end&&event.end>range.start));
+    }
     try {
       const handoff=this.preparation?.yieldForExport?await this.preparation.yieldForExport(id,jobs):await this.preparation?.yieldForForeground();
       if(handoff)for(const job of jobs)this.preparationHandoffs.set(job.id,handoff);
@@ -715,7 +730,8 @@ export class Media {
           await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,job.font,job.danmakuStyle));
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
-        const filter=videoGeometryFilter(sourceInfo,width,height);
+        const filter=recordingLayoutFilter(blockCameraEvents(job.cameraEvents,source.id,from,to),job.recordingStyle??originalRecordingStyle(),width,height,
+          {sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height,base,from,to,fallback:videoGeometryFilter(sourceInfo,width,height)||'null'});
         const labels=(job.linkmicEvents||[]).filter(event=>event.source===source.id&&event.participants.length&&event.time<to&&event.end>from);
         const labelFile=`names-${number}.ass`;
         if(labels.length)await fs.writeFile(path.join(workDir,labelFile),linkmicAss(labels,width,height,{base,from,to,sourceWidth:sourceInfo.width,sourceHeight:sourceInfo.height}));

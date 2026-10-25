@@ -3,8 +3,8 @@ const aborted = () => Object.assign(new Error('媒体处理已取消。'), { nam
 // Reserve room for interaction while bounding all decoders/encoders together.
 // Recording itself never enters this queue and reduces background CPU demand.
 export class MediaScheduler {
-  constructor({ recording = () => false, backgroundLimit = () => 1 } = {}) {
-    this.recording=recording;this.backgroundLimit=backgroundLimit;this.queue=[];this.active=new Set();this.closed=false;this.timer=null;
+  constructor({ recording = () => false, backgroundLimit = () => 1, foregroundLimit = () => 2 } = {}) {
+    this.recording=recording;this.backgroundLimit=backgroundLimit;this.foregroundLimit=foregroundLimit;this.queue=[];this.active=new Set();this.closed=false;this.timer=null;
   }
   run(kind, signal, work, measured) {
     if(this.closed||signal?.aborted)return Promise.reject(aborted());
@@ -17,7 +17,7 @@ export class MediaScheduler {
   }
   drain() {
     if(this.closed)return;
-    const recording=this.recording(),limit=recording?2:3;
+    const recording=this.recording(),foreground=recording?1:Math.max(2,Math.min(4,this.foregroundLimit())),limit=recording?2:foreground+1;
     while(!this.closed&&this.active.size<limit) {
       const renders=[...this.active].filter(item=>item.kind!=='interactive').length;
       const interactive=[...this.active].filter(item=>item.kind==='interactive').length;
@@ -25,7 +25,7 @@ export class MediaScheduler {
       const liveBackgrounds=[...this.active].filter(item=>item.kind==='live-background').length;
       let next=-1;
       for(const kind of ['interactive','foreground','live-background','background']) {
-        if(kind==='interactive'?interactive>=2:renders>=(recording?1:2))continue;
+        if(kind==='interactive'?interactive>=2:renders>=(kind==='foreground'?foreground:recording?1:2))continue;
         // Only explicitly admitted live work gets this slot. Interactive and
         // foreground arrivals still win; ordinary background stays blocked.
         if(kind==='live-background'&&(liveBackgrounds||renders||interactive))continue;

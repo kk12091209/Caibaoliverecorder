@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { labelsAt, labelGeometry } from '../../shared/linkmic-labels.js';
 
 const props=defineProps({session:String,video:Object,base:{type:Number,default:0},loading:Boolean});
+const emit=defineEmits(['cameras']);
 const surface=ref(null),events=ref([]),time=ref(0),size=ref({width:0,height:0});
 let player,observer,timer,request,disposed=false,frame=0,generation=0;
 const playbackEvents=['timeupdate','seeking','seeked','loadedmetadata','loadeddata','resize','play','pause','ended','emptied'];
@@ -34,12 +35,12 @@ async function load(){
     const response=await fetch(`/api/sessions/${encodeURIComponent(props.session)}/linkmic?from=${from}&to=${to}`,{signal:controller.signal});
     if(!response.ok)return;
     const result=await response.json();
-    if(current===generation&&!disposed){events.value=result.events;update();}
+    if(current===generation&&!disposed){events.value=result.events;emit('cameras',result.cameraEvents||[]);update();}
   }catch{/* Names are optional; playback continues during a transient request failure. */}
   finally{if(request===controller)request=null;}
 }
 watch(()=>props.video,bind);
-watch(()=>[props.session,props.base],()=>{generation++;request?.abort();request=null;events.value=[];update();void load();});
+watch(()=>[props.session,props.base],()=>{generation++;request?.abort();request=null;events.value=[];emit('cameras',[]);update();void load();});
 onMounted(()=>{bind(props.video);observer=new ResizeObserver(resize);observer.observe(surface.value);void load();timer=setInterval(load,1500);});
 onBeforeUnmount(()=>{disposed=true;request?.abort();clearInterval(timer);observer?.disconnect();bind(null);});
 </script>

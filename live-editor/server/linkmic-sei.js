@@ -1,4 +1,6 @@
 import { validRect, labelText } from '../shared/linkmic-labels.js';
+import { BILI_LAYOUTS, BILI_LAYOUT_VERSION } from './bilibili-layouts.js';
+import { biliCameraLayout, douyinCameraLayout } from './recording-layout.js';
 
 const MAX_SEI=128*1024;
 const identifier=value=>typeof value==='string'&&/^[\w-]{1,100}$/.test(value)?value:
@@ -10,15 +12,21 @@ export function parsePlatformJson(text) {
 function biliFrame(value) {
   const data=value?.LIVE_MULTI_VIDEO_LINK;
   if(!data)return null;
-  const template=data.interact_template,layout=template?.layout_data;
-  if(data.sei_room_status===0||data.session_status===0||template?.show_interact_ui===false)return {platform:'bilibili',participants:[]};
+  const template=data.interact_template;
+  if([0,2].includes(data.sei_room_status)||[0,2].includes(data.session_status)||template?.show_interact_ui===false)return {platform:'bilibili',participants:[]};
+  const layoutId=data.layout_id||template?.layout_id;
+  // Current SEI commonly sends only a layout ID, and cells inherit dimensions
+  // from default_cell. Unknown future versions need explicit inline geometry.
+  const inline=template?.layout_data;
+  const layout=inline?.width>0&&inline?.height>0?inline:((template?.layout_version===undefined||template.layout_version===BILI_LAYOUT_VERSION)?BILI_LAYOUTS.find(l=>l.layout_id===layoutId):null);
   if(!layout||!Number.isFinite(layout.width)||!Number.isFinite(layout.height)||layout.width<=0||layout.height<=0||
     !Array.isArray(layout.cells)||layout.cells.length>64||!Array.isArray(data.members)||data.members.length>64)return null;
   const participants=[];
   for(const member of data.members) {
     const cells=layout.cells.filter(cell=>cell.position===member.position);
     if(cells.length!==1)continue;
-    const cell=cells[0],rect={x:cell.x/layout.width,y:cell.y/layout.height,w:cell.width/layout.width,h:cell.height/layout.height};
+    if(data.members.filter(other=>other.position===member.position).length!==1)continue;
+    const cell={...layout.default_cell,...cells[0]},rect={x:cell.x/layout.width,y:cell.y/layout.height,w:cell.width/layout.width,h:cell.height/layout.height};
     const id=identifier(member.uid_str)||identifier(member.uid);
     if(!validRect(rect)||!id)continue;
     participants.push({...rect,id,name:labelText(member.uname)||labelText(member.display_name)});
@@ -80,14 +88,14 @@ function douyinFrame(value) {
 function decodePayload(type,payload) {
   try {
     if(type===5&&payload.subarray(0,16).toString('ascii')==='LIVE_SEI_CHANNEL')
-      return biliFrame(parsePlatformJson(payload.subarray(16).toString('utf8')));
-    if(type===100&&payload[0]===123)return douyinFrame(parsePlatformJson(payload.toString('utf8')));
+      return {platform:'bilibili',value:parsePlatformJson(payload.subarray(16).toString('utf8').replace(/\0+$/,''))};
+    if(type===100&&payload[0]===123)return {platform:'douyin',value:parsePlatformJson(payload.toString('utf8'))};
   }catch{/* Optional overlays must never interrupt recording on malformed SEI. */}
   return null;
 }
-export function linkmicSei(tag,lengthSize=4) {
+export function platformSei(tag,lengthSize=4) {
   const result=[];
-  if(tag[0]!==9||(tag[11]&15)!==7||tag[12]!==1||![1,2,3,4].includes(lengthSize))return result;
+  if(tag.length<20||tag[0]!==9||(tag[11]&15)!==7||tag[12]!==1||![1,2,3,4].includes(lengthSize))return result;
   const end=tag.length-4;
   for(let offset=16,nals=0;offset+lengthSize<=end&&nals++<256;) {
     const length=tag.readUIntBE(offset,lengthSize);offset+=lengthSize;
@@ -110,3 +118,24 @@ export function linkmicSei(tag,lengthSize=4) {
   }
   return result;
 }
+export function linkmicFrames(payloads) {
+  const frames=[];
+  for(const {platform,value}of payloads)try {
+    const frame=platform==='bilibili'?biliFrame(value):douyinFrame(value);if(frame)frames.push(frame);
+  }catch{/* Optional malformed layout data must not stall the source index. */}
+  return frames;
+}
+export function cameraFrames(payloads) {
+  const frames=[];
+  for(const {platform,value}of payloads) {
+    let layout;
+    if(platform==='bilibili')layout=biliCameraLayout(value);
+    else {
+      layout=douyinCameraLayout(value);
+      if(layout===undefined&&value?.app_data)try{layout=douyinCameraLayout(typeof value.app_data==='string'?parsePlatformJson(value.app_data):value.app_data);}catch{}
+    }
+    if(layout!==undefined)frames.push({platform,layout});
+  }
+  return frames;
+}
+export const linkmicSei=(tag,lengthSize=4)=>linkmicFrames(platformSei(tag,lengthSize));

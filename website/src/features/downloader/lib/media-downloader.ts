@@ -54,6 +54,11 @@ export type DownloadJob = {
   bytes: number
   total: number
   error: string
+  timings?: {
+    firstReadyMs: number | null
+    elapsedMs: number
+    stages: Record<string, { count: number; waitMs: number; workMs: number; failures: number }>
+  }
   files: DownloadFile[]
   archive: { name: string; bytes: number; url: string } | null
 }
@@ -66,16 +71,21 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   if (!response.ok) throw new Error(value.error || '操作失败，请重试。')
   return value as T
 }
-export async function mediaPost<T>(path: string, value: unknown, signal?: AbortSignal): Promise<T> {
+export function prepareDownloaderSession(): Promise<string> {
   token ??= request<{ token: string }>('/api/downloader/config')
     .then((value) => value.token)
     .catch((error) => {
       token = null
       throw error
     })
+  return token
+}
+export async function mediaPost<T>(path: string, value: unknown, signal?: AbortSignal): Promise<T> {
+  const csrf = await prepareDownloaderSession()
+  signal?.throwIfAborted()
   return request<T>('/api/downloader/' + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Downloader-Token': await token },
+    headers: { 'Content-Type': 'application/json', 'X-Downloader-Token': csrf },
     body: JSON.stringify(value),
     signal,
   })

@@ -10,7 +10,11 @@ for tool in node dotnet swiftc; do command -v "$tool" >/dev/null || { echo '请�
 cd "$ROOT/live-editor"
 npm run build
 cd "$ROOT"
-dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r osx-arm64 -p:RuntimeIdentifiers=osx-arm64 --self-contained true -o .tools/runtime/recorder
+# Publish into a fresh directory so cached development state can never enter
+# the application. Only this build's generated runtime is copied below.
+PUBLISH=$(mktemp -d "$ROOT/.tools/recorder-publish.XXXXXX")
+trap 'rm -rf "$PUBLISH"' EXIT
+dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -m:2 -r osx-arm64 -p:RuntimeIdentifiers=osx-arm64 --self-contained true -o "$PUBLISH"
 mkdir -p "$OUTPUT"
 APP="$OUTPUT/菜播·录包机.app"
 CONTENTS="$APP/Contents"
@@ -18,8 +22,9 @@ RESOURCES="$CONTENTS/Resources"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/live-editor" "$RESOURCES/runtime/node" "$RESOURCES/runtime/ffmpeg" "$RESOURCES/licenses"
 # Some Xcode Swift drivers trap with a non-ASCII TMPDIR. Node tests still use
 # the canonical project directory; only the compiler uses macOS's temp root.
-TMPDIR=/private/tmp TMP=/private/tmp TEMP=/private/tmp xcrun swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -module-cache-path "$ROOT/.tools/swift-module-cache" -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/ProcessOwnership.swift live-editor/desktop-macos/Repair.swift live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o "$CONTENTS/MacOS/CaiboDesktop"
+TMPDIR=/private/tmp TMP=/private/tmp TEMP=/private/tmp xcrun swiftc -swift-version 5 -O -j 1 -target arm64-apple-macos14.0 -module-cache-path "$ROOT/.tools/swift-module-cache" -framework AppKit -framework WebKit -framework IOKit live-editor/desktop-macos/ProcessOwnership.swift live-editor/desktop-macos/Repair.swift live-editor/desktop-macos/Backend.swift live-editor/desktop-macos/App.swift -o "$CONTENTS/MacOS/CaiboDesktop"
 node live-editor/scripts/build-live-resource-helper.mjs "$RESOURCES/runtime/resources/live-system-resources"
+node live-editor/scripts/build-cookie-helper.mjs "$RESOURCES/runtime/credentials/cookie-protection"
 cp -R live-editor/server live-editor/shared live-editor/dist "$RESOURCES/live-editor/"
 cp live-editor/package.json "$RESOURCES/live-editor/"
 # Installed 0.1.6 Mac helpers require this field before replacing an app.
@@ -32,7 +37,7 @@ file.write_text(json.dumps(info,ensure_ascii=False,indent=2)+'\n')
 PY
 cp .tools/runtime/node-v24.12.0-darwin-arm64/bin/node "$RESOURCES/runtime/node/"
 cp .tools/runtime/ffmpeg/ffmpeg .tools/runtime/ffmpeg/ffprobe "$RESOURCES/runtime/ffmpeg/"
-python3 - "$ROOT/.tools/runtime/recorder" "$RESOURCES/runtime/recorder" <<'PY'
+python3 - "$PUBLISH" "$RESOURCES/runtime/recorder" <<'PY'
 import shutil,sys
 # Local CLI runs can create logs beside cached binaries. Never publish those
 # files or debug symbols; the installed Mac app writes logs under user data.

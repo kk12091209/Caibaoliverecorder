@@ -35,20 +35,23 @@ function retry(room,error) {
   room.retry=setTimeout(()=>{room.retry=null;void connect(room);},Math.min(30000,3000*2**Math.min(room.failures++,4)));
 }
 async function connect(room) {
+  const generation=room.generation=(room.generation||0)+1;
+  const current=()=>!room.stopped&&room.generation===generation;
   try{
     const socket=await openDouyinSocket(chatSocketUrl(room),{signal:room.abort.signal,
       headers:{'User-Agent':DOUYIN_USER_AGENT,Origin:'https://live.douyin.com',Cookie:room.cookie},
-      onClose:error=>retry(room,error),onMessage:bytes=>{
+      onClose:error=>{if(current())retry(room,error);},onMessage:bytes=>{
+        if(!current())return;
         room.lastFrame=Date.now();const frame=decodePushFrame(bytes);
         if(frame.needAck){const ack=acknowledgeFrame(frame.logId,frame.internalExt);if(room.socket)room.socket.send(ack);else room.firstAck=ack;}
         // Activity messages have priority even when chats precede them in the packet.
         for(const message of frame.messages)if(isLotteryMethod(message.method))for(const activity of decodeLottery(message,{roomId:room.roomId,serverTime:frame.serverTime}))activities.update(room.key,activity);
         for(const message of frame.messages){try{const chat=decodeChat(message,{roomId:room.roomId,sourceStart:room.sourceStart});if(chat)intake.add(room.key,chat);}catch{/* Skip one malformed chat, preserving other messages and the ACK. */}}
       }});
-    if(room.stopped){socket.close();return;}
+    if(!current()){socket.close();return;}
     room.socket=socket;if(room.firstAck){socket.send(room.firstAck);room.firstAck=null;}socket.send(heartbeatFrame());room.failures=0;room.lastFrame=Date.now();post({type:'status',key:room.key,status:'connected'});
     room.heartbeat=setInterval(()=>{if(Date.now()-room.lastFrame>45000)socket.close();else socket.send(heartbeatFrame());},5000);
-  }catch(error){retry(room,error);}
+  }catch(error){if(current())retry(room,error);}
 }
 parentPort.on('message',message=>{
   if(message.type==='configure'){
@@ -58,7 +61,13 @@ parentPort.on('message',message=>{
     const room={...message,key:String(message.key),abort:new AbortController(),failures:0,stopped:false};
     rooms.set(room.key,room);intake.start(room.key,{start:room.sourceStart});void connect(room);
   }else if(message.type==='credentials'){
-    const room=rooms.get(message.key);if(room&&!room.stopped){room.cookie=message.cookie;room.userUniqueId=message.userUniqueId;}
+    const room=rooms.get(message.key);if(room&&!room.stopped&&(room.cookie!==message.cookie||room.userUniqueId!==message.userUniqueId)){
+      room.cookie=message.cookie;room.userUniqueId=message.userUniqueId;
+      if(message.reauthenticate!==true)return;
+      room.generation=(room.generation||0)+1;
+      clearTimeout(room.retry);room.retry=null;clearInterval(room.heartbeat);room.abort.abort();room.socket?.close();room.socket=null;room.firstAck=null;
+      room.abort=new AbortController();room.failures=0;void connect(room);
+    }
   }else if(message.type==='ack'){
     const room=rooms.get(message.key);if(room?.batch?.id===message.id){room.batch.release();room.batch=null;flush(room);}
   }else if(message.type==='stop'){

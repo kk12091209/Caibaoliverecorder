@@ -1,11 +1,29 @@
 import fs from 'node:fs/promises';
 import { setImmediate as yieldTurn } from 'node:timers/promises';
-import { linkmicSei } from './linkmic-sei.js';
+import { platformSei, linkmicFrames, cameraFrames } from './linkmic-sei.js';
+import { cameraLayout } from '../shared/recording-style.js';
 import { labelGeometry } from '../shared/linkmic-labels.js';
 import { LinkmicAvatars } from './linkmic-avatars.js';
 
-const VERSION=3,TTL=6;
+const VERSION=4,TTL=6,CAMERA_TTL=10;
 const stamp=tag=>(tag.readUIntBE(4,3)+tag[7]*16777216)/1000;
+
+// Both timelines coalesce repeated SEI frames, but keep separate expiry windows
+// and persisted progress fields so either one can change or clear independently.
+function recordFrames(store,source,frames,progress,{table,ttl,active,signature,seen}) {
+  for(const {time,data} of frames) {
+    const value=JSON.stringify(data);
+    if(progress[signature]===value&&time>=progress[seen]&&time-progress[seen]<=ttl)
+      store.run(`UPDATE ${table} SET end=? WHERE source=? AND time=?`,time+ttl,source,progress[active]);
+    else {
+      if(Number.isFinite(progress[active]))store.run(`UPDATE ${table} SET end=MIN(end,?) WHERE source=? AND time=?`,time,source,progress[active]);
+      store.run(`INSERT OR REPLACE INTO ${table}(source,time,end,data) VALUES(?,?,?,?)`,source,time,time+ttl,value);
+      progress[active]=time;progress[signature]=value;
+    }
+    progress[seen]=time;
+  }
+}
+
 export class LinkmicIndex {
   constructor(store,{resolver,ffmpeg,avatars}={}) {
     this.store=store;this.resolver=resolver;this.requested=new Set();this.pending=new Map();this.refreshes=new Map();this.retry=new Map();this.historyCursor=0;this.closed=false;this.abort=new AbortController();
@@ -44,6 +62,7 @@ export class LinkmicIndex {
       // A newly supported layout must replace old empty frames, including
       // timestamps that were previously stored separately.
       this.store.run('DELETE FROM linkmic_frames WHERE source=?',source.id);
+      this.store.run('DELETE FROM camera_frames WHERE source=?',source.id);
       progress={version:VERSION,pos:13,seq:0,lengthSize:4,mode:'original'};
     }
     if(progress.complete&&source.closed===2)return false;
@@ -70,7 +89,7 @@ export class LinkmicIndex {
       if(!chunk){if(source.closed===2){progress.complete=true;this.store.setting('linkmic-index:'+source.id,progress);}return false;}
       bytes=await fs.readFile(chunk.path);progress.seq=chunk.seq+1;more=true;
     }
-    const frames=[];let consumed=0;
+    const frames=[],cameras=[];let consumed=0;
     while(consumed+15<=bytes.length) {
       const length=bytes.readUIntBE(consumed+1,3)+15;
       if(length>16*1024*1024)break;
@@ -80,22 +99,15 @@ export class LinkmicIndex {
       if(tag[0]!==9||tag.length<20)continue;
       if(tag[12]===0&&tag.length>20){progress.lengthSize=(tag[20]&3)+1;continue;}
       const composition=tag.readIntBE(13,3)/1000,time=Math.max(source.start,source.start+stamp(tag)+composition);
-      for(const data of linkmicSei(tag,progress.lengthSize))frames.push({time,data});
+      const payloads=platformSei(tag,progress.lengthSize);
+      for(const data of linkmicFrames(payloads))frames.push({time,data});
+      for(const data of cameraFrames(payloads))cameras.push({time,data});
     }
     if(progress.mode==='original')progress.pos+=consumed;
     if(this.closed||!this.store.session(source.session))return false;
     this.store.transaction(()=>{
-      for(const {time,data} of frames) {
-        const signature=JSON.stringify(data);
-        if(progress.signature===signature&&time>=progress.seen&&time-progress.seen<=TTL)
-          this.store.run('UPDATE linkmic_frames SET end=? WHERE source=? AND time=?',time+TTL,source.id,progress.active);
-        else {
-          if(Number.isFinite(progress.active))this.store.run('UPDATE linkmic_frames SET end=MIN(end,?) WHERE source=? AND time=?',time,source.id,progress.active);
-          this.store.run('INSERT OR REPLACE INTO linkmic_frames(source,time,end,data) VALUES(?,?,?,?)',source.id,time,time+TTL,signature);
-          progress.active=time;progress.signature=signature;
-        }
-        progress.seen=time;
-      }
+      recordFrames(this.store,source.id,frames,progress,{table:'linkmic_frames',ttl:TTL,active:'active',signature:'signature',seen:'seen'});
+      recordFrames(this.store,source.id,cameras,progress,{table:'camera_frames',ttl:CAMERA_TTL,active:'cameraActive',signature:'cameraSignature',seen:'cameraSeen'});
       this.store.setting('linkmic-index:'+source.id,progress);
     });
     const frame=frames.at(-1)?.data;
@@ -134,6 +146,21 @@ export class LinkmicIndex {
       });
       return {source:row.source,time:row.time,end:Math.min(row.end,source.start+source.duration),participants};
     }).filter(event=>event.end>event.time);
+  }
+  cameraEvents(id,from=0,to=Infinity) {
+    const sources=this.store.sources(id),byId=new Map(sources.map(s=>[s.id,s]));
+    const events=this.store.all('SELECT f.* FROM camera_frames f JOIN sources s ON s.id=f.source WHERE s.session=? AND f.time<? AND f.end>? ORDER BY f.time',id,to,from)
+      .map(row=>({source:row.source,time:row.time,end:Math.min(row.end,byId.get(row.source).start+byId.get(row.source).duration),layout:cameraLayout(JSON.parse(row.data).layout)}));
+    // A selected independent Douyin stream carries an explicit API crop. Use
+    // it only for that exact source; timestamped SEI takes precedence, even off.
+    for(const source of sources) {
+      const layout=cameraLayout(this.store.setting('recording-camera:'+source.id));
+      if(!layout)continue;
+      const first=this.store.get('SELECT MIN(time) AS time FROM camera_frames WHERE source=?',source.id)?.time;
+      const end=Math.min(source.start+source.duration,first??Infinity);
+      if(end>from&&source.start<to&&end>source.start)events.push({source:source.id,time:source.start,end,layout});
+    }
+    return events.filter(e=>e.end>e.time&&e.layout).sort((a,b)=>a.time-b.time);
   }
   async close(){this.closed=true;this.abort.abort();await Promise.allSettled([...this.pending.values(),...this.refreshes.values()]);}
 }

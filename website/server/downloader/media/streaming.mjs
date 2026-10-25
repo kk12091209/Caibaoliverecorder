@@ -11,12 +11,31 @@ import { openRemote } from '../infrastructure/network.mjs'
 export async function muxRemoteMp4(
   sources,
   target,
-  { command, signal, maxBytes, onProgress, onOutput, openSource = openRemote },
+  { command, signal, maxBytes, onProgress, onOutput, openSource = openRemote, idleMs = 120000 },
 ) {
   const abort = new AbortController(),
     combined = AbortSignal.any([signal, abort.signal])
   const responses = []
-  let child, output
+  let child,
+    output,
+    idleTimer,
+    killTimer,
+    stalled = false
+  const touch = () => {
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      stalled = true
+      abort.abort(new Error('视频处理长时间没有进展，请重试。'))
+    }, idleMs)
+    idleTimer.unref?.()
+  }
+  const stop = () => {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return
+    child.kill()
+    killTimer ??= setTimeout(() => child.kill('SIGKILL'), 2000)
+    killTimer.unref?.()
+  }
+  combined.addEventListener('abort', stop, { once: true })
   const tasks = []
   try {
     for (const urls of [sources.video, sources.audio]) {
@@ -84,17 +103,30 @@ export async function muxRemoteMp4(
         'mp4',
         'pipe:1',
       ],
-      { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'], signal: combined },
+      { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'], windowsHide: true },
     )
     child.stderr.resume()
     tasks.push(
       new Promise((resolve, reject) => {
-        child.once('error', reject)
+        let failure
+        child.once('error', (error) => {
+          failure = error
+        })
         child.once('close', (code) =>
-          code === 0 ? resolve() : reject(new Error('视频传输中断，请重试下载。')),
+          failure
+            ? reject(failure)
+            : code === 0
+              ? resolve()
+              : reject(
+                  new Error(
+                    stalled ? '视频处理长时间没有进展，请重试。' : '视频传输中断，请重试下载。',
+                  ),
+                ),
         )
       }),
     )
+    touch()
+    if (combined.aborted) stop()
     for (const [index, response] of responses.entries()) {
       let bytes = 0
       const meter = new Transform({
@@ -104,6 +136,7 @@ export async function muxRemoteMp4(
             if (bytes > maxBytes || (response.total && bytes > response.total))
               throw new Error('视频源超过本次下载大小限制。')
             onProgress(String(index))(bytes, response.total)
+            touch()
             callback(null, chunk)
           } catch (error) {
             callback(error)
@@ -128,6 +161,7 @@ export async function muxRemoteMp4(
           if (error) return callback(error)
           try {
             written += chunk.length
+            touch()
             onOutput(written)
             callback()
           } catch (reason) {
@@ -146,9 +180,12 @@ export async function muxRemoteMp4(
   } finally {
     abort.abort()
     for (const response of responses) response.stream.destroy()
-    child?.kill()
+    stop()
     output?.destroy()
     await Promise.allSettled(tasks)
+    clearTimeout(idleTimer)
+    clearTimeout(killTimer)
+    combined.removeEventListener('abort', stop)
   }
 }
 

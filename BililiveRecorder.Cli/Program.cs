@@ -271,6 +271,7 @@ namespace BililiveRecorder.Cli
                     .ConfigureServices(services =>
                     {
                         services.AddSingleton(recorderAccessProxy);
+                        services.AddSingleton(serviceProvider.GetRequiredService<BililiveRecorder.Core.Api.RuntimeCookie>());
 
                         services.AddSingleton(new BililiveRecorderFileExplorerSettings(sharedArguments.EnableFileBrowser));
 

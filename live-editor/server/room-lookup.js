@@ -1,4 +1,5 @@
 import {DOUYIN_USER_AGENT} from './douyin-room.js';
+import {parsePlatformJson} from './linkmic-sei.js';
 
 export function numericRoomId(value){
   const input=String(value??'').trim();if(!/^\d+$/.test(input))return null;
@@ -7,13 +8,18 @@ export function numericRoomId(value){
 }
 
 export class BilibiliRoomResolver {
-  constructor({request=fetch}={}){this.request=request;}
+  constructor({request=fetch,credentials}={}){this.request=request;this.credentials=credentials;}
   async query(route,signal){
-    const response=await this.request('https://api.live.bilibili.com/'+route,{signal,redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.bilibili.com/'}});
+    const cookie=this.credentials?.get('bilibili');
+    const response=await this.request('https://api.live.bilibili.com/'+route,{signal,redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.bilibili.com/',...(cookie?{Cookie:cookie}:{})}});
     if(!response.ok){await response.body?.cancel();throw new Error('B 站暂时无法查询，请稍后重试。');}
     const chunks=[];let size=0;
     for await(const chunk of response.body||[]){size+=chunk.length;if(size>1024*1024){await response.body?.cancel().catch(()=>{});throw new Error('B 站返回的房间信息过大。');}chunks.push(chunk);}
-    try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new Error('B 站暂时未返回房间信息。');}
+    try{return parsePlatformJson(Buffer.concat(chunks).toString('utf8'));}catch{throw new Error('B 站暂时未返回房间信息。');}
+  }
+  async verifyCookie(){
+    const result=await this.query('xlive/web-ucenter/user/get_user_info',AbortSignal.timeout(12000));
+    return result.code===0&&/^[1-9]\d{0,19}$/.test(String(result.data?.uid||''));
   }
   async room(id,{signal=AbortSignal.timeout(10000)}={}){
     if(!/^\d{1,20}$/.test(id)||BigInt(id)>2147483647n||BigInt(id)===0n)return null;

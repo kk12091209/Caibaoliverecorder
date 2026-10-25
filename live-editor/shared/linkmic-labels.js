@@ -1,3 +1,5 @@
+import { containedVideoFrame } from './video-geometry.js';
+
 // Coordinates are relative to the encoded video, including its own padding.
 // Browser letterboxing and export letterboxing are applied only at rendering.
 export function validRect(rect) {
@@ -15,9 +17,8 @@ export function participantName(person) {
 }
 export function labelGeometry(person,width,height,sourceWidth=width,sourceHeight=height) {
   if(!validRect(person)||![width,height,sourceWidth,sourceHeight].every(n=>Number.isFinite(n)&&n>0))return null;
-  const scale=Math.min(width/sourceWidth,height/sourceHeight);
-  const frameWidth=sourceWidth*scale,frameHeight=sourceHeight*scale;
-  const left=(width-frameWidth)/2+person.x*frameWidth,top=(height-frameHeight)/2+person.y*frameHeight;
+  const frame=containedVideoFrame(width,height,sourceWidth,sourceHeight),frameWidth=frame.width,frameHeight=frame.height;
+  const left=frame.left+person.x*frameWidth,top=frame.top+person.y*frameHeight;
   const tileWidth=person.w*frameWidth,tileHeight=person.h*frameHeight;
   const size=Math.min(Math.max(9,Math.min(frameWidth,frameHeight)*.022),tileHeight*.16,tileWidth*.16);
   if(size<1)return null;

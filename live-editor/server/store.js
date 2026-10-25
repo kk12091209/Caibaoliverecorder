@@ -43,6 +43,8 @@ export class Store {
         source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,time REAL NOT NULL,extra INTEGER NOT NULL,
         PRIMARY KEY(source,time));
       CREATE INDEX IF NOT EXISTS density_session ON danmaku_density(session);
+      CREATE TABLE IF NOT EXISTS camera_frames(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        time REAL NOT NULL,end REAL NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,time));
       CREATE TABLE IF NOT EXISTS linkmic_frames(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
         time REAL NOT NULL,end REAL NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,time));
       CREATE TABLE IF NOT EXISTS linkmic_people(source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -152,7 +154,7 @@ export class Store {
           this.run('DELETE FROM source_storage WHERE source=?',source.id);
           if(this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='waveform_blocks'"))this.run('DELETE FROM waveform_blocks WHERE source=?',source.id);
           this.run('DELETE FROM settings WHERE key=?','metadata:'+source.id);
-          this.run('DELETE FROM settings WHERE key IN (?,?)','linkmic-index:'+source.id,'linkmic-owner:'+source.id);
+          this.run('DELETE FROM settings WHERE key IN (?,?,?)','linkmic-index:'+source.id,'linkmic-owner:'+source.id,'recording-camera:'+source.id);
         }
         this.run('DELETE FROM danmaku_filters WHERE message IN (SELECT id FROM danmaku WHERE session=?)',id);
         this.run('DELETE FROM danmaku WHERE session=?',id);

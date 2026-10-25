@@ -12,10 +12,27 @@ import {
   OggOutputFormat,
   WEBM,
   WebMOutputFormat,
+  type EncodedPacket,
+  type InputTrack,
 } from 'mediabunny'
 import type { RecordingMode } from './recording'
 
 export type ExportedRecording = { blob: Blob; extension: string; label: string }
+
+async function copyTrackPackets(
+  track: InputTrack,
+  add: (packet: EncodedPacket) => Promise<void>,
+  signal?: AbortSignal,
+) {
+  let packets = 0
+  for await (const packet of new EncodedPacketSink(track).packets()) {
+    signal?.throwIfAborted()
+    await add(packet)
+    packets++
+    if (packets % 128 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  return packets
+}
 
 /** Copy encoded packets to a single-track container; no second video encode or server upload. */
 export async function extractRecordingTrack(
@@ -47,12 +64,11 @@ export async function extractRecordingTrack(
       const source = new EncodedVideoPacketSource(codec)
       output.addVideoTrack(source, { rotation: await track.getRotation() })
       await output.start()
-      for await (const packet of new EncodedPacketSink(track).packets()) {
-        signal?.throwIfAborted()
-        await source.add(packet, { decoderConfig: config })
-        packets++
-        if (packets % 128 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
-      }
+      packets = await copyTrackPackets(
+        track,
+        (packet) => source.add(packet, { decoderConfig: config }),
+        signal,
+      )
       source.close()
     } else {
       const track = await input.getPrimaryAudioTrack()
@@ -64,12 +80,11 @@ export async function extractRecordingTrack(
       const source = new EncodedAudioPacketSource(codec)
       output.addAudioTrack(source)
       await output.start()
-      for await (const packet of new EncodedPacketSink(track).packets()) {
-        signal?.throwIfAborted()
-        await source.add(packet, { decoderConfig: config })
-        packets++
-        if (packets % 128 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
-      }
+      packets = await copyTrackPackets(
+        track,
+        (packet) => source.add(packet, { decoderConfig: config }),
+        signal,
+      )
       source.close()
     }
     if (!packets) throw new Error('未读取到有效媒体内容，请保存原始文件。')

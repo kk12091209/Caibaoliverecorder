@@ -59,6 +59,7 @@ export function SaveRecording({
   const [separate, setSeparate] = useState(false)
   const [choice, setChoice] = useState<'video' | 'audio' | 'both' | null>(null)
   const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [zip, setZip] = useState<File | undefined>()
@@ -76,7 +77,8 @@ export function SaveRecording({
   const nameIssue = recordingNameIssue(name)
   const completed =
     originalDownloaded ||
-    (files.length > 0 && files.every((file) => downloaded.has(file.name))) ||
+    (files.length === (separate && choice === 'both' ? 2 : 1) &&
+      files.every((file) => downloaded.has(file.name))) ||
     Boolean(zip && downloaded.has(zip.name))
   function reset() {
     setFiles([])
@@ -94,11 +96,7 @@ export function SaveRecording({
     const abort = new AbortController()
     controller.current = abort
     setBusy(true)
-    setError('')
-    setFiles([])
-    setZip(undefined)
-    setDownloaded(new Set())
-    setOriginalDownloaded(false)
+    reset()
     try {
       const next: File[] = []
       if (!separate || result.mode === 'audio') {
@@ -121,29 +119,45 @@ export function SaveRecording({
         setDownloaded(new Set([file.name]))
       } else {
         if (!choice) throw new Error('请选择要保存的视频、音频，或两者。')
-        const { extractRecordingTrack, zipRecordings } = await import('../model/recording-export')
+        const { extractRecordingTrack } = await import('../model/recording-export-client')
         for (const kind of choice === 'both' ? (['video', 'audio'] as const) : [choice]) {
+          setPhase(kind === 'video' ? '正在生成无声视频…' : '正在生成音频…')
           const file = await extractRecordingTrack(result.blob, kind, abort.signal)
           next.push({
             ...file,
             name: recordingSaveName(name, file.extension, kind === 'video' ? '-无声视频' : '-音频'),
           })
-        }
-        if (next.length === 2) {
-          const blob = await zipRecordings(next, abort.signal)
-          if (mounted.current && !abort.signal.aborted)
-            setZip({
-              blob,
-              label: '视频与音频打包保存',
-              extension: 'zip',
-              name: recordingSaveName(name, 'zip', '-音画分离'),
-            })
+          if (mounted.current && !abort.signal.aborted) setFiles([...next])
         }
       }
       if (mounted.current && !abort.signal.aborted) setFiles(next)
     } catch (problem) {
       if (mounted.current && !abort.signal.aborted)
         setError((problem as Error).message || '生成失败，请先下载原始录制。')
+    } finally {
+      if (mounted.current && !abort.signal.aborted) setBusy(false)
+    }
+  }
+  async function prepareArchive() {
+    if (busy || files.length !== 2) return
+    const abort = new AbortController()
+    controller.current = abort
+    setBusy(true)
+    setPhase('正在打包文件…')
+    setError('')
+    try {
+      const { zipRecordings } = await import('../model/recording-export-client')
+      const blob = await zipRecordings(files, abort.signal)
+      if (mounted.current && !abort.signal.aborted)
+        setZip({
+          blob,
+          label: '视频与音频打包保存',
+          extension: 'zip',
+          name: recordingSaveName(name, 'zip', '-音画分离'),
+        })
+    } catch (problem) {
+      if (mounted.current && !abort.signal.aborted)
+        setError((problem as Error).message || '打包失败，仍可分别下载。')
     } finally {
       if (mounted.current && !abort.signal.aborted) setBusy(false)
     }
@@ -253,7 +267,7 @@ export function SaveRecording({
             disabled={busy || !!nameIssue || (separate && !choice)}
             onClick={() => void prepare()}
           >
-            {busy ? '正在生成文件…' : separate ? '确认并生成文件' : '确认并保存'}
+            {busy ? phase || '正在生成文件…' : separate ? '确认并生成文件' : '确认并保存'}
           </button>
           {busy && (
             <button type="button" onClick={cancelGeneration}>
@@ -276,6 +290,11 @@ export function SaveRecording({
             />
           ))}
         </div>
+        {files.length === 2 && !zip && (
+          <button type="button" disabled={busy} onClick={() => void prepareArchive()}>
+            打包为 ZIP（可选）
+          </button>
+        )}
         {files.length > 0 && (
           <p className="tp-muted">
             {zip ? 'ZIP 中包含独立的视频和音频，也可分别下载。' : ''}

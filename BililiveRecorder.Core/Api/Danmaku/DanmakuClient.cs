@@ -21,6 +21,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
     {
         private readonly ILogger logger;
         private readonly IDanmakuServerApiClient apiClient;
+        private readonly RuntimeCookie? runtimeCookie;
         private readonly Timer timer;
         private readonly SemaphoreSlim semaphoreSlim = new SemaphoreSlim(1, 1);
 
@@ -36,7 +37,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
 
         private static readonly JsonSerializerSettings jsonSerializerSettings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
 
-        public DanmakuClient(IDanmakuServerApiClient apiClient, ILogger logger)
+        public DanmakuClient(IDanmakuServerApiClient apiClient, ILogger logger, RuntimeCookie? runtimeCookie = null)
         {
             this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             this.logger = logger?.ForContext<DanmakuClient>() ?? throw new ArgumentNullException(nameof(logger));
@@ -47,6 +48,15 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 Enabled = false
             };
             this.timer.Elapsed += this.SendPingMessageTimerCallback;
+            this.runtimeCookie = runtimeCookie;
+            if (runtimeCookie is not null) runtimeCookie.Changed += this.RuntimeCookie_Changed;
+        }
+
+        private void RuntimeCookie_Changed(object? sender, EventArgs e)
+        {
+            // Refresh only chat authentication. The video writer stays open.
+            if (this.disposedValue || !this.Connected) return;
+            _ = Task.Run(async () => { try { await this.DisconnectAsync().ConfigureAwait(false); } catch { } });
         }
 
         public async Task DisconnectAsync()
@@ -188,6 +198,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 {
                     // dispose managed state (managed objects)
                     this.timer.Dispose();
+                    if (this.runtimeCookie is not null) this.runtimeCookie.Changed -= this.RuntimeCookie_Changed;
                     this.danmakuTransport?.Dispose();
                     this.semaphoreSlim.Dispose();
                 }
@@ -229,7 +240,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 key = token,
             }, Formatting.None, jsonSerializerSettings);
 
-            if (this.BeforeHandshake is { } func)
+            if (!(this.runtimeCookie?.Enabled == true && this.runtimeCookie.Configured) && this.BeforeHandshake is { } func)
             {
                 var newBody = func(body);
                 if (newBody is not null)

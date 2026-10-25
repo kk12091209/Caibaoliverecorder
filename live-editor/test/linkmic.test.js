@@ -112,6 +112,33 @@ test('index deduplicates repeated SEI, expires missing updates, survives restart
   index=new LinkmicIndex(store);await index.ensure(session.id);
   assert.deepEqual(index.events(session.id),events);await index.close();
 });
+test('name and camera timelines retain independent expiry, changes and clears across indexing restarts',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-sei-timelines-')),store=new Store(root);
+  const session=store.createSession({status:'finished'}),file=path.join(root,'sample.flv');
+  const both=()=>({...bili(),MULTI_SCREEN:{crop_info:[
+    {position:0,x:0,y:.25,cx:.5,cy:.5},{position:1,x:.75,y:.25,cx:.25,cy:1/3}]}});
+  await fs.writeFile(file,Buffer.concat([FLV_HEADER,...[1,2,8,15].map(time=>seiTag(both(),5,time))]));
+  const source=store.addSource(session.id,file,10,undefined,true);
+  store.run('UPDATE sources SET duration=60 WHERE id=?',source.id);
+  let index=new LinkmicIndex(store);
+  t.after(async()=>{await index.close();store.close();await fs.rm(root,{recursive:true,force:true});});
+  await index.ensure(session.id);
+  assert.deepEqual(index.events(session.id).map(e=>[e.time,e.end]),[[11,24],[25,31]],'six seconds renews names; seven seconds starts a new interval');
+  assert.deepEqual(index.cameraEvents(session.id).map(e=>[e.time,e.end]),[[11,35]],'the camera retains its ten-second window');
+  await index.close();
+  const changed=bili();changed.LIVE_MULTI_VIDEO_LINK.members[0].uname='更换后的嘉宾';
+  const cleared=bili();cleared.LIVE_MULTI_VIDEO_LINK.session_status=0;
+  await fs.appendFile(file,Buffer.concat([seiTag(changed,5,16),seiTag({MULTI_SCREEN:{crop_info:[]}},5,17),
+    seiTag(cleared,5,18),seiTag({unrelated:true},5,19),seiTag(both(),5,29)]));
+  store.run('UPDATE sources SET closed=2 WHERE id=?',source.id);
+  index=new LinkmicIndex(store);await index.ensure(session.id);
+  const events=index.events(session.id);
+  assert.deepEqual(events.map(e=>[e.time,e.end,e.participants.find(p=>p.id==='103')?.name||'']),
+    [[11,24,'嘉宾乙'],[25,26,'嘉宾乙'],[26,28,'更换后的嘉宾'],[28,34,''],[39,45,'嘉宾乙']]);
+  assert.deepEqual(index.cameraEvents(session.id).map(e=>[e.time,e.end]),[[11,27],[39,49]],'name changes leave the camera active until its own clear');
+  assert.equal(labelsAt(events,27.5).length,3,'clearing the camera leaves the names active');
+  assert.equal(labelsAt(events,28).length,0,'the explicit name clear still takes effect');
+});
 test('audience roster uses its own endpoint and matches by link ID rather than list position',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-audience-roster-')),store=new Store(root),requests=[];
   const resolver=new DouyinResolver({request:async url=>{

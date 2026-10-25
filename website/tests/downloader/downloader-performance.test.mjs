@@ -74,11 +74,10 @@ test('segmented download respects quota errors instead of retrying and rejects o
 test('cancelling segmented downloads stops all ranges without falling back to a new download',async()=>{
   const dir=await mkdtemp(path.join(tmpdir(),'caibao-range-cancel-')),controller=new AbortController(),data=Buffer.alloc(8*1024**2+1);let requests=0;
   const open=async(url,{headers}={})=>{
-    requests++;const initial={url,status:200,headers:{'content-type':'video/mp4','content-length':String(data.length),'accept-ranges':'bytes'},stream:Readable.from([data])};if(!headers?.Range)return initial;
+    requests++;if(requests===4)queueMicrotask(()=>controller.abort());const initial={url,status:200,headers:{'content-type':'video/mp4','content-length':String(data.length),'accept-ranges':'bytes'},stream:Readable.from([data])};if(!headers?.Range)return initial;
     const [,start,end]=/bytes=(\d+)-(\d+)/.exec(headers.Range);return {...initial,status:206,headers:{...initial.headers,'content-range':`bytes ${start}-${end}/${data.length}`},stream:Readable.from((async function*(){await pause(20);yield data.subarray(Number(start),Number(end)+1);})())};
   };
-  const timer=setTimeout(()=>controller.abort(),10);
-  try{await assert.rejects(saveRemote(['https://a.bilivideo.com/cancel'],path.join(dir,'cancel'),{open,signal:controller.signal}),{name:'AbortError'});assert.equal(requests,4);}finally{clearTimeout(timer);await rm(dir,{recursive:true,force:true});}
+  try{await assert.rejects(saveRemote(['https://a.bilivideo.com/cancel'],path.join(dir,'cancel'),{open,signal:controller.signal}),{name:'AbortError'});assert.equal(requests,4);}finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('100-image jobs convert concurrently within four workers, retain order and ZIP actual JPG/PNG files',async()=>{

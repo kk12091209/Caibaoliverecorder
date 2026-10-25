@@ -7,6 +7,7 @@ import { Transform } from 'node:stream'
 import { createWriteStream } from 'node:fs'
 import { open as openFile } from 'node:fs/promises'
 import { ExpiringCache } from './cache.mjs'
+import { setTimeout as delay } from 'node:timers/promises'
 
 export const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1'
@@ -208,7 +209,7 @@ async function saveResponse(
 async function saveRanges(
   response,
   target,
-  { headers, signal, onProgress, maxBytes, open, total },
+  { headers, signal, onProgress, maxBytes, open, total, retryDelayMs = 250 },
 ) {
   response.stream.destroy()
   const file = await openFile(target, 'w')
@@ -220,39 +221,62 @@ async function saveRanges(
   const controller = new AbortController(),
     combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     counts = [0, 0, 0],
-    size = Math.ceil(total / 3)
+    size = Math.ceil(total / 3),
+    etag =
+      response.headers.etag && !response.headers.etag.startsWith('W/')
+        ? response.headers.etag
+        : null
   const tasks = counts.map(async (_, index) => {
     const start = index * size,
       end = Math.min(total - 1, start + size - 1)
-    const part = await open(response.url, {
-      headers: {
-        ...headers,
-        Range: `bytes=${start}-${end}`,
-        ...(response.headers.etag && !response.headers.etag.startsWith('W/')
-          ? { 'If-Range': response.headers.etag }
-          : {}),
-      },
-      signal: combined,
-      timeout: 60000,
-    })
-    if (part.status !== 206 || part.headers['content-range'] !== `bytes ${start}-${end}/${total}`) {
-      part.stream.destroy()
-      throw new Error('媒体源不支持分段下载。')
-    }
-    return saveResponse(part, target, {
-      signal: combined,
-      start,
-      expected: end - start + 1,
-      total,
-      maxBytes,
-      onProgress: (bytes) => {
-        counts[index] = bytes
-        onProgress?.(
-          counts.reduce((a, b) => a + b, 0),
+    for (let attempt = 0; ; attempt++) {
+      try {
+        combined.throwIfAborted()
+        const part = await open(response.url, {
+          headers: {
+            ...headers,
+            Range: `bytes=${start}-${end}`,
+            ...(etag ? { 'If-Range': etag } : {}),
+          },
+          signal: combined,
+          timeout: 60000,
+        })
+        if (
+          part.status !== 206 ||
+          part.headers['content-range'] !== `bytes ${start}-${end}/${total}` ||
+          (etag && part.headers.etag !== etag)
+        ) {
+          part.stream.destroy()
+          throw Object.assign(new Error('媒体源发生变化或不支持分段下载。'), { rangeChanged: true })
+        }
+        return await saveResponse(part, target, {
+          signal: combined,
+          start,
+          expected: end - start + 1,
           total,
+          maxBytes,
+          onProgress: (bytes) => {
+            counts[index] = Math.max(counts[index], bytes)
+            onProgress?.(
+              counts.reduce((a, b) => a + b, 0),
+              total,
+            )
+          },
+        })
+      } catch (error) {
+        // Without a strong validator, retaining successful ranges across a new
+        // request could silently combine different versions of the media.
+        if (
+          !etag ||
+          attempt >= 2 ||
+          combined.aborted ||
+          error.progressFailure ||
+          error.rangeChanged
         )
-      },
-    })
+          throw error
+        await delay(retryDelayMs * (attempt + 1), undefined, { signal: combined })
+      }
+    }
   })
   try {
     await Promise.all(tasks)
@@ -274,6 +298,7 @@ export async function saveRemote(
     maxBytes = 8 * 1024 ** 3,
     parallel = true,
     open = openRemote,
+    retryDelayMs,
   } = {},
 ) {
   let last
@@ -309,6 +334,7 @@ export async function saveRemote(
               maxBytes,
               open,
               total,
+              retryDelayMs,
             })),
             type,
           }

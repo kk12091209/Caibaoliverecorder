@@ -1,11 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { Cross2Icon, DownloadIcon, ReloadIcon } from '@radix-ui/react-icons'
-import { formatBytes, type DownloadJob } from './lib/media-downloader'
+import {
+  formatBytes,
+  getDownloadJob,
+  type DownloadJob,
+  type DownloadFile,
+} from './lib/media-downloader'
 import { ALBUM_BATCH_BYTES, albumBatch, fetchAlbumFiles } from './lib/media-save'
 
-export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: () => void }) {
+export function AlbumSaveDialog({
+  job: initialJob,
+  onClose,
+}: {
+  job: DownloadJob
+  onClose: () => void
+}) {
   const dialog = useRef<HTMLDialogElement>(null),
     controller = useRef<AbortController | null>(null)
+  const [job, setJob] = useState(initialJob)
+  const [batch, setBatch] = useState<DownloadFile[]>(() => albumBatch(initialJob.files, 0))
   const [start, setStart] = useState(0),
     [attempt, setAttempt] = useState(0),
     [files, setFiles] = useState<File[]>([]),
@@ -14,8 +27,7 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [returned, setReturned] = useState(false)
-  const batch = albumBatch(job.files, start),
-    total = batch.reduce((n, f) => n + f.bytes, 0),
+  const total = batch.reduce((n, f) => n + f.bytes, 0),
     next = start + batch.length
   const available =
       typeof navigator.share === 'function' && typeof navigator.canShare === 'function',
@@ -28,6 +40,32 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
       previous?.focus()
     }
   }, [])
+  useEffect(() => {
+    if (!['queued', 'running'].includes(initialJob.status)) return
+    const abort = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    let failures = 0
+    const poll = async () => {
+      try {
+        const updated = await getDownloadJob(initialJob.id, abort.signal)
+        if (abort.signal.aborted) return
+        failures = 0
+        setJob(updated)
+        if (['queued', 'running'].includes(updated.status))
+          timer = setTimeout(() => void poll(), 900)
+      } catch (reason) {
+        if (!abort.signal.aborted && ++failures <= 3)
+          timer = setTimeout(() => void poll(), 900 * failures)
+        else if (!abort.signal.aborted)
+          setError(reason instanceof Error ? reason.message : '未能更新后续文件状态。')
+      }
+    }
+    timer = setTimeout(() => void poll(), 900)
+    return () => {
+      clearTimeout(timer)
+      abort.abort()
+    }
+  }, [initialJob.id, initialJob.status])
   useEffect(() => {
     const abort = new AbortController()
     controller.current = abort
@@ -42,7 +80,7 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
     }
     setBusy(true)
     setStatus('正在将文件传到此设备…')
-    void fetchAlbumFiles(albumBatch(job.files, start), abort.signal, (received) => {
+    void fetchAlbumFiles(batch, abort.signal, (received) => {
       if (!abort.signal.aborted) setBytes(received)
     })
       .then((value) => {
@@ -60,7 +98,7 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
         if (!abort.signal.aborted) setBusy(false)
       })
     return () => abort.abort()
-  }, [job, start, attempt, available, large])
+  }, [batch, attempt, available, large])
   async function share() {
     if (!files.length || busy) return
     setError('')
@@ -96,10 +134,18 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
         </button>
       </div>
       <p>在系统菜单中选择“存储图像”或“储存视频”，保存后可在相册查看。</p>
-      {job.files.length > 1 && (
+      {job.count > 1 && (
         <p>
-          本组 {start + 1}–{next}，共 {job.files.length} 个文件。分组保存，无需解压。
+          本组 {start + 1}–{next}，共 {job.count} 个文件。分组保存，无需解压。
         </p>
+      )}
+      {['queued', 'running'].includes(job.status) && (
+        <p role="status">
+          后续文件准备中 · {job.current} / {job.count}，本组已可保存。
+        </p>
+      )}
+      {job.status === 'failed' && (
+        <p role="alert">{job.error} 已完成的文件仍可保存；其余文件请重新选择后重试。</p>
       )}
       {!available ? (
         <p className="md-album-help">
@@ -147,6 +193,7 @@ export function AlbumSaveDialog({ job, onClose }: { job: DownloadJob; onClose: (
           onClick={() => {
             setFiles([])
             setStart(next)
+            setBatch(albumBatch(job.files, next))
           }}
         >
           {returned ? '准备下一组' : '下一组（请先保存本组）'}

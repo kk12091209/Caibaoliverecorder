@@ -43,8 +43,21 @@ let closing = false
 const close = async () => {
   if (closing) return
   closing = true
-  server.close()
+  api.beginDrain()
+  const disconnected = new Promise((resolve) => server.close(resolve))
   server.closeIdleConnections()
+  let timer
+  try {
+    await Promise.race([
+      Promise.all([disconnected, api.idle()]),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 15000)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+  server.closeAllConnections()
   await api.close()
   process.exit(0)
 }

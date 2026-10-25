@@ -283,4 +283,8 @@ runtime/
 /release/
 /releases/
 
+# Device-local encrypted login state is never corresponding source.
+private-credentials/
+*.sealed
+
 /录播机.previous.exe

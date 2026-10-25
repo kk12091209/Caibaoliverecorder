@@ -64,7 +64,7 @@ if ($layoutVersion -eq 2) {
 $prefix = $root.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
 $outputPrefix = $OutputRoot.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
 if ($root -ne $OutputRoot -and !$root.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Release root escaped extraction destination.' }
-$forbidden = '(?i)(^|/)(data|originals|chunks|archives|exports|videos?|desktop-profile|profiles?|logs|\.git|\.tools|node_modules|bin|obj)(/|$)|(^|/)\.env($|\.)|\.(db(?:-wal|-shm)?|sqlite(?:-wal|-shm)?|log|pdb|map|flv|mp4|mkv|webm|mp3|wav)$'
+$forbidden = '(?i)(^|/)(data|originals|chunks|archives|exports|videos?|desktop-profile|profiles?|private-credentials|logs|\.git|\.tools|node_modules|bin|obj)(/|$)|(^|/)\.env($|\.)|\.(db(?:-wal|-shm)?|sqlite(?:-wal|-shm)?|log|pdb|map|flv|mp4|mkv|webm|mp3|wav|sealed)$'
 $listed = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 if (!@($manifest.files).Count) { throw 'Manifest contains no application files.' }
 foreach ($file in $manifest.files) {

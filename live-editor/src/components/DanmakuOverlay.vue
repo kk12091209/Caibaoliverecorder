@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
 import { danmakuGeometry, danmakuDuration, normalizedDanmakuStyle } from '../../shared/danmaku-style.js';
+import { containedVideoFrame } from '../../shared/video-geometry.js';
 
 const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
 const canvas = ref(null);
@@ -153,12 +154,12 @@ function resize() {
   const box = canvas.value.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
   if(!box.width||!box.height)return;
   const frameWidth=boundVideo?.videoWidth||1280,frameHeight=boundVideo?.videoHeight||720;
-  const fit=Math.min(box.width/frameWidth,box.height/frameHeight),newScale=fit*dpr;
+  const fitted=containedVideoFrame(box.width,box.height,frameWidth,frameHeight),newScale=fitted.scale*dpr;
   if(width===frameWidth&&height===frameHeight&&scale===newScale&&canvas.value.width===Math.round(box.width*dpr)&&canvas.value.height===Math.round(box.height*dpr))return;
   if (scale !== newScale) sprites.clear();
   width=frameWidth;height=frameHeight;scale=newScale;
   canvas.value.width=Math.round(box.width*dpr);canvas.value.height=Math.round(box.height*dpr);
-  context.setTransform(scale,0,0,scale,(box.width-width*fit)/2*dpr,(box.height-height*fit)/2*dpr);
+  context.setTransform(scale,0,0,scale,fitted.left*dpr,fitted.top*dpr);
   updateStyle();
 }
 let fontGeneration=0,customFace;

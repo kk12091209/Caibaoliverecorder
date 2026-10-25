@@ -1,16 +1,28 @@
-import { mkdtemp, chmod, mkdir, stat, statfs, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdtemp,
+  chmod,
+  mkdir,
+  stat,
+  statfs,
+  rm,
+  rename,
+  writeFile,
+  readdir,
+} from 'node:fs/promises'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { runMedia } from '../media/process.mjs'
 import { once } from 'node:events'
 import { Zip, ZipPassThrough } from 'fflate'
 import { newId } from '../platforms/resolver.mjs'
 import { saveRemote } from '../infrastructure/network.mjs'
 import { MediaImages } from '../media/images.mjs'
-import { waitFor } from '../infrastructure/cache.mjs'
+import { waitFor, WorkPool, StageTimings } from '../infrastructure/cache.mjs'
 import { mediaTool as tool } from '../media/tools.mjs'
 import { muxRemoteMp4 } from '../media/streaming.mjs'
+import { reusableMp4 } from '../media/mp4-reuse.mjs'
 
 export function fileStem(input) {
   return (
@@ -27,34 +39,9 @@ function videoName(result, asset) {
 function archiveName(result, count) {
   return `${fileStem(result.title)}_已选${count}项.zip`
 }
-function run(command, args, signal) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], signal })
-    let output = '',
-      error = ''
-    child.stdout.on('data', (data) => {
-      if (output.length < 100000) output += data
-    })
-    child.stderr.on('data', (data) => {
-      error = (error + data).slice(-12000)
-    })
-    child.once('error', reject)
-    child.once('close', (code) =>
-      code === 0
-        ? resolve(output)
-        : reject(
-            new Error(
-              /ENOENT/.test(error)
-                ? '需要 FFmpeg 才能合并 B 站音画。'
-                : `媒体合并失败（${code}），请重试。`,
-            ),
-          ),
-    )
-  })
-}
 async function probe(file, signal) {
   try {
-    const raw = await run(
+    const raw = await runMedia(
       await tool('ffprobe'),
       [
         '-v',
@@ -66,6 +53,7 @@ async function probe(file, signal) {
         file,
       ],
       signal,
+      { idleMs: 15000 },
     )
     const data = JSON.parse(raw),
       v = data.streams?.find((x) => x.codec_type === 'video')
@@ -142,6 +130,15 @@ export class DownloadJobs {
     this.queue = []
     this.running = 0
     this.pending = new Set()
+    this.network = new WorkPool(4)
+    this.media = new WorkPool(1)
+    // Streaming copy spends most of its lifetime waiting for the CDN. Keep it
+    // separate from local remux/probe/ZIP work so a slow stream cannot block
+    // already-downloaded files. Neither path transcodes the video.
+    this.streams = new WorkPool(2)
+    this.metadata = new WorkPool(2)
+    this.imageTasks = new WorkPool(4)
+    this.closed = false
     this.tempDir = path.resolve(tempDir)
     this.fileServer = fileServer
     this.root = mkdtemp(path.join(this.tempDir, 'caibao-downloader-')).then(async (root) => {
@@ -181,7 +178,9 @@ export class DownloadJobs {
       }
   }
   create(session, indices, delivery = 'file') {
-    if (!['file', 'stream', 'album'].includes(delivery)) throw new Error('不支持的保存方式。')
+    if (this.closed || this.draining) throw new Error('下载服务正在停止，请稍后重试。')
+    if (!['file', 'stream', 'album', 'preview'].includes(delivery))
+      throw new Error('不支持的保存方式。')
     if (
       !Array.isArray(indices) ||
       !indices.length ||
@@ -189,6 +188,34 @@ export class DownloadJobs {
       indices.some((i) => !Number.isInteger(i) || !session.result.assets.some((a) => a.index === i))
     )
       throw new Error('请选择要下载的图片或分 P。')
+    const unique = [...new Set(indices)].sort((a, b) => a - b)
+    const reuseKey = createHash('sha256')
+      .update(JSON.stringify([session.owner, session.result, unique]))
+      .digest('hex')
+    const ready = [...this.jobs.values()].find(
+      (job) =>
+        ['queued', 'running', 'done'].includes(job.status) &&
+        job.reuseKey === reuseKey &&
+        (job.delivery === delivery ||
+          (delivery === 'preview' && unique.length === 1 && !job.album) ||
+          (delivery === 'stream' && job.delivery === 'preview') ||
+          (!job.album && delivery !== 'album' && session.result.platform !== 'bilibili')) &&
+        Date.now() - job.created < Math.min(this.keepMs, 600000),
+    )
+    if (ready) {
+      // A preview already preparing a standard file can also serve a native
+      // download. Attach to the same producer; do not fetch the source twice.
+      if (delivery === 'stream' && !ready.attachment) {
+        const asset = session.result.assets.find((a) => a.index === unique[0])
+        ready.attachment =
+          unique.length > 1
+            ? { name: archiveName(session.result, unique.length), type: 'application/zip' }
+            : asset.type !== 'image'
+              ? { name: videoName(session.result, asset), type: 'video/mp4' }
+              : null
+      }
+      return this.public(ready)
+    }
     if (this.queue.length + this.running >= 10) throw new Error('下载任务较多，请等当前任务完成。')
     if (
       this.publicMode &&
@@ -197,8 +224,7 @@ export class DownloadJobs {
       ).length >= 2
     )
       throw new Error('已有两个下载任务正在处理，请稍后再添加。')
-    const unique = [...new Set(indices)].sort((a, b) => a - b),
-      id = newId()
+    const id = newId()
     const streamMode =
       delivery === 'stream' &&
       unique.length === 1 &&
@@ -218,6 +244,9 @@ export class DownloadJobs {
     const job = {
       id,
       created: Date.now(),
+      reuseKey,
+      delivery,
+      timings: new StageTimings(),
       session,
       indices: unique,
       streamMode,
@@ -244,9 +273,22 @@ export class DownloadJobs {
     return this.public(job)
   }
   public(job) {
+    const readyFiles = job.album
+      ? job.indices.map((index) => job.files.find((file) => file.index === index))
+      : job.files
+    // A stable prefix prevents out-of-order image workers from moving a file
+    // between album batches while the user has the system share sheet open.
+    const missing = readyFiles.indexOf(undefined)
+    const files =
+      job.album && job.status === 'running' && missing >= 0
+        ? readyFiles.slice(0, missing)
+        : readyFiles.filter(Boolean)
     return {
       id: job.id,
-      downloadUrl: `/api/downloader/jobs/${job.id}/${job.attachment ? 'stream' : 'download'}`,
+      // Reused completed jobs must go straight to the immutable file. A fetch
+      // followed through /stream's redirect is not a valid navigation response
+      // for Chrome's download worker, and also adds an unnecessary round trip.
+      downloadUrl: `/api/downloader/jobs/${job.id}/${job.attachment && job.status !== 'done' ? 'stream' : 'download'}`,
       streaming: !!job.stream?.bytes,
       status: job.status,
       phase: job.phase,
@@ -255,7 +297,8 @@ export class DownloadJobs {
       bytes: job.bytes,
       total: job.total,
       error: job.error,
-      files: job.files.map(({ path: _path, ...file }) => ({
+      timings: job.timings.snapshot(),
+      files: files.map(({ path: _path, ...file }) => ({
         ...file,
         url: `/api/downloader/jobs/${job.id}/files/${file.id}?download=1`,
         previewUrl: `/api/downloader/jobs/${job.id}/files/${file.id}`,
@@ -285,17 +328,18 @@ export class DownloadJobs {
     job.finish()
   }
   async drain() {
-    while (this.running < 2 && this.queue.length) {
+    while (!this.closed && this.running < 10 && this.queue.length) {
       const job = this.queue.shift()
       if (job.status === 'cancelled') continue
       this.running++
       const pending = this.perform(job)
         .catch((error) => {
-          job.status = 'failed'
-          job.error = error.message
-          job.phase = '下载失败'
+          job.status = job.controller.signal.aborted ? 'cancelled' : 'failed'
+          job.error = job.controller.signal.aborted ? '' : error.message
+          job.phase = job.controller.signal.aborted ? '已取消' : '下载失败'
         })
         .finally(() => {
+          job.timings.finish()
           job.finish()
           this.pending.delete(pending)
           this.running--
@@ -309,7 +353,12 @@ export class DownloadJobs {
       operation = new AbortController(),
       signal = AbortSignal.any([job.controller.signal, operation.signal]),
       dir = path.join(await this.root, job.id)
+    signal.throwIfAborted()
     await mkdir(dir)
+    const stage = (name, pool, work) =>
+      job.timings.run(name, pool, work, { signal, owner: job.session.owner })
+    const run = (command, args) =>
+      stage('mux', this.media, () => runMedia(command, args, signal, { progress: true }))
     const progress = new Map()
     job.outputBytes = 0
     const onProgress = (key) => (bytes, total) => {
@@ -323,12 +372,14 @@ export class DownloadJobs {
         throw new Error('临时下载空间已满，请稍后重试。')
     }
     const download = (urls, target, referer) =>
-      this.saveMedia(urls, target, {
-        referer,
-        signal,
-        maxBytes: this.maxFileBytes,
-        onProgress: onProgress(target),
-      })
+      stage('download', this.network, () =>
+        this.saveMedia(urls, target, {
+          referer,
+          signal,
+          maxBytes: this.maxFileBytes,
+          onProgress: onProgress(target),
+        }),
+      )
     const processAsset = async (index) => {
       signal.throwIfAborted()
       const asset = result.assets.find((a) => a.index === index)
@@ -336,14 +387,17 @@ export class DownloadJobs {
         name,
         type,
         quality = asset.quality || '',
-        metadata = {}
+        metadata = null
       if (asset.type === 'image') {
         job.phase = '正在下载图片并保存为 JPG / PNG'
-        const info = await this.images.download(asset.urls, {
-          referer: result.url,
-          signal,
-          onProgress: onProgress(String(index)),
-        })
+        const info = await stage('images', this.imageTasks, () =>
+          this.images.download(asset.urls, {
+            referer: result.url,
+            signal,
+            owner: job.session.owner,
+            onProgress: onProgress(String(index)),
+          }),
+        )
         signal.throwIfAborted()
         name = `${fileStem(result.title)}_${String(index).padStart(3, '0')}.${info.extension}`
         target = path.join(dir, `${index}.${info.extension}`)
@@ -366,48 +420,62 @@ export class DownloadJobs {
           const raw = path.join(dir, `${index}.source`)
           await download(asset.urls, raw, result.url)
           job.phase = '正在准备 MP4'
-          await run(
-            await tool('ffmpeg'),
-            [
-              '-hide_banner',
-              '-loglevel',
-              'error',
-              '-nostdin',
-              '-y',
-              '-i',
-              raw,
-              '-map',
-              '0:v:0',
-              '-map',
-              '0:a:0?',
-              '-c',
-              'copy',
-              '-movflags',
-              '+faststart',
-              target,
-            ],
-            signal,
-          )
-          await rm(raw)
+          metadata = await stage('validate', this.media, () => reusableMp4(raw, signal))
+          if (metadata) {
+            signal.throwIfAborted()
+            await rename(raw, target)
+            job.originalMp4 = (job.originalMp4 || 0) + 1
+          } else {
+            await run(
+              await tool('ffmpeg'),
+              [
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-nostdin',
+                '-y',
+                '-i',
+                raw,
+                '-map',
+                '0:v:0',
+                '-map',
+                '0:a:0?',
+                '-c',
+                'copy',
+                '-movflags',
+                '+faststart',
+                target,
+              ],
+              signal,
+            )
+            await rm(raw)
+          }
         } else {
-          const sources = await this.resolver.bilibiliStreams(result, asset, signal)
+          const sources = await stage('resolve', this.metadata, () =>
+            this.resolver.bilibiliStreams(result, asset, signal),
+          )
           quality = sources.quality
           if (sources.video && job.streamMode) {
             job.phase = `正在边合并边下载 · ${quality}`
             job.stream = { path: target, name, type, bytes: 0 }
-            await muxRemoteMp4(sources, target, {
-              command: await tool('ffmpeg'),
-              signal,
-              maxBytes: Math.min(this.maxFileBytes, this.maxJobBytes),
-              onProgress,
-              onOutput: (bytes) => {
-                job.stream.bytes = bytes
-                job.outputBytes = bytes
-                if (this.storageUsage() > this.maxStorageBytes)
-                  throw new Error('临时下载空间已满，请稍后重试。')
-                job.publishStream()
-              },
-            })
+            await stage('stream', this.streams, () =>
+              stage('download', this.network, async () =>
+                muxRemoteMp4(sources, target, {
+                  command: await tool('ffmpeg'),
+                  signal,
+                  maxBytes: Math.min(this.maxFileBytes, this.maxJobBytes),
+                  onProgress,
+                  onOutput: (bytes) => {
+                    job.stream.bytes = bytes
+                    job.outputBytes = bytes
+                    if (this.storageUsage() > this.maxStorageBytes)
+                      throw new Error('临时下载空间已满，请稍后重试。')
+                    job.timings.ready()
+                    job.publishStream()
+                  },
+                }),
+              ),
+            )
           } else if (sources.video) {
             job.phase = `正在下载音画 · ${quality}`
             const video = path.join(dir, `${index}.video`),
@@ -509,7 +577,7 @@ export class DownloadJobs {
             await Promise.all(segments.map((p) => rm(p)))
           }
         }
-        metadata = await probe(target, signal)
+        metadata ||= await stage('probe', this.media, () => probe(target, signal))
         job.outputBytes = job.streamMode
           ? (await stat(target)).size
           : job.outputBytes + (await stat(target)).size
@@ -529,6 +597,7 @@ export class DownloadJobs {
         ...metadata,
       })
       job.current++
+      job.timings.ready()
     }
     try {
       job.status = 'running'
@@ -554,7 +623,7 @@ export class DownloadJobs {
       if (job.files.length > 1 && !job.album) {
         job.phase = '正在打包所选文件'
         const target = path.join(dir, 'selected.zip')
-        await archive(job.files, target, signal)
+        await stage('archive', this.media, () => archive(job.files, target, signal))
         job.archive = {
           id: newId(),
           name: archiveName(result, job.files.length),
@@ -571,15 +640,31 @@ export class DownloadJobs {
       job.status = cancelled ? 'cancelled' : 'failed'
       job.phase = cancelled ? '已取消' : '下载失败'
       job.error = cancelled ? '' : error.message
-      await rm(dir, { recursive: true, force: true })
-      job.files = []
+      if (job.album && !cancelled && job.files.length) {
+        const complete = new Set(job.files.map((file) => path.basename(file.path)))
+        await Promise.all(
+          (await readdir(dir))
+            .filter((file) => !complete.has(file))
+            .map((file) => rm(path.join(dir, file), { force: true })),
+        )
+      } else {
+        await rm(dir, { recursive: true, force: true })
+        job.files = []
+      }
       job.archive = null
     }
   }
   async close() {
+    this.closed = true
     for (const job of this.jobs.values()) this.cancel(job.id)
     await Promise.allSettled(this.pending)
     await rm(await this.root, { recursive: true, force: true })
     if (this.ownsImages) await this.images.close()
+  }
+  beginDrain() {
+    this.draining = true
+  }
+  async idle() {
+    await Promise.allSettled([...this.pending])
   }
 }

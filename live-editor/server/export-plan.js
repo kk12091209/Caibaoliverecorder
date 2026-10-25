@@ -3,6 +3,7 @@ import path from 'node:path';
 import {sourceStream,seekBase} from './ingest.js';
 import {canCopyFullSource} from './export-encoding.js';
 import {codecHeaderSignature} from './source-range-identity.js';
+import {cameraLayout} from '../shared/recording-style.js';
 
 // One timeline is shared by original-picture and burned-in exports. A full
 // recording omits unavailable intervals; precise clips must never invent them.
@@ -51,6 +52,7 @@ export async function sourceExportPlan(media,job,sources,firstInfo) {
   }
   const canCopyStreams=!reason;
   if(!reason&&(job.linkmicEvents||[]).some(e=>e.participants.length))reason='需要把连麦标注绘入画面。';
+  if(!reason&&job.recordingStyle&&job.recordingStyle.cameraPosition!=='original'&&(job.cameraEvents||[]).some(e=>cameraLayout(e.layout)&&segments.some(s=>s.source.id===e.source&&s.from<e.end&&s.to>e.time)))reason='需要按录制样式调整独立摄像头。';
   return {entries,segments,duration:segments.reduce((sum,e)=>sum+e.to-e.from,0),canCopyStreams,canCopyOriginal:!reason,reason};
 }
 

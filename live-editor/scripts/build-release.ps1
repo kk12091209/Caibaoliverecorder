@@ -72,7 +72,7 @@ foreach ($target in @($stage, "$stage.7z", "$stage.zip", "$stage-setup.exe")) {
     if (Test-Path -LiteralPath $target) { throw "Release target already exists: $target" }
 }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
-$forbidden = '(?i)(^|/)(data|originals|chunks|archives|exports|videos?|desktop-profile|profiles?|logs|\.git|\.tools|node_modules|bin|obj)(/|$)|(^|/)\.env($|\.)|\.(db(?:-wal|-shm)?|sqlite(?:-wal|-shm)?|log|pdb|map|flv|mp4|mkv|webm|mp3|wav)$'
+$forbidden = '(?i)(^|/)(data|originals|chunks|archives|exports|videos?|desktop-profile|profiles?|private-credentials|logs|\.git|\.tools|node_modules|bin|obj)(/|$)|(^|/)\.env($|\.)|\.(db(?:-wal|-shm)?|sqlite(?:-wal|-shm)?|log|pdb|map|flv|mp4|mkv|webm|mp3|wav|sealed)$'
 function Add-File([string]$source, [string]$relative) {
     $relative = $relative.Replace('\','/')
     if ($relative -match $forbidden -or $relative -match '(^|/)\.\.(/|$)' -or $relative.Contains(':') -or [IO.Path]::IsPathRooted($relative)) { throw "Forbidden release path: $relative" }
@@ -101,6 +101,7 @@ Add-ComponentFile (Join-Path $ProjectRoot 'THIRD_PARTY_NOTICES.md') 'licenses/TH
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'docs\licenses') -File -Filter '*.txt') { Add-ComponentFile $file.FullName ('licenses/douyin/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'package.json') 'live-editor/package.json'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'server') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/server/' + $file.Name) }
+Add-ComponentFile (Join-Path $AppRoot 'server\cookie-protection.ps1') 'live-editor/server/cookie-protection.ps1'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'shared') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/shared/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'dist\index.html') 'live-editor/dist/index.html'
 # Only reachable build assets are included, so old hashed bundles cannot accumulate.
