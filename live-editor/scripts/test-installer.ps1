@@ -67,8 +67,12 @@ try {
     foreach ($file in $manifest.files) { Assert-Installer ((Get-FileHash -LiteralPath (Join-Path $target $file.path)).Hash.ToLowerInvariant() -eq $file.sha256) ('Installed file differs: ' + $file.path) }
     $preserved = @('程序组件/live-editor/data/originals/fixture.bin','程序组件/live-editor/data/chunks/fixture/00000000.flvpart','导出视频默认路径/完整素材/fixture.mp4','导出视频默认路径/导出片段/fixture.mp4',
       '程序组件/live-editor/data/render-cache/fixture/cache.mp4','程序组件/live-editor/data/temp/fixture/work.bin',
+      '程序组件/live-editor/data/private-credentials/bilibili.sealed',
       '程序组件/live-editor/data/desktop-profile/fixture.cache','程序组件/live-editor/data/editor.sqlite.backup','unregistered.txt')
     foreach ($file in $preserved) { $full=Join-Path $target $file; New-Item -ItemType Directory -Force -Path (Split-Path $full -Parent) | Out-Null; [IO.File]::WriteAllText($full,'private synthetic fixture',$utf8) }
+    # Older installations retain this PNG alongside the current WebP asset.
+    # The upgraded app must use its own manifest rather than count both files.
+    [IO.File]::WriteAllText((Join-Path $target '程序组件/live-editor/dist/assets/danmaku-style-preview-CA9CuaY9.png'),'legacy preview fixture',$utf8)
     $link = Join-Path $target 'outside-link'
     New-Item -ItemType Junction -Path $link -Target $shared | Out-Null
     $marker = Join-Path $target '程序组件/installation-owner.txt'
@@ -98,6 +102,8 @@ db.close();
     Assert-Installer ((Invoke-Setup $installer $arguments) -eq 0) 'Idle upgrade failed.'
     Wait-BackendExit
     foreach ($file in $preserved) { Assert-Installer ([IO.File]::ReadAllText((Join-Path $target $file)) -eq 'private synthetic fixture') ('Upgrade changed user data: '+$file) }
+    & $node (Join-Path $PSScriptRoot 'verify-packaged-style-preview.js') (Join-Path $target '程序组件')
+    Assert-Installer ($LASTEXITCODE -eq 0) 'Upgraded danmaku preview failed with legacy background assets.'
     # Exercise the actual automatic-update helper against the isolated Inno
     # package. Hold a synthetic GUI alive to prove installation waits for exit.
     $autoRoot=Join-Path $qaRoot 'automatic-update'

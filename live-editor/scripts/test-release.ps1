@@ -88,6 +88,12 @@ foreach ($item in Get-ChildItem -LiteralPath $root -Recurse -Force) {
 if ($LASTEXITCODE -ne 0) { throw 'Bundled Node/SQLite check failed.' }
 & (Join-Path $componentRoot 'runtime\ffmpeg\ffmpeg.exe') -v error -f lavfi -i 'color=size=64x64:rate=60:duration=0.1' -c:v libx264 -f null -
 if ($LASTEXITCODE -ne 0) { throw 'Bundled FFmpeg encode check failed.' }
-$result = [ordered]@{ package=[IO.Path]::GetFileName($Package); sha256=(Get-FileHash -LiteralPath $Package -Algorithm SHA256).Hash.ToLowerInvariant(); layoutVersion=$layoutVersion; extractSeconds=[Math]::Round($clock.Elapsed.TotalSeconds,3); extractionPeakWorkingSetBytes=$peakBytes; verifiedFiles=$listed.Count; extractedRoot=$root; componentRoot=$componentRoot; emptyExportDirectories=if ($layoutVersion -eq 2) { 'passed' } else { 'not-applicable' }; nodeSQLite='passed'; softwareEncode='passed' }
+$stylePreviewCheck = 'not-applicable-to-legacy-baseline'
+if (([version]$manifest.version) -ge [version]'0.3.0') {
+    & (Join-Path $componentRoot 'runtime\node\node.exe') (Join-Path $PSScriptRoot 'verify-packaged-style-preview.js') $componentRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled danmaku style preview check failed.' }
+    $stylePreviewCheck = 'passed'
+}
+$result = [ordered]@{ package=[IO.Path]::GetFileName($Package); sha256=(Get-FileHash -LiteralPath $Package -Algorithm SHA256).Hash.ToLowerInvariant(); layoutVersion=$layoutVersion; extractSeconds=[Math]::Round($clock.Elapsed.TotalSeconds,3); extractionPeakWorkingSetBytes=$peakBytes; verifiedFiles=$listed.Count; extractedRoot=$root; componentRoot=$componentRoot; emptyExportDirectories=if ($layoutVersion -eq 2) { 'passed' } else { 'not-applicable' }; nodeSQLite='passed'; softwareEncode='passed'; danmakuStylePreview=$stylePreviewCheck }
 $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputRoot 'verification.json') -Encoding UTF8
 $result | ConvertTo-Json

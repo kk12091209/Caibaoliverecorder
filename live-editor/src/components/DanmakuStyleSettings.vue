@@ -8,7 +8,7 @@ const props=defineProps({style:Object,font:Object,rate:{type:Number,default:50}}
 const initial=normalizedDanmakuStyle(props.style),sizeIndex=ref(DANMAKU_SIZE_STEPS.indexOf(initial.size)),opacity=ref(initial.opacity),rate=ref(props.rate);
 const speed=ref(initial.speed),fps=ref(initial.fps),confirmFps=ref(false),cancelFps=ref(null),fps30=ref(null),fps60=ref(null);
 const areaTop=ref(initial.areaTop),areaHeight=ref(initial.areaHeight);
-const font=ref(props.font),error=ref(''),saving=ref(false),saved=ref(false),fontBusy=ref(false),previewReady=ref(false);
+const font=ref(props.font),error=ref(''),saving=ref(false),saved=ref(false),fontBusy=ref(false);
 const draft=computed(()=>({size:DANMAKU_SIZE_STEPS[sizeIndex.value],opacity:opacity.value,speed:speed.value,fps:fps.value,areaTop:areaTop.value,areaHeight:areaHeight.value}));
 function changeArea(area){areaTop.value=area.areaTop;areaHeight.value=area.areaHeight;}
 watch(()=>[sizeIndex.value,opacity.value,speed.value,fps.value,areaTop.value,areaHeight.value,rate.value,font.value?.id],()=>saved.value=false);
@@ -20,7 +20,7 @@ async function selectFps(event){
 }
 async function finishFps(confirmed){fps.value=confirmed?60:30;confirmFps.value=false;await nextTick();(confirmed?fps60:fps30).value?.focus();}
 async function persist(){
-  if(saving.value||fontBusy.value||!previewReady.value||confirmFps.value)return;
+  if(saving.value||fontBusy.value||confirmFps.value)return;
   saving.value=true;error.value='';
   try{const result=await api('settings',{danmakuStyle:{...draft.value},danmakuPerSecond:rate.value,danmakuFont:font.value?.id||null});emit('changed',result);saved.value=true;}
   catch(e){error.value=e.message;saved.value=false;}
@@ -28,7 +28,7 @@ async function persist(){
 }
 </script>
 <template><div class="danmaku-style-editor">
-  <DanmakuStylePreview :style="draft" :font="font" :rate="rate" :disabled="saving||fontBusy" @area-change="changeArea" @ready="previewReady=$event"/>
+  <DanmakuStylePreview :style="draft" :font="font" :rate="rate" :disabled="saving||fontBusy" @area-change="changeArea"/>
   <div class="style-sliders">
     <label class="style-control" for="style-rate"><span>每秒弹幕上限<output for="style-rate">{{ rate }} 条</output></span><input id="style-rate" v-model.number="rate" type="range" min="1" max="50" step="1" :style="{'--style-fill':((rate-1)/49*100)+'%'}" :disabled="saving||fontBusy"/><small>1 条<span>50 条</span></small></label>
     <label class="style-control" for="style-size"><span>弹幕字号<output for="style-size">{{ draft.size }}<small v-if="draft.size===0.6">默认</small></output></span><input id="style-size" v-model.number="sizeIndex" type="range" min="0" :max="DANMAKU_SIZE_STEPS.length-1" step="1" :style="{'--style-fill':(sizeIndex/(DANMAKU_SIZE_STEPS.length-1)*100)+'%'}" :aria-valuetext="String(draft.size)" :disabled="saving||fontBusy"/><small>0.4<span>5</span></small></label>
@@ -44,7 +44,7 @@ async function persist(){
   <p class="style-hint">点击「保存样式」后，展示区域、字体、密度、字号、不透明度、速度与帧率一起应用于预览和新建导出。已创建的导出任务保留原设置。0.6 保持原有字号，1.0 倍保持原有滚动速度。</p>
   <p class="style-save-state" role="status">{{ saving?'正在保存…':saved?'样式已保存':'预览调整尚未保存' }}</p>
   <p v-if="error" class="inline-warning" role="alert">{{ error }}</p>
-<div class="style-actions"><button class="button" :disabled="saving||fontBusy" @click="emit('close')">返回设置</button><button class="button primary" :disabled="saving||fontBusy||!previewReady||confirmFps" @click="persist">{{ saving?'正在保存…':'保存样式' }}</button></div>
+<div class="style-actions"><button class="button" :disabled="saving||fontBusy" @click="emit('close')">返回设置</button><button class="button primary" :disabled="saving||fontBusy||confirmFps" @click="persist">{{ saving?'正在保存…':'保存样式' }}</button></div>
 </div></template>
 <style scoped>
 .style-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.style-sliders{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.style-control{display:block;min-width:0}.style-control>span{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;gap:8px;margin-bottom:10px}.style-control output{color:var(--rose-dark);white-space:nowrap}.style-control output small{font-weight:400;font-size:10px;margin-left:5px}.style-control>small{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;font-weight:400;margin-top:7px}.style-control input{width:100%;display:block;margin:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;appearance:none;-webkit-appearance:none;cursor:pointer;height:24px}.style-control input:focus{border:0;box-shadow:none}.style-control input:focus-visible{outline:2px solid var(--rose);outline-offset:4px;border-radius:4px}

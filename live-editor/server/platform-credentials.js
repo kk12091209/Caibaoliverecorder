@@ -4,7 +4,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
-export const COOKIE_PLATFORMS=['bilibili','douyin'];
+export const COOKIE_PLATFORMS=['bilibili'];
 const MAX_COOKIE=32768,appRoot=fileURLToPath(new URL('..',import.meta.url));
 const failure=()=>new Error('系统安全存储不可用，Cookie 未保存。请解锁系统钥匙串或检查应用组件后重试。');
 export function normalizePlatformCookie(platform,input){
@@ -17,7 +17,6 @@ export function normalizePlatformCookie(platform,input){
     parts.set(match[1],match[2]);
   }
   if(platform==='bilibili'&&(!parts.get('SESSDATA')||!/^\d{1,20}$/.test(parts.get('DedeUserID')||'')))throw new Error('B 站 Cookie 需要包含 SESSDATA 和 DedeUserID。');
-  if(platform==='douyin'&&!parts.get('sessionid')&&!parts.get('sessionid_ss'))throw new Error('抖音 Cookie 需要包含 sessionid 或 sessionid_ss。');
   return [...parts].map(([key,value])=>`${key}=${value}`).join('; ');
 }
 
@@ -44,7 +43,7 @@ export class NativeCookieProtection {
     return new Promise((resolve,reject)=>{
       let child,output=[],size=0,settled=false;
       const done=(error,result)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(failure()):resolve(result);};
-      const timer=setTimeout(()=>{child?.kill();done(true);},15000);
+      const timer=setTimeout(()=>{child?.kill();done(true);},operation==='unlock'?120000:15000);
       try{child=this.launch(executable,args,{windowsHide:true,stdio:['pipe','pipe','pipe']});}catch{done(true);return;}
       child.on('error',()=>done(true));child.stdin.on('error',()=>done(true));child.stderr.resume();
       child.stdout.on('data',chunk=>{size+=chunk.length;if(size>192*1024){child.kill();done(true);}else output.push(chunk);});
@@ -59,6 +58,8 @@ export class NativeCookieProtection {
 
 export class PlatformCredentials {
   constructor(root,{protection=new NativeCookieProtection(),diagnostics}={}){
+    // Persistent scope uses the existing user-data root, never a release
+    // version or helper hash. Updates must reuse that root and this format.
     this.directory=path.join(root,'private-credentials');this.namespace=createHash('sha256').update(path.resolve(root)).digest('hex');
     this.protection=protection;this.diagnostics=diagnostics;this.values=new Map();this.states=new Map();this.pending=Promise.resolve();this.available=false;
   }
@@ -66,20 +67,33 @@ export class PlatformCredentials {
   snapshot(){return {available:this.available,storage:this.protection.label,platforms:Object.fromEntries(COOKIE_PLATFORMS.map(p=>[p,{configured:this.states.get(p)?.configured===true,loaded:this.values.has(p),error:this.states.get(p)?.error||''}]))};}
   get(platform){return this.values.get(platform)||'';}
   protect(value){this.diagnostics?.protectSecret(value);for(const raw of value.split(';')){const part=raw.trim();this.diagnostics?.protectSecret(part.slice(part.indexOf('=')+1));}}
+  async restore(platform,operation='open'){
+    const directory=await fs.lstat(this.directory),file=this.file(platform);
+    if(!directory.isDirectory()||directory.isSymbolicLink())throw failure();
+    const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>96*1024)throw failure();
+    const plain=await this.protection.run(operation,this.namespace,platform,await fs.readFile(file));let value;
+    try{value=normalizePlatformCookie(platform,plain.toString('utf8'));}finally{plain.fill(0);}
+    this.protect(value);this.values.set(platform,value);this.states.set(platform,{configured:true});
+  }
   async initialize(){
     this.available=await this.protection.available();
     try{const directory=await fs.lstat(this.directory);if(!directory.isDirectory()||directory.isSymbolicLink())throw failure();}
     catch(error){if(error.code!=='ENOENT'){for(const platform of COOKIE_PLATFORMS)this.states.set(platform,{configured:true,error:'安全保存目录异常，请检查本机数据目录。'});return this;}}
+    // Retire the old account cookie without decrypting or loading it. unlink
+    // removes only this entry, and never follows a link to an outside file.
+    try{await fs.unlink(path.join(this.directory,'douyin.sealed'));}
+    catch(error){if(error.code!=='ENOENT')this.diagnostics?.record('Cookie 管理','旧版抖音 Cookie 未能清理，已停止使用。',{level:'警告'});}
     for(const platform of COOKIE_PLATFORMS){
-      const file=this.file(platform);let bytes;
-      try{const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>96*1024)throw failure();bytes=await fs.readFile(file);}
-      catch(error){if(error.code!=='ENOENT')this.states.set(platform,{configured:true,error:'安全保存项无法读取，请重新填写。'});continue;}
-      try{const plain=await this.protection.run('open',this.namespace,platform,bytes);let value;try{value=normalizePlatformCookie(platform,plain.toString('utf8'));}finally{plain.fill(0);}this.protect(value);this.values.set(platform,value);this.states.set(platform,{configured:true});}
-      catch{this.states.set(platform,{configured:true,error:'系统未能解锁 Cookie，本次暂以未登录方式工作。可解锁后重新启动或重新填写。'});}
+      try{await this.restore(platform);}
+      catch(error){if(error.code!=='ENOENT')this.states.set(platform,{configured:true,error:'安全保存项无法读取或未能解锁，暂以未登录方式工作。可点击“解锁已保存的 Cookie”完成系统授权，无需重新填写。'});}
     }
     return this;
   }
   serial(work){const operation=this.pending.catch(()=>{}).then(work);this.pending=operation;return operation;}
+  unlock(platform){return this.serial(async()=>{
+    try{await this.restore(platform,'unlock');}catch{throw new Error('未能解锁已保存的 Cookie，请完成系统授权后重试。原内容已保留。');}
+    return this.snapshot();
+  });}
   save(platform,input){return this.serial(async()=>{
     const value=normalizePlatformCookie(platform,input);this.protect(value);
     const plain=Buffer.from(value);let sealed;try{sealed=await this.protection.run('seal',this.namespace,platform,plain);}finally{plain.fill(0);}

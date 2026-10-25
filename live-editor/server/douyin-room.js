@@ -142,10 +142,8 @@ export function selectDouyinIndependentFlv(stream={}) {
 }
 
 export class DouyinResolver {
-  constructor({ request = fetch, now = Date.now, credentials } = {}) { this.request = request; this.now = now; this.credentials=credentials;this.visitor = null; this.refreshing = null;this.authIdentity=(randomBytes(8).readBigUInt64BE() & 9223372036854775807n).toString(); }
+  constructor({ request = fetch, now = Date.now } = {}) { this.request = request; this.now = now; this.visitor = null; this.refreshing = null; }
   async cookie(signal) {
-    const saved=this.credentials?.get('douyin');
-    if(saved)return {cookie:saved,userUniqueId:this.authIdentity,expires:Infinity};
     if (this.visitor && this.visitor.expires > this.now()) return this.visitor;
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
@@ -199,12 +197,5 @@ export class DouyinResolver {
     if(result.status_code!==0||!Array.isArray(result.data?.user))throw new Error('连麦名单暂时不可用。');
     return result.data.user.slice(0,64).map(entry=>({linkId:String(entry.linkmic_id_str||''),id:String(entry.user?.id_str||''),name:labelText(entry.user?.nickname),avatarUrl:avatarUrl(entry.user),...(/^[1-9]\d{0,19}$/.test(entry.user?.web_rid||'')?{webRid:entry.user.web_rid}:{})}))
       .filter(person=>/^[\w-]{1,100}$/.test(person.linkId)&&/^\d{1,20}$/.test(person.id));
-  }
-  async verifyCookie(){
-    const visitor=await this.cookie(),query=new URLSearchParams({aid:'6383',app_name:'douyin_web',live_id:'1',device_platform:'web',room_id:'0'});
-    const response=await this.request('https://live.douyin.com/webcast/user/me/?'+query+'&a_bogus='+encodeURIComponent(signRoomQuery(query.toString(),DOUYIN_USER_AGENT)),
-      {signal:AbortSignal.timeout(12000),redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.douyin.com/',Cookie:visitor.cookie}});
-    const data=parsePlatformJson(await readBoundedResponse(response,1024*1024));
-    return data.status_code===0&&/^[1-9]\d{0,19}$/.test(String(data.data?.id_str||''));
   }
 }

@@ -14,8 +14,8 @@ export function chatXml(batch){
 }
 
 export class DouyinRecorder {
-  constructor(store,{credentials,resolver=new DouyinResolver({credentials}),request=fetch,chat=new DouyinChat(),now=Date.now,pollMs=5000,idleMs=20000}={}) {
-    Object.assign(this,{store,resolver,request,chat,now,pollMs,idleMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();this.credentialRevision=0;
+  constructor(store,{resolver=new DouyinResolver(),request=fetch,chat=new DouyinChat(),now=Date.now,pollMs=5000,idleMs=20000}={}) {
+    Object.assign(this,{store,resolver,request,chat,now,pollMs,idleMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();
     this.chat.setRateLimit?.(chatRate(store));
     const savedRooms=store.setting('douyin-rooms');
     for(const saved of Array.isArray(savedRooms)?savedRooms:[])if(saved&&typeof saved.webRid==='string'&&/^\d{1,20}$/.test(saved.webRid)&&this.entries.size<64)this.entries.set(saved.webRid,this.entry(saved));
@@ -32,30 +32,13 @@ export class DouyinRecorder {
     this.schedule();void this.poll().catch(error=>this.reportPollError(error));
   }
   reportPollError(error){if(!this.closed)this.store.diagnostics?.record('抖音监控循环',error,{level:'错误'});}
-  async credentialsChanged(){
-    const revision=++this.credentialRevision;
-    this.resolver.visitor=null;
-    if(!this.entries.size)return;
-    const credentials=await this.resolver.cookie().catch(()=>({cookie:'',userUniqueId:this.resolver.authIdentity||'1'}));
-    if(this.closed||revision!==this.credentialRevision)return;
-    for(const room of this.entries.values()){
-      if(room.metadata)Object.assign(room.metadata,credentials);
-      if(room.sourceId)this.chat.update?.(room.sourceId,credentials,{reauthenticate:true});
-      room.nextPoll=0;
-    }
-  }
   schedule(){if(this.closed||this.paused||!this.started||this.timer)return;this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch(error){this.reportPollError(error);}finally{this.schedule();}},this.pollMs);}
   assertOpen(){if(this.closed)throw new Error('录制服务已关闭。');}
   room(key){const room=this.entries.get(String(key).replace(/^douyin:/,''));if(!room)throw new Error('直播间不存在。');return room;}
   async add(descriptor,autoRecord=true){
     this.assertOpen();const existing=this.entries.get(descriptor.webRid);if(existing)return this.rooms.find(room=>room.webRid===descriptor.webRid);
     if(this.entries.size>=64)throw new Error('抖音监控房间已达上限。');
-    let metadata,revision;
-    for(let attempt=0;attempt<2;attempt++){
-      revision=this.credentialRevision;metadata=await this.resolver.room(descriptor.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});this.assertOpen();
-      if(revision===this.credentialRevision)break;
-    }
-    if(revision!==this.credentialRevision)throw new Error('登录状态正在更新，请稍后重新添加直播间。');
+    const metadata=await this.resolver.room(descriptor.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});this.assertOpen();
     // Another concurrent request may have added this same room.
     if(!this.entries.has(descriptor.webRid)){if(this.entries.size>=64)throw new Error('抖音监控房间已达上限。');const room=this.entry({...metadata,autoRecord,enabled:autoRecord});room.metadata=metadata;room.streaming=metadata.streaming;room.nextPoll=this.now()+15000;this.entries.set(room.webRid,room);this.save();this.maybeRecord(room);}
     return this.rooms.find(room=>room.webRid===descriptor.webRid);
@@ -66,9 +49,8 @@ export class DouyinRecorder {
       const rooms=[...this.entries.values()].filter(room=>force||this.now()>=room.nextPoll);let cursor=0;
       const scan=async()=>{while(cursor<rooms.length&&!this.closed&&!this.paused){const room=rooms[cursor++];
         try{
-          const revision=this.credentialRevision,metadata=await this.resolver.room(room.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});
+          const metadata=await this.resolver.room(room.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});
           if(this.closed||!this.entries.has(room.webRid))continue;
-          if(revision!==this.credentialRevision){room.nextPoll=0;continue;}
           room.metadata=metadata;room.name=metadata.name;room.title=metadata.title;room.streaming=metadata.streaming;if(!room.blocked)room.error='';
           if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:metadata.cookie,userUniqueId:metadata.userUniqueId});
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);

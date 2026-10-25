@@ -12,6 +12,21 @@ import {videoGeometryFilter} from './export-encoding.js';
 
 export const STYLE_PREVIEW_WIDTH=1672,STYLE_PREVIEW_HEIGHT=940,STYLE_PREVIEW_TIME=4.65;
 export const STYLE_MOTION_WIDTH=836,STYLE_MOTION_HEIGHT=470;
+export async function stylePreviewBackground(imageRoot){
+  // Resolve the current build's asset. Windows upgrades can retain older PNG
+  // and WebP hashes alongside it, so directory-wide filename counts are unsafe.
+  try{
+    const manifestFile=path.join(imageRoot,'..','asset-manifest.json');
+    const manifestStat=await fs.lstat(manifestFile);
+    if(!manifestStat.isFile()||manifestStat.isSymbolicLink()||manifestStat.size>256*1024)throw 0;
+    const manifest=JSON.parse(await fs.readFile(manifestFile,'utf8'));
+    const asset=manifest['src/assets/danmaku-style-preview.webp']?.file;
+    if(typeof asset!=='string'||!/^assets\/danmaku-style-preview-[A-Za-z0-9_-]+\.(?:png|webp)$/.test(asset))throw 0;
+    const background=path.join(imageRoot,path.basename(asset)),stat=await fs.lstat(background);
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.size>8*1024*1024)throw 0;
+    return background;
+  }catch{throw new Error('预览背景资源缺失或无效，请修复软件组件后重试。');}
+}
 export function stylePreviewTime(style,font){
   const {size}=danmakuGeometry(STYLE_PREVIEW_HEIGHT,style);
   // Very large fonts can have left the screen at the default sample time.
@@ -52,10 +67,7 @@ export class DanmakuStylePreview{
     try{
       const font=await this.media.fonts.selection(input.font);
       if(signal?.aborted)return null;
-      const images=(await fs.readdir(this.imageRoot)).filter(name=>/^danmaku-style-preview-[A-Za-z0-9_-]+\.(?:png|webp)$/.test(name));
-      if(images.length!==1)throw new Error('预览背景未就绪，请重新构建或安装软件。');
-      const background=path.join(this.imageRoot,images[0]),stat=await fs.lstat(background);
-      if(!stat.isFile()||stat.isSymbolicLink()||stat.size>8*1024*1024)throw new Error('预览背景文件无效。');
+      const background=await stylePreviewBackground(this.imageRoot);
       work=await this.media.temporaryDirectory('bili-export-','style-preview');
       const motion=input.motion?stylePreviewMotion(rate,style,font):null;
       const events=motion?.events||stylePreviewEvents(rate,style,font);

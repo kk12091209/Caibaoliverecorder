@@ -8,11 +8,24 @@ import {execFileSync} from 'node:child_process';
 import {Store} from '../server/store.js';
 import {Media} from '../server/media.js';
 import {Ingestor} from '../server/ingest.js';
-import {DanmakuStylePreview,stylePreviewMessages,stylePreviewEvents,stylePreviewMotion,stylePreviewTime,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT,STYLE_MOTION_WIDTH,STYLE_MOTION_HEIGHT} from '../server/danmaku-style-preview.js';
+import {DanmakuStylePreview,stylePreviewBackground,stylePreviewMessages,stylePreviewEvents,stylePreviewMotion,stylePreviewTime,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT,STYLE_MOTION_WIDTH,STYLE_MOTION_HEIGHT} from '../server/danmaku-style-preview.js';
 import {layoutComments} from '../server/render-plan.js';
 import {danmakuGeometry,DANMAKU_SIZE_STEPS} from '../shared/danmaku-style.js';
 import {videoGeometryFilter} from '../server/export-encoding.js';
 
+async function previewManifest(assets,name){
+ await fs.writeFile(path.join(assets,'..','asset-manifest.json'),JSON.stringify({'src/assets/danmaku-style-preview.webp':{file:'assets/'+name}}));
+}
+test('current build manifest selects its background despite older Windows upgrade assets',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'style-assets-')),assets=path.join(root,'assets');await fs.mkdir(assets);
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ for(const name of ['danmaku-style-preview-old.png','danmaku-style-preview-stale.webp','danmaku-style-preview-current.webp'])await fs.writeFile(path.join(assets,name),name);
+ await previewManifest(assets,'danmaku-style-preview-current.webp');
+ assert.equal(await stylePreviewBackground(assets),path.join(assets,'danmaku-style-preview-current.webp'));
+ await previewManifest(assets,'../outside.webp');await assert.rejects(stylePreviewBackground(assets),/背景资源/);
+ await previewManifest(assets,'danmaku-style-preview-missing.webp');await assert.rejects(stylePreviewBackground(assets),/背景资源/);
+ await fs.writeFile(path.join(root,'asset-manifest.json'),'broken');await assert.rejects(stylePreviewBackground(assets),/背景资源/);
+});
 test('sample count follows density and export layouts honor the captured per-second rate',()=>{
   const events=stylePreviewEvents(50,{size:0.6,opacity:100});assert.equal(events.length,50);
   assert.equal(stylePreviewEvents(7,{size:5,opacity:60}).length,7);
@@ -55,6 +68,7 @@ test('motion preview encodes the selected FPS, plays through the full round, and
   t.after(async()=>{media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
   const assets=path.join(root,'assets');await fs.mkdir(assets);
   execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=black:size=1672x942','-vf','crop=1672:941:0:0:exact=1','-frames:v','1','-threads','1',path.join(assets,'danmaku-style-preview-test.png')]);
+  await previewManifest(assets,'danmaku-style-preview-test.png');
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
   // Hosted macOS images may advertise an unreadable system CJK fallback.
   // Exercise the same renderer with a real, pinned font when supplied by CI.
@@ -91,6 +105,7 @@ test('preview uses actual export rendering, zero opacity preserves the exact bac
   t.after(async()=>{media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
   const assets=path.join(root,'assets');await fs.mkdir(assets);const background=path.join(assets,'danmaku-style-preview-test.webp');
   await fs.copyFile(fileURLToPath(new URL('../src/assets/danmaku-style-preview.webp',import.meta.url)),background);
+  await previewManifest(assets,'danmaku-style-preview-test.webp');
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
   const decode=bytes=>execFileSync(ffmpeg,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'],{input:bytes,maxBuffer:16*1024*1024,windowsHide:true});
   const signal=AbortSignal.timeout(15000),hiddenResult=await preview.render({style:{size:1.5,opacity:0},rate:17,font:null},signal),hidden=hiddenResult.bytes;
@@ -114,6 +129,7 @@ test('preview and real H264 export retain matching glyph positions across both i
   const footage=path.join(root,'source.flv');run(['-f','lavfi','-i','color=c=black:size=1672x940:rate=60','-t','6','-c:v','libx264','-preset','ultrafast','-g','60','-pix_fmt','yuv420p',footage]);
   const session=store.createSession({status:'finished'});store.addSource(session.id,footage,0,session.created,true);
   const ingestor=new Ingestor(store);for(let i=0;i<3;i++)await ingestor.tick();
+  await previewManifest(assets,'danmaku-style-preview-test.png');
   const preview=new DanmakuStylePreview(media,{imageRoot:assets});
   let imported=null;
   const fontPath=process.platform==='darwin'?'/System/Library/Fonts/Supplemental/Arial.ttf':path.join(process.env.WINDIR||'C:\\Windows','Fonts','arial.ttf');

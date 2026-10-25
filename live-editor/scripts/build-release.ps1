@@ -104,6 +104,7 @@ foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'server') -File
 Add-ComponentFile (Join-Path $AppRoot 'server\cookie-protection.ps1') 'live-editor/server/cookie-protection.ps1'
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $AppRoot 'shared') -File -Filter '*.js') { Add-ComponentFile $file.FullName ('live-editor/shared/' + $file.Name) }
 Add-ComponentFile (Join-Path $AppRoot 'dist\index.html') 'live-editor/dist/index.html'
+Add-ComponentFile (Join-Path $AppRoot 'dist\asset-manifest.json') 'live-editor/dist/asset-manifest.json'
 # Only reachable build assets are included, so old hashed bundles cannot accumulate.
 $assets = [Collections.Generic.Queue[string]]::new()
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)

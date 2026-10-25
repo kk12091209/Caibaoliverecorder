@@ -22,5 +22,5 @@ const pruneOldBundles={
 };
 export default defineConfig({
   plugins: [vue(),pruneOldBundles],
-  build: { emptyOutDir: true },
+  build: { emptyOutDir: true, manifest: 'asset-manifest.json' },
 });

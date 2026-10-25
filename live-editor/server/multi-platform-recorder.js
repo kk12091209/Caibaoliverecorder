@@ -4,7 +4,7 @@ import {isDouyinLink,resolveDouyinLink} from './douyin-room.js';
 import {BilibiliRoomResolver,numericRoomId,discoverRoomNumber} from './room-lookup.js';
 
 export class MultiPlatformRecorder extends Recorder {
-  constructor(store,options={}){super(store,options);this.douyin=new DouyinRecorder(store,{credentials:options.credentials,...options.douyin});this.bilibiliResolver=options.bilibiliResolver||new BilibiliRoomResolver({credentials:options.credentials});}
+  constructor(store,options={}){super(store,options);this.douyin=new DouyinRecorder(store,options.douyin);this.bilibiliResolver=options.bilibiliResolver||new BilibiliRoomResolver({credentials:options.credentials});}
   get rooms(){return [...(this.biliRooms||[]).map(room=>({...room,platform:'bilibili'})),...(this.douyin?.rooms||[])];}
   set rooms(rooms){this.biliRooms=rooms;}
   get available(){return this.online||this.douyin.started&&!this.douyin.closed;}
