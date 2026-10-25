@@ -16,6 +16,7 @@ if (tempDir) {
 }
 const api = createDownloaderApi({
   publicOrigins: [publicOrigin],
+  galleryMode: 'images',
   trustProxy: process.env.DOWNLOADER_TRUST_PROXY === 'true',
   jobOptions: {
     ...(tempDir ? { tempDir } : {}),
