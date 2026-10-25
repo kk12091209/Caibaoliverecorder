@@ -17,7 +17,9 @@ test('Cookie input accepts a single header value and rejects injection, missing 
 test('only ciphertext persists; restart unlocks both platforms; replacement leaves no old file or public value',async t=>{
  const {root,vault,protection}=await fixture(t);await vault.save('bilibili',biliFixture);await vault.save('douyin',douyinFixture);
  const before=await fs.readFile(vault.file('bilibili'));assert.ok(!before.includes(Buffer.from('synthetic')));
- assert.equal((await fs.stat(vault.directory)).mode&0o777,0o700);assert.equal((await fs.stat(vault.file('bilibili'))).mode&0o777,0o600);
+ // Windows reports synthetic POSIX mode bits; CurrentUser DPAPI protects the
+ // contents there. Unix directory/file permissions remain mandatory below.
+ if(process.platform!=='win32'){assert.equal((await fs.stat(vault.directory)).mode&0o777,0o700);assert.equal((await fs.stat(vault.file('bilibili'))).mode&0o777,0o600);}
  await vault.save('bilibili',biliReplacement);assert.equal(vault.get('bilibili'),biliReplacement);assert.notDeepEqual(await fs.readFile(vault.file('bilibili')),before);
  assert.deepEqual((await fs.readdir(vault.directory)).sort(),['bilibili.sealed','douyin.sealed']);
  assert.ok(!JSON.stringify(vault.snapshot()).includes('synthetic'));assert.equal(vault.snapshot().platforms.bilibili.configured,true);
@@ -45,4 +47,18 @@ test('native helper receives secrets through stdin only and errors never echo ch
  assert.equal((await protection.run('seal','f'.repeat(64),'bilibili',Buffer.from(biliFixture))).toString(),'cipher');assert.ok(!JSON.stringify(argumentsSeen).includes('synthetic'));assert.equal(optionsSeen.env,undefined);assert.equal(Buffer.from(request.data,'base64').toString(),biliFixture);
  const failing=new NativeCookieProtection({platform:'win32',launch(){const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};child.stdin.on('finish',()=>{child.stderr.write(biliFixture);child.emit('close',1);});return child;}});
  await assert.rejects(failing.run('seal','f'.repeat(64),'bilibili',Buffer.from(biliFixture)),error=>!error.message.includes('synthetic')&&/系统安全存储/.test(error.message));
+});
+test('Windows CurrentUser DPAPI really restores both platforms and rejects scope changes or tampering',{skip:process.platform!=='win32',timeout:90000},async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-dpapi-')),protection=new NativeCookieProtection();
+ let vault=await new PlatformCredentials(root,{protection}).initialize();
+ t.after(async()=>{await vault.close();await fs.rm(root,{recursive:true,force:true});});
+ await vault.save('bilibili',biliFixture);await vault.save('douyin',douyinFixture);
+ const sealed=await fs.readFile(vault.file('bilibili'));assert.ok(!sealed.includes(Buffer.from(biliFixture)));
+ await vault.close();vault=await new PlatformCredentials(root,{protection}).initialize();
+ assert.equal(vault.get('bilibili'),biliFixture);assert.equal(vault.get('douyin'),douyinFixture);
+ await assert.rejects(protection.run('open',vault.namespace,'douyin',sealed));
+ await assert.rejects(protection.run('open','f'.repeat(64),'bilibili',sealed));
+ const damaged=Buffer.from(sealed);damaged[damaged.length-1]^=1;
+ await assert.rejects(protection.run('open',vault.namespace,'bilibili',damaged));
+ await vault.remove('bilibili');await vault.remove('douyin');assert.deepEqual(await fs.readdir(vault.directory),[]);
 });
