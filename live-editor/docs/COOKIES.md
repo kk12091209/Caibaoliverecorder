@@ -6,7 +6,7 @@
 
 1. 在自己的 Chrome 或 Edge 浏览器中登录 B 站。
 2. 复制 `https://api.bilibili.com/x/web-interface/nav`，在同一浏览器打开；页面出现文字是正常的，不用复制正文。管理弹窗提供“复制网址”按钮。
-3. 按 F12（Mac：⌘⌥I），进入“网络 / Network → 全部 / All”，刷新后点击 `nav`。
+3. 按 F12（Mac：⌘+⌥+i），进入“网络 / Network → 全部 / All”，刷新后点击 `nav`。
 4. 在“标头 / Headers → 请求标头 / Request Headers”中复制 `Cookie` 右侧的整段值，粘贴并保存，无需手动拼接字段。
 
 无需在控制台运行代码。Cookie 是登录凭据，不应分享。保存成功表示本机保存成功，不等于平台登录验证通过。

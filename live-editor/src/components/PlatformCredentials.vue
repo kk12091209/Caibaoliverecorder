@@ -48,7 +48,7 @@ async function save(){
           <li>复制下面的网址，在同一浏览器打开。页面出现一段文字是正常的，不用复制页面正文。
             <div class="cookie-guide-address"><input ref="urlInput" :value="loginStatusUrl" type="text" readonly aria-label="B 站登录状态接口网址" spellcheck="false" @focus="$event.target.select()"/><button type="button" class="button" @click="copyUrl">复制网址</button></div>
           </li>
-          <li>按 F12（Mac：⌘⌥I），选择“网络 / Network → 全部 / All”，刷新页面，点击列表中的 <code>nav</code>。</li>
+          <li>按 F12（Mac：⌘+⌥+i），选择“网络 / Network → 全部 / All”，刷新页面，点击列表中的 <code>nav</code>。</li>
           <li>在“标头 / Headers → 请求标头 / Request Headers”中，复制 <code>Cookie</code> 右侧的整段值，粘贴到上方输入框并保存。无需逐个复制字段或手动拼接。</li>
         </ol>
         <p class="muted">Cookie 是登录凭据，请勿分享。无需在控制台运行代码。</p>
