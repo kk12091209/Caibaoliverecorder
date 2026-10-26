@@ -22,7 +22,7 @@ jobs:
           python3 - <<'PY'
           import json
           r=json.load(open('release.json'))
-          assert r['isDraft'] and r['targetCommitish']=='306569795da92e355c4651c3bcbbf1c9babd4e1c'
+          assert r['isDraft'] and r['targetCommitish']=='40b4cad10250303609b90d4957b591755beeebd2'
           PY
           gh release download v0.3.0 --pattern 'Caibo-0.3.0-FFmpeg-upstream-sources.tar.gz'
           printf '%s\n' '8ab6eca940d9fc95621b43a55a1fe5df795ff5806e453232765944f3cc5b2594  Caibo-0.3.0-FFmpeg-upstream-sources.tar.gz' | sha256sum --check -
