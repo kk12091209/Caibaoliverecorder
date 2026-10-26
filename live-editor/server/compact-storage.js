@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {setImmediate as immediate,setTimeout as pause} from 'node:timers/promises';
-import {timestamp,tags} from './ingest.js';
+import {tags} from './ingest.js';
+import {RecordingClock} from './flv-clock.js';
 import {checkedFile,fingerprint,inside,pathKey,originalTags,isMedia,isCodecHeader,isKeyframe,chunkReaderCount} from './storage-files.js';
 import {codecHeaderSignature,keyframesDigest,directKeyframesDigest} from './source-range-identity.js';
 
@@ -115,7 +116,8 @@ export class CompactStorage {
         if(data.length!==entry.bytes)throw new Error('过渡片段长度与索引不符，已保留文件。');
         const parsed=tags(data);if(parsed.consumed!==data.length)throw new Error('过渡片段尾部不完整，已保留文件。');
         const actualKeys=[];
-        for(const {tag,offset} of parsed.items){if(!isMedia(tag)||isCodecHeader(tag))throw new Error('过渡片段包含无法识别的数据包，已保留文件。');if(isKeyframe(tag))actualKeys.push({time:source.start+timestamp(tag)/1000,offset});}
+        const clock=new RecordingClock(Math.max(0,entry.start-source.start)*1000);
+        for(const {tag,offset} of parsed.items){if(!isMedia(tag)||isCodecHeader(tag))throw new Error('过渡片段包含无法识别的数据包，已保留文件。');const time=clock.read(tag);if(time!==null&&isKeyframe(tag))actualKeys.push({time:source.start+time/1000,offset});}
         const expectedKeys=keysBySeq.get(entry.seq)||[];
         if(JSON.stringify(actualKeys)!==JSON.stringify(expectedKeys.map(key=>({time:key.time,offset:key.offset}))))throw new Error('过渡片段关键帧与索引不一致，已保留文件。');
         const sha256=digest().update(data).digest('hex'),identity=this.store.get('SELECT * FROM chunk_identities WHERE source=? AND seq=?',source.id,entry.seq);
@@ -123,7 +125,7 @@ export class CompactStorage {
         manifest.push({seq:entry.seq,path:entry.path,fingerprint:fingerprint(entry.stat),sha256,mediaOffset,header:identity?.header});
         chunkKeys.push(...expectedKeys.map(key=>({...key,mediaOffset:mediaOffset+key.offset})));mediaOffset+=data.length;chunkHash.update(data);await this.cooperate(source);
       }
-      const rawHash=digest(),rawKeys=[],headers={};let rawMediaOffset=0,rawBytes=13,chunkIndex=0;
+      const rawHash=digest(),rawKeys=[],headers={},rawClock=new RecordingClock();let rawMediaOffset=0,rawBytes=13,chunkIndex=0;
       for await(const {tag,offset} of originalTags(handle,13,{checkpoint:()=>this.cooperate(source)})) {
         rawBytes=offset+tag.length;
         if(!isMedia(tag))continue;
@@ -132,7 +134,8 @@ export class CompactStorage {
         while(chunkIndex+1<manifest.length&&rawMediaOffset>=manifest[chunkIndex+1].mediaOffset)chunkIndex++;
         const chunkIdentity=manifest[chunkIndex];
         if(chunkIdentity.header&&codecHeaderSignature(headers)!==codecHeaderSignature(chunkIdentity.header))throw new Error('原片编码头区间与已封口片段不一致，已保留过渡片段。');
-        if(isKeyframe(tag))rawKeys.push({time:source.start+timestamp(tag)/1000,mediaOffset:rawMediaOffset,raw_offset:offset});
+        const time=rawClock.read(tag);
+        if(time!==null&&isKeyframe(tag))rawKeys.push({time:source.start+time/1000,mediaOffset:rawMediaOffset,raw_offset:offset});
         rawHash.update(tag);rawMediaOffset+=tag.length;
       }
       const storedHeaders=JSON.parse(source.header);

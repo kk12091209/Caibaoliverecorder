@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto';
 import { acquireReader, checkedFile, fingerprint, originalTags, isMedia, isCodecHeader } from './storage-files.js';
 import { chatRate, isLongChat } from './chat-rules.js';
 import {mediaDigest,keyframesDigest,codecHeaderSignature,readSealedChunk,verifyDirectKeyframes} from './source-range-identity.js';
+import {timestamp, RecordingClock} from './flv-clock.js';
+export {timestamp} from './flv-clock.js';
 
 export const FLV_HEADER = Buffer.from([70,76,86,1,5,0,0,0,9,0,0,0,0]);
-export function timestamp(tag) { return tag.readUIntBE(4, 3) + tag[7] * 16777216; }
 function writeTimestamp(tag, ms) { const value = Math.max(0, Math.round(ms)) >>> 0; tag.writeUIntBE(value & 0xffffff, 4, 3); tag[7] = value >>> 24; }
 export function retime(tag, ms) { const b = Buffer.from(tag); writeTimestamp(b, ms); return b; }
 const STREAM_BATCH_BYTES = 256 * 1024;
@@ -54,7 +55,7 @@ export class Ingestor {
     let state = this.states.get(source.id);
     if (!state) {
       const max = this.store.get('SELECT MAX(seq) AS seq FROM chunks WHERE source=?', source.id);
-      state = { pos: source.pos, seq: (max.seq ?? -1) + 1, header: JSON.parse(source.header), parts: [], keys: [], bytes: 0, start: null, end: 0, boundary: 0 };
+      state = { pos: source.pos, seq: (max.seq ?? -1) + 1, header: JSON.parse(source.header), parts: [], keys: [], bytes: 0, start: null, end: source.duration, boundary: 0, clock: new RecordingClock(source.duration * 1000) };
       this.states.set(source.id, state);
     }
     const file = await fs.open(source.path, 'r');
@@ -74,7 +75,7 @@ export class Ingestor {
         const { items, consumed } = tags(buffer.subarray(0, bytesRead));
         if (!consumed) { incompleteTail = true; break; }
         for (const { tag } of items) {
-          const type = tag[0], time = timestamp(tag) / 1000;
+          const type = tag[0];
           if (type === 8 || type === 9) {
             if (type === 9 && (tag[11] & 15) !== 7) throw new Error('当前剪辑预览仅支持 H.264。请将录制画质设为 AVC；原始录制不会被停止。');
             const isHeader = (type === 9 || tag[11] >> 4 === 10) && tag[12] === 0;
@@ -86,9 +87,11 @@ export class Ingestor {
               state.header=next;
             }
             else {
-              if (state.parts.length && time >= state.boundary) await this.flush(source, state);
+              const milliseconds = state.clock.read(tag), time = (milliseconds ?? state.clock.latest) / 1000;
+              if(milliseconds===null&&state.clock.negativePackets===1)this.store.diagnostics?.record('录制时间戳',`素材 ${source.id} 出现负时间戳，已保留原始数据并阻止异常时长`,{level:'警告'});
+              if (milliseconds !== null && state.parts.length && time >= state.boundary) await this.flush(source, state);
               if (state.start === null) { state.start = time; state.boundary = Math.floor(time) + 1; }
-              if (keyframe(tag)) state.keys.push({ time: source.start + time, offset: state.bytes });
+              if (milliseconds !== null && keyframe(tag)) state.keys.push({ time: source.start + time, offset: state.bytes });
               state.parts.push(Buffer.from(tag)); state.bytes += tag.length; state.end = Math.max(state.end, time);
             }
           }
@@ -212,6 +215,7 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
   if (!key) throw new Error('正在等待可解码的关键帧。');
   if(wholeSource&&(source.closed!==2||Math.abs(from-source.start)>.001||key.seq!==0))throw new Error('完整来源复制需要已封口且从首片段开始的素材。');
   const base = wholeSource?source.start:key.time;
+  const clock = new RecordingClock(Math.max(0, key.time - source.start) * 1000);
   let firstVideo=wholeSource;
   let absolute;
   if(reader.mode==='direct') {
@@ -230,7 +234,9 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
   if(original) {
     for await(const {tag} of originalTags(original,absolute,{signal})) {
       if(!isMedia(tag))continue;
-      const global=source.start+timestamp(tag)/1000;
+      const milliseconds = isCodecHeader(tag) ? timestamp(tag) : clock.read(tag);
+      if (milliseconds === null) continue;
+      const global=source.start+milliseconds/1000;
       if(global>to+.1)return;
       if(isCodecHeader(tag)) {
         const name=tag[0]===9?'video':'audio',next={...header,[name]:tag.toString('base64')};
@@ -266,8 +272,14 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
     let batchStart = 0, batchEnd = 0;
     for (const { tag, offset } of tags(part).items) {
       if (signal?.aborted) return;
+      const milliseconds = clock.read(tag);
+      if (milliseconds === null) {
+        if (batchEnd > batchStart) yield part.subarray(batchStart, batchEnd);
+        batchStart = batchEnd = offset + tag.length;
+        continue;
+      }
       if(firstVideo&&tag[0]===9){if(!keyframe(tag))throw new Error('完整来源的首帧不是关键帧，无法直接复制。');firstVideo=false;}
-      const global = source.start + timestamp(tag) / 1000;
+      const global = source.start + milliseconds / 1000;
       if (global > to + 0.1) {
         if (batchEnd > batchStart) yield part.subarray(batchStart, batchEnd);
         return;
