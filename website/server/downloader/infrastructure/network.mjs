@@ -7,6 +7,7 @@ import { Transform } from 'node:stream'
 import { createWriteStream } from 'node:fs'
 import { open as openFile } from 'node:fs/promises'
 import { ExpiringCache } from './cache.mjs'
+import { sizeLimitError } from './limits.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 
 export const MOBILE_UA =
@@ -47,11 +48,21 @@ export function permittedAddress(address, family) {
 // usable only for the fixed platform allowlist below; TLS host verification
 // remains enabled, and private/loopback targets remain blocked.
 const roots = [
+  // Match operator domains, not individual edge names: node numbers, regions
+  // and experiment labels change between works and requests. Media domains do
+  // not widen the separate share-link inputHosts list in the resolver.
   'douyin.com',
   'iesdouyin.com',
+  'amemv.com',
   'douyinvod.com',
+  'idouyinvod.com',
+  'douyincdn.com',
+  'zjcdn.com',
   'douyinpic.com',
+  'douyinstatic.com',
   'byteimg.com',
+  'ibyteimg.com',
+  'pstatp.com',
   'snssdk.com',
   'bytecdn.cn',
   'bytecdn.com',
@@ -64,9 +75,9 @@ const roots = [
   'biliimg.com',
   'acgvideo.com',
 ]
-// Observed as the media redirect from Douyin's official aweme.snssdk.com
-// playback endpoint. Keep this CDN exception exact instead of allowing zjcdn.
-const mediaHosts = new Set(['v3-dy-o.zjcdn.com'])
+// Akamai is shared with other customers. Only Bilibili's known video host is
+// allowed; neither its children nor the whole akamaized.net domain are trusted.
+const mediaHosts = new Set(['upos-hz-mirrorakam.akamaized.net'])
 const dnsCache = new ExpiringCache({ maxEntries: 256, ttl: 30000 })
 const agents = {
   http: new http.Agent({ keepAlive: true, maxSockets: 8, maxTotalSockets: 32 }),
@@ -85,11 +96,19 @@ export function approvedUrl(input) {
     u.port ||
     u.username ||
     u.password ||
-    isIP(u.hostname) ||
-    (!mediaHosts.has(u.hostname) &&
-      !roots.some((root) => u.hostname === root || u.hostname.endsWith('.' + root)))
+    isIP(u.hostname)
   )
     throw new Error('不支持这个媒体地址。')
+  if (
+    !mediaHosts.has(u.hostname) &&
+    !roots.some((root) => u.hostname === root || u.hostname.endsWith('.' + root))
+  )
+    // Name only the host: signed paths, query tokens and credentials must not
+    // appear in errors when a platform starts using another media network.
+    throw Object.assign(new Error(`不支持这个媒体地址（${u.hostname}）。`), {
+      code: 'UNSUPPORTED_MEDIA_HOST',
+      mediaHost: u.hostname,
+    })
   return u
 }
 
@@ -318,7 +337,7 @@ export async function saveRemote(
       const total = Number(response.headers['content-length']) || 0
       if (total > maxBytes) {
         response.stream.destroy()
-        throw new Error('文件超出本地初版的单文件大小限制。')
+        throw sizeLimitError(maxBytes, '文件')
       }
       if (
         parallel &&

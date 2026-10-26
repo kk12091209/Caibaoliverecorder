@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B站评论盲盒防护
 // @namespace    local.bili-comment-blindbox
-// @version      0.20.0
-// @description  B站评论防护；最多同时跟车三人，不改动输入草稿；支持托管遮挡，以及按直播间保存、独立摄像头同步生效的画面调色和曲线预设
+// @version      0.21.0
+// @description  B站评论防护；支持三人跟车和按直播间保存的随机车白名单，发送失败跳过后继续，不改动输入草稿；支持托管遮挡和画面调色
 // @icon         https://greasyfork.org/rails/active_storage/blobs/redirect/eyJfcmFpbHMiOnsiZGF0YSI6MzAyMjM5LCJwdXIiOiJibG9iX2lkIn19--a019e368236259cf0fa8584eaa5b528506cbfe76/2561766c7692aa66dd67b4e252602fa51669777785.jpg?locale=zh-CN
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/585978
 // @supportURL   https://greasyfork.org/zh-CN/scripts/585978/feedback
@@ -3521,7 +3521,7 @@
     let room = roomId(), settings = readSettings(room);
     let chat = null, chatObserver = null, awaitingRoom = false;
     let candidate = null, menuQueued = false, syncQueued = false;
-    let toolbarButton = null, panel = null, feedback = null, feedbackTimer = 0;
+    let toolbarButton = null, panel = null, feedback = null, feedbackTimer = 0, whitelistDialog = null;
     let randomTimer = 0, randomReady = false, randomDue = 0;
     let pending = null, session = 0, lastSentAt = -Infinity, pageActive = true;
     const sendQueue = [];
@@ -4111,20 +4111,25 @@
     function storageKey(id = room) { return STORAGE_PREFIX + id; }
     function validUid(uid) { return /^[1-9]\d*$/.test(uid || ''); }
     function ownUid() { return document.cookie.match(/(?:^|;\s*)DedeUserID=(\d+)(?:;|$)/)?.[1] || ''; }
+    function normalizePeople(people, limit = Infinity) {
+      const result = [], uids = new Set();
+      for (const person of Array.isArray(people) ? people : []) {
+        const uid = String(person?.uid || '');
+        if (!validUid(uid) || uids.has(uid)) continue;
+        uids.add(uid); result.push({uid, name: String(person.name || `用户 ${uid}`).slice(0, 120)});
+        if (result.length === limit) break;
+      }
+      return result;
+    }
     function normalizeSettings(raw) {
       try {
         const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
         // 兼容旧版仅有 target 的房间设置；空数组表示明确取消全部对象。
         const people = Array.isArray(value?.targets) ? value.targets : value?.target ? [value.target] : [];
-        const targets = [];
-        for (const person of people) {
-          const uid = String(person?.uid || '');
-          if (!validUid(uid) || targets.some(item => item.uid === uid)) continue;
-          targets.push({uid, name: String(person.name || `用户 ${uid}`).slice(0, 120)});
-          if (targets.length === MAX_TARGETS) break;
-        }
-        return {targets, random: targets.length === 0 && value?.random === true, disabled: value?.disabled === true};
-      } catch (_) { return {targets: [], random: false, disabled: false}; }
+        const targets = normalizePeople(people, MAX_TARGETS);
+        // 旧版 disabled 不再生效；升级后保留原有对象和随机开关。
+        return {targets, random: targets.length === 0 && value?.random === true, whitelist: normalizePeople(value?.whitelist)};
+      } catch (_) { return {targets: [], random: false, whitelist: []}; }
     }
 
     function readSettings(id) {
@@ -4159,7 +4164,11 @@
     function acceptSettings(value) {
       const next = normalizeSettings(value);
       if (JSON.stringify(next) === JSON.stringify(settings)) return;
-      resetRuntime(); settings = next; baseline(); armRandom(); render(); queueMenu();
+      const modeChanged = next.random !== settings.random || JSON.stringify(next.targets) !== JSON.stringify(settings.targets);
+      if (modeChanged) resetRuntime();
+      settings = next;
+      if (modeChanged) { baseline(); armRandom(); } else pruneWhitelisted();
+      render(); queueMenu();
     }
     function changeSettings(patch, detail) {
       if (checkRoom()) return;
@@ -4179,11 +4188,12 @@
     }
     function effectiveRandom() {
       return pageActive && !!room && !awaitingRoom && !!chat?.isConnected &&
-        settings.random && settings.targets.length === 0 && !settings.disabled;
+        settings.random && settings.targets.length === 0;
     }
+    function isWhitelisted(uid) { return settings.whitelist.some(person => person.uid === uid); }
     function canSend(message, mode) {
-      if (!pageActive || roomId() !== room || awaitingRoom || settings.disabled) return false;
-      return mode === 'random' ? settings.random && settings.targets.length === 0 : settings.targets.some(person => person.uid === message.uid);
+      if (!pageActive || roomId() !== room || awaitingRoom) return false;
+      return mode === 'random' ? settings.random && settings.targets.length === 0 && !isWhitelisted(message.uid) : settings.targets.some(person => person.uid === message.uid);
     }
     function armRandom() {
       if (!effectiveRandom() || randomTimer || randomReady) return;
@@ -4199,7 +4209,7 @@
     function checkRoom() {
       const next = roomId();
       if (next === room) return false;
-      resetRuntime(); resetCover(); closeStyleEditor(false); restoreStyleTargets();
+      resetRuntime(); resetCover(); closeStyleEditor(false); closeWhitelist(); restoreStyleTargets();
       room = next; settings = readSettings(room); styleSettings = readStyleSettings(room); candidate = null; canonicalRoom = null;
       awaitingRoom = !!chat; seen.clear(); submitted = acknowledged = 0; lastDetail = '';
       baseline(); closePanel(); watchRoom(); watchStyleRoom(); syncStyle(); render(); queueMenu();
@@ -4227,8 +4237,8 @@
       feedbackTimer = setTimeout(() => { feedback.hidden = true; }, 3500);
     }
     function skip(detail) { lastDetail = `已跳过：${detail}`; render(); }
-    function pause(detail) {
-      changeSettings({disabled: true}, `${detail} 已开启当前直播间禁用，检查后可手动关闭禁用。`);
+    function finishFailedSend(detail) {
+      clearPending(); skip(`${detail} 本次不再重试，跟车保持开启。`); scheduleQueue();
     }
     function readRow(row) {
       if (!row.matches(ROW)) return null;
@@ -4264,10 +4274,81 @@
       if (settings.targets.some(item => item.uid === person.uid)) return tell('已在跟车列表中。');
       if (settings.targets.length >= MAX_TARGETS) return tell('最多同时跟车 3 人，请先取消一位再添加。');
       changeSettings({targets: [...settings.targets, {uid: person.uid, name: person.name}], random: false},
-        settings.disabled ? '已保存跟车对象；当前直播间仍处于禁用状态。' : `已添加跟车对象（${settings.targets.length + 1}/3），等待新的文字弹幕。`);
+        `已添加跟车对象（${settings.targets.length + 1}/3），等待新的文字弹幕。`);
     }
     function removeTarget(uid) {
       changeSettings({targets: settings.targets.filter(person => person.uid !== uid)}, '已取消此用户的跟车，其他对象保持不变。');
+    }
+    function pruneWhitelisted() {
+      for (let i = sendQueue.length - 1; i >= 0; i--) {
+        if (sendQueue[i].mode === 'random' && isWhitelisted(sendQueue[i].message.uid)) sendQueue.splice(i, 1);
+      }
+      // 请求已经发出就等待它结束；尚在确认房间的随机任务可以取消。
+      if (pending?.mode === 'random' && !pending.clicked && isWhitelisted(pending.uid)) clearPending();
+      scheduleQueue();
+    }
+    function updateWhitelist(people, detail) {
+      if (checkRoom()) return;
+      acceptSettings({...settings, whitelist: people}); saveSettings();
+      if (detail) tell(detail);
+    }
+    function addWhitelist(person) {
+      if (checkRoom() || awaitingRoom) return tell('直播间正在切换，请稍后重新选择。');
+      if (!person || !validUid(person.uid)) return tell('无法识别此用户的 UID。');
+      if (isWhitelisted(person.uid)) return tell('此用户已在当前直播间的白名单中。');
+      updateWhitelist([...settings.whitelist, person], '已添加至本直播间白名单，随机跟车会跳过此用户。');
+    }
+    function removeWhitelist(uid) {
+      updateWhitelist(settings.whitelist.filter(person => person.uid !== uid), '已从当前直播间白名单移除。');
+    }
+    function clearWhitelist() { updateWhitelist([], '已清空当前直播间白名单。'); }
+    function renderWhitelist() {
+      setText(panel.querySelector('[data-bcp-whitelist-open]'), `查看白名单（${settings.whitelist.length}）`);
+      if (!whitelistDialog) return;
+      const list = whitelistDialog.querySelector('[data-bcp-whitelist-list]'), signature = JSON.stringify(settings.whitelist);
+      setText(whitelistDialog.querySelector('[data-bcp-whitelist-total]'), `共 ${settings.whitelist.length} 人`);
+      whitelistDialog.querySelector('[data-bcp-whitelist-clear]').disabled = settings.whitelist.length === 0;
+      if (list.dataset.members === signature) return;
+      list.dataset.members = signature; list.replaceChildren();
+      if (!settings.whitelist.length) {
+        const empty = document.createElement('p'); empty.className = 'bcp-whitelist-empty';
+        empty.textContent = '白名单为空，可在弹幕用户菜单中添加。'; list.appendChild(empty);
+      }
+      for (const person of settings.whitelist) {
+        const item = document.createElement('div'); item.className = 'bcp-whitelist-person';
+        const identity = document.createElement('div'); identity.className = 'bcp-whitelist-identity';
+        const name = document.createElement('span'); name.textContent = person.name; name.title = person.name;
+        const uid = document.createElement('small'); uid.textContent = `UID ${person.uid}`;
+        const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '移除';
+        remove.dataset.bcpWhitelistRemove = person.uid; remove.setAttribute('aria-label', `移除白名单用户 ${person.name}`);
+        remove.addEventListener('click', () => {
+          removeWhitelist(person.uid);
+          (whitelistDialog?.querySelector('[data-bcp-whitelist-remove]') || whitelistDialog?.querySelector('[data-bcp-whitelist-done]'))?.focus();
+        });
+        identity.append(name, uid); item.append(identity, remove); list.appendChild(item);
+      }
+    }
+    function closeWhitelist() {
+      if (!whitelistDialog) return;
+      whitelistDialog.close(); whitelistDialog.remove(); whitelistDialog = null;
+    }
+    function openWhitelist() {
+      if (checkRoom() || !room) return;
+      if (whitelistDialog) return whitelistDialog.focus();
+      closePanel();
+      whitelistDialog = document.createElement('dialog'); whitelistDialog.id = 'bcp-live-whitelist-dialog';
+      whitelistDialog.setAttribute('aria-labelledby', 'bcp-live-whitelist-title');
+      whitelistDialog.innerHTML = `<header><div><h2 id="bcp-live-whitelist-title">当前直播间白名单</h2><small data-bcp-whitelist-room></small></div><button type="button" data-bcp-whitelist-close aria-label="关闭白名单">×</button></header><p class="bcp-whitelist-note">名单中的用户不会触发本直播间的随机跟车。</p><div data-bcp-whitelist-list></div><footer><span data-bcp-whitelist-total></span><button type="button" data-bcp-whitelist-clear>一键清空</button><button type="button" data-bcp-whitelist-done>完成</button></footer>`;
+      setText(whitelistDialog.querySelector('[data-bcp-whitelist-room]'), `房间 ${room} · 仅在本机保存`);
+      for (const selector of ['[data-bcp-whitelist-close]', '[data-bcp-whitelist-done]']) whitelistDialog.querySelector(selector).addEventListener('click', closeWhitelist);
+      whitelistDialog.querySelector('[data-bcp-whitelist-clear]').addEventListener('click', () => {
+        clearWhitelist(); whitelistDialog?.querySelector('[data-bcp-whitelist-done]')?.focus();
+      });
+      whitelistDialog.addEventListener('cancel', event => { event.preventDefault(); closeWhitelist(); });
+      const fullscreen = document.fullscreenElement;
+      (fullscreen && !['VIDEO', 'BWP-VIDEO'].includes(fullscreen.tagName) ? fullscreen : document.body).appendChild(whitelistDialog);
+      syncTheme(); renderWhitelist(); whitelistDialog.showModal();
+      whitelistDialog.querySelector('[data-bcp-whitelist-close]').focus();
     }
     function enqueueFollow(message, mode) {
       if (checkRoom() || !canSend(message, mode)) return;
@@ -4305,7 +4386,7 @@
     }
     async function sendRepeat(message, mode) {
       if (checkRoom() || !canSend(message, mode) || pending) return;
-      if (!validUid(ownUid())) return pause('登录状态不可用。');
+      if (!validUid(ownUid())) return skip('登录状态不可用，跟车设置保留，登录后会继续处理新弹幕。');
       if (message.uid === ownUid()) return;
       const text = mode === 'random' ? message.plain : message.text;
       if (message.emoji || !text.trim()) return skip('表情或空内容。');
@@ -4318,12 +4399,12 @@
       if (disabled(input) || input.readOnly) return skip('网页暂不允许发送。');
       if (input.maxLength > 0 && text.length > input.maxLength) return skip('内容超过输入框字数限制。');
       const csrf = document.cookie.match(/(?:^|;\s*)bili_jct=([^;]+)(?:;|$)/)?.[1] || '';
-      if (!csrf) return pause('登录校验不可用，请重新登录直播间。');
+      if (!csrf) return skip('登录校验不可用，跟车设置保留，请重新登录直播间。');
       // 独立请求不触碰网页输入框：草稿、选区、焦点和中文输入法状态均保持原样。
-      const version = session, flight = {text, timer: 0, clicked: false, controller: new AbortController()};
+      const version = session, flight = {text, uid: message.uid, mode, timer: 0, clicked: false, controller: new AbortController()};
       pending = flight;
       flight.timer = setTimeout(() => {
-        if (pending === flight) pause('发送或回显确认超过 8 秒，不自动重试。');
+        if (pending === flight) finishFailedSend('发送或回显确认超过 8 秒。');
       }, ACK_TIMEOUT);
       try {
         const id = await resolveRoom(flight.controller.signal);
@@ -4344,7 +4425,7 @@
         lastDetail = '已提交，等待本人的弹幕回显。'; render();
       } catch (problem) {
         if (version !== session || pending !== flight) return;
-        pause(`自动发送未完成：${problem instanceof Error ? problem.message : '网络或权限异常。'}`);
+        finishFailedSend(`自动发送未完成：${problem instanceof Error ? problem.message : '网络或权限异常。'}`);
       }
     }
 
@@ -4354,10 +4435,10 @@
       if (pending?.clicked && message.uid === ownUid() && message.text === pending.text) {
         clearPending(); acknowledged += 1; lastDetail = '已看到本人的弹幕回显。'; render(); scheduleQueue();
       }
-      if (settings.disabled || awaitingRoom || !validUid(message.uid) || message.uid === ownUid()) return;
+      if (awaitingRoom || !validUid(message.uid) || message.uid === ownUid()) return;
       if (settings.targets.length) {
         if (settings.targets.some(person => person.uid === message.uid)) enqueueFollow(message, 'target');
-      } else if (effectiveRandom() && randomReady) {
+      } else if (effectiveRandom() && randomReady && !isWhitelisted(message.uid)) {
         // 一次到点只消费下一条他人弹幕；跳过或失败也不积压。
         randomReady = false; enqueueFollow(message, 'random'); armRandom();
       }
@@ -4410,19 +4491,16 @@
         }
       }
       const random = panel.querySelector('[data-bcp-random]');
-      const disable = panel.querySelector('[data-bcp-disable]');
       random.disabled = people.length > 0;
       random.setAttribute('aria-checked', String(settings.random));
       random.title = people.length ? '请先取消「我来同你玩」中的对象' : '每次随机等待 6～15 秒，再跟发下一条弹幕的纯文字';
-      disable.setAttribute('aria-checked', String(settings.disabled));
       setText(random.querySelector('.bcp-switch-word'), settings.random ? '开' : '关');
-      setText(disable.querySelector('.bcp-switch-word'), settings.disabled ? '开' : '关');
-      const mode = settings.disabled ? 'disabled' : people.length ? 'target' : settings.random ? 'random' : 'off';
+      const mode = people.length ? 'target' : settings.random ? 'random' : 'off';
       toolbarButton.dataset.mode = mode;
-      panel.dataset.disabled = String(settings.disabled);
-      const summary = settings.disabled ? '当前直播间已禁用跟车' : people.length ? `跟车（${people.length}/3）：${people.map(person => person.name).join('、')}`
+      const summary = people.length ? `跟车（${people.length}/3）：${people.map(person => person.name).join('、')}`
         : settings.random ? (randomReady ? '路怒模式（随机车）：等待下一条弹幕' : '路怒模式（随机车）：等待 6～15 秒') : '跟车设置：暂无跟车对象';
       toolbarButton.title = `${summary}\n房间 ${room} · 已提交 ${submitted} / 已回显 ${acknowledged}${lastDetail ? '\n' + lastDetail : ''}`;
+      renderWhitelist();
       renderCoverControls();
       renderStyleControls();
       if (!panel.hidden) positionPanel();
@@ -4460,6 +4538,7 @@
       }
       panel.classList.toggle('bcp-live-dark', dark);
       feedback.classList.toggle('bcp-live-dark', dark);
+      whitelistDialog?.classList.toggle('bcp-live-dark', dark);
     }
     function mountToolbar() {
       const toolbar = document.querySelector('#control-panel-ctnr-box .control-panel-icon-row .icon-left-part');
@@ -4473,16 +4552,15 @@
         #bcp-live-toolbar-button{display:inline-flex!important;position:relative;vertical-align:middle;align-items:center;justify-content:center;flex-shrink:0;width:28px;height:30px;margin:0 0 0 8px;padding:2px;border:0;border-radius:5px;background:transparent;color:#c9ccd0;cursor:pointer;box-sizing:border-box;line-height:1;transition:background .15s,color .15s}
         #bcp-live-toolbar-button:hover,#bcp-live-toolbar-button[aria-expanded="true"]{background:#00aeec16;color:#00aeec}
         #bcp-live-toolbar-button svg{display:block;width:24px;height:24px;pointer-events:none}
-        #bcp-live-toolbar-button:focus-visible,#bcp-live-panel button:focus-visible{outline:2px solid #00aeec;outline-offset:2px}
+        #bcp-live-toolbar-button:focus-visible,#bcp-live-panel button:focus-visible,#bcp-live-whitelist-dialog button:focus-visible{outline:2px solid #00aeec;outline-offset:2px}
         #bcp-live-toolbar-button[data-mode="target"]{color:#00aeec}
         #bcp-live-toolbar-button[data-mode="random"]{color:#8d6ce8}
-        #bcp-live-toolbar-button[data-mode="disabled"]{color:#f85a7c}
         #bcp-live-toolbar-button::after{content:"";display:none;position:absolute;width:5px;height:5px;right:1px;top:1px;border-radius:50%;background:currentColor}
         #bcp-live-toolbar-button:not([data-mode="off"])::after{display:block}
-        #bcp-live-panel,#bcp-live-feedback{--bcp-bg:#fff;--bcp-fg:#61666d;--bcp-sub:#9499a0;--bcp-line:#e3e5e7;position:fixed;z-index:2147483646;box-sizing:border-box;background:var(--bcp-bg);color:var(--bcp-fg);border:1px solid var(--bcp-line);border-radius:8px;box-shadow:0 4px 20px #00000024;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-align:left}
+        #bcp-live-panel,#bcp-live-feedback,#bcp-live-whitelist-dialog{--bcp-bg:#fff;--bcp-fg:#61666d;--bcp-sub:#9499a0;--bcp-line:#e3e5e7;position:fixed;z-index:2147483646;box-sizing:border-box;background:var(--bcp-bg);color:var(--bcp-fg);border:1px solid var(--bcp-line);border-radius:8px;box-shadow:0 4px 20px #00000024;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-align:left}
         #bcp-live-panel{z-index:2147483647;padding:2px 12px;max-height:calc(100vh - 16px);overflow-y:auto;overscroll-behavior:contain}
         #bcp-live-panel[hidden],#bcp-live-feedback[hidden],#bcp-live-panel [hidden]{display:none!important}
-        #bcp-live-panel.bcp-live-dark,#bcp-live-feedback.bcp-live-dark{--bcp-bg:#24282f;--bcp-fg:#e3e5e7;--bcp-sub:#a0a5ad;--bcp-line:#3a4049}
+        #bcp-live-panel.bcp-live-dark,#bcp-live-feedback.bcp-live-dark,#bcp-live-whitelist-dialog.bcp-live-dark{--bcp-bg:#24282f;--bcp-fg:#e3e5e7;--bcp-sub:#a0a5ad;--bcp-line:#3a4049}
         #bcp-live-panel .bcp-live-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:8px 0}
         #bcp-live-panel .bcp-live-row+.bcp-live-row{border-top:1px solid var(--bcp-line)}
         #bcp-live-panel .bcp-live-label{white-space:nowrap;flex-shrink:0;font-weight:400}
@@ -4503,10 +4581,29 @@
         #bcp-live-panel .bcp-live-switch[aria-checked="true"]{color:#00aeec}
         #bcp-live-panel .bcp-live-switch[aria-checked="true"] .bcp-switch-track{background:#00aeec}
         #bcp-live-panel .bcp-live-switch[aria-checked="true"] .bcp-switch-track::after{transform:translateX(12px)}
-        #bcp-live-panel [data-bcp-disable][aria-checked="true"]{color:#f45b79}
-        #bcp-live-panel [data-bcp-disable][aria-checked="true"] .bcp-switch-track{background:#f45b79}
         #bcp-live-panel .bcp-live-switch:disabled{opacity:.42;cursor:not-allowed}
-        #bcp-live-panel[data-disabled="true"] .bcp-live-targets .bcp-live-label{color:var(--bcp-sub)}
+        #bcp-live-panel [data-bcp-whitelist-open]{border:1px solid var(--bcp-line);border-radius:5px;padding:4px 9px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer}
+        #bcp-live-whitelist-dialog{inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;overflow:hidden;z-index:2147483647}
+        #bcp-live-whitelist-dialog[open]{display:flex;flex-direction:column}
+        #bcp-live-whitelist-dialog::backdrop{background:#0a152c70}
+        #bcp-live-whitelist-dialog header,#bcp-live-whitelist-dialog footer{display:flex;align-items:center;gap:10px;padding:14px 16px;flex-shrink:0}
+        #bcp-live-whitelist-dialog header{justify-content:space-between;border-bottom:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog h2{margin:0 0 3px;font-size:17px;line-height:1.5;color:var(--bcp-fg)}
+        #bcp-live-whitelist-dialog small,#bcp-live-whitelist-dialog footer>span{font-size:11px;color:var(--bcp-sub)}
+        #bcp-live-whitelist-dialog button{border:1px solid var(--bcp-line);border-radius:5px;padding:5px 9px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0}
+        #bcp-live-whitelist-dialog button:hover,#bcp-live-panel [data-bcp-whitelist-open]:hover{background:#00aeec12}
+        #bcp-live-whitelist-dialog button:disabled{opacity:.4;cursor:default}
+        #bcp-live-whitelist-dialog [data-bcp-whitelist-close]{border:0;font-size:25px;line-height:1;padding:5px}
+        #bcp-live-whitelist-dialog .bcp-whitelist-note{margin:0;padding:12px 16px;color:var(--bcp-sub);font-size:12px}
+        #bcp-live-whitelist-dialog [data-bcp-whitelist-list]{padding:0 16px;overflow-y:auto;overscroll-behavior:contain;min-height:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-empty{margin:20px 0 28px;text-align:center;color:var(--bcp-sub)}
+        #bcp-live-whitelist-dialog .bcp-whitelist-person{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog .bcp-whitelist-person:last-child{border-bottom:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity{display:flex;flex-direction:column;gap:2px;min-width:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity small{overflow-wrap:anywhere}
+        #bcp-live-whitelist-dialog footer{border-top:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog footer>span{flex:1}
         #bcp-live-panel .bcp-cover-options{border-top:1px solid var(--bcp-line);padding:12px 0;display:flex;flex-wrap:wrap;gap:9px;align-items:center}
         #bcp-live-panel .bcp-cover-colors{display:flex;gap:6px}
         #bcp-live-panel [data-bcp-cover-color]{width:26px;height:26px;padding:0;border-radius:50%;border:1px solid var(--bcp-line);background:var(--bcp-swatch);cursor:pointer;box-sizing:border-box}
@@ -4582,8 +4679,9 @@
         @media(max-width:640px){#bcp-live-style-dialog .bcp-style-body{grid-template-columns:minmax(0,1fr);gap:18px;padding:14px}#bcp-live-style-dialog .bcp-style-preview-pane{position:static}#bcp-live-style-dialog header,#bcp-live-style-dialog footer{padding:12px 14px}#bcp-live-style-dialog .bcp-style-preview-stage{min-height:130px}#bcp-live-style-dialog h2{font-size:17px}}
         @media(hover:none){#bcp-live-cover .bcp-cover-tools,#bcp-live-cover [data-bcp-cover-handle]{opacity:1}}
         #bcp-live-feedback{padding:9px 12px;font-size:12px;z-index:2147483647;pointer-events:none}
-        .danmaku-menu [data-bcp-live-follow]{display:block;width:100%;box-sizing:border-box;text-align:left;padding:11px 12px;border:0;border-top:1px solid #e3e5e7;background:transparent;color:#00aeec;font:inherit;cursor:pointer}
-        .danmaku-menu [data-bcp-live-follow]:hover{background:#00aeec12}
+        .danmaku-menu [data-bcp-live-follow],.danmaku-menu [data-bcp-live-whitelist]{display:block;width:100%;box-sizing:border-box;text-align:left;padding:11px 12px;border:0;border-top:1px solid #e3e5e7;background:transparent;color:#00aeec;font:inherit;cursor:pointer}
+        .danmaku-menu [data-bcp-live-follow]:hover,.danmaku-menu [data-bcp-live-whitelist]:hover{background:#00aeec12}
+        .danmaku-menu [data-bcp-live-whitelist]:disabled{color:#9499a0;cursor:default}
       `;
       document.head.appendChild(style);
       toolbarButton = document.createElement('button');
@@ -4600,7 +4698,7 @@
       panel.innerHTML = `
         <div class="bcp-live-row bcp-live-targets"><span class="bcp-live-label">我来同你玩 <small data-bcp-target-count>0/3</small></span><div class="bcp-live-people" data-bcp-people></div></div>
         <div class="bcp-live-row"><span class="bcp-live-label">开启路怒模式（随机车）</span><button type="button" class="bcp-live-switch" data-bcp-random role="switch" aria-label="开启路怒模式（随机车）" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
-        <div class="bcp-live-row"><span class="bcp-live-label">当前直播间禁用跟车：</span><button type="button" class="bcp-live-switch" data-bcp-disable role="switch" aria-label="当前直播间禁用跟车" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
+        <div class="bcp-live-row"><span class="bcp-live-label">白名单</span><button type="button" data-bcp-whitelist-open>查看白名单（0）</button></div>
         <div class="bcp-live-row"><span class="bcp-live-label">托管</span><button type="button" class="bcp-live-switch" data-bcp-cover-toggle role="switch" aria-label="托管" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
         <div class="bcp-cover-options"><div class="bcp-cover-colors" aria-label="托管纯色"></div><label class="bcp-cover-upload">选择图片<input type="file" data-bcp-cover-file aria-label="选择托管图片" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp"></label><p data-bcp-cover-status></p><p data-bcp-cover-filename></p></div>
         <div class="bcp-live-row"><span class="bcp-live-label">调整画面风格</span><button type="button" class="bcp-style-preset" data-bcp-style-preset>预设样式</button><button type="button" class="bcp-live-switch" data-bcp-style-toggle role="switch" aria-label="调整画面风格" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div><p class="bcp-style-state" data-bcp-style-state></p>`;
@@ -4622,10 +4720,9 @@
       });
       panel.querySelector('[data-bcp-random]').addEventListener('click', () => {
         if (settings.targets.length) return;
-        changeSettings({random: !settings.random}, settings.disabled ? '设置已保存；当前直播间仍处于禁用状态。' : '路怒模式设置已保存。');
+        changeSettings({random: !settings.random}, '路怒模式设置已保存。');
       });
-      panel.querySelector('[data-bcp-disable]').addEventListener('click', () => changeSettings({disabled: !settings.disabled},
-        settings.disabled ? '已解除当前直播间禁用。' : '当前直播间已禁用跟车，指定对象和随机设置仍保留。'));
+      panel.querySelector('[data-bcp-whitelist-open]').addEventListener('click', openWhitelist);
       feedback = document.createElement('div'); feedback.id = 'bcp-live-feedback'; feedback.hidden = true;
       feedback.setAttribute('role', 'status');
       document.body.append(panel, feedback); mountToolbar(); render();
@@ -4642,9 +4739,10 @@
           new MutationObserver(queueMenu).observe(menu, {attributes: true, attributeFilter: ['style', 'class']});
         }
         let button = menu.querySelector('[data-bcp-live-follow]');
-        if (!candidate || !visible(menu) || Date.now() - candidate.at > 30000) { button?.remove(); continue; }
+        let whitelistButton = menu.querySelector('[data-bcp-live-whitelist]');
+        if (!candidate || !visible(menu) || Date.now() - candidate.at > 30000) { button?.remove(); whitelistButton?.remove(); continue; }
         const menuUid = menu.querySelector('.go-space a[href]')?.getAttribute('href')?.match(/space\.bilibili\.com\/(\d+)/)?.[1];
-        if (menuUid && menuUid !== candidate.uid) { button?.remove(); continue; }
+        if (menuUid && menuUid !== candidate.uid) { button?.remove(); whitelistButton?.remove(); continue; }
         if (!button) {
           button = document.createElement('button'); button.type = 'button'; button.setAttribute('data-bcp-live-follow', '1');
           button.addEventListener('click', () => {
@@ -4655,10 +4753,18 @@
           });
           (menu.querySelector('.none-select') || menu).appendChild(button);
         }
+        if (!whitelistButton) {
+          whitelistButton = document.createElement('button'); whitelistButton.type = 'button'; whitelistButton.setAttribute('data-bcp-live-whitelist', '1');
+          whitelistButton.addEventListener('click', () => { addWhitelist(candidate); candidate = null; queueMenu(); });
+          button.after(whitelistButton);
+        }
         const selected = settings.targets.some(person => person.uid === candidate.uid);
         button.disabled = !selected && settings.targets.length >= MAX_TARGETS;
         setText(button, selected ? '取消跟车' : settings.targets.length >= MAX_TARGETS ? '跟车已满（3/3）' : '一键跟车');
-        button.title = `指定 ${candidate.name}（UID ${candidate.uid}）${settings.disabled ? '，当前房间禁用中' : ''}`;
+        button.title = `指定 ${candidate.name}（UID ${candidate.uid}）`;
+        whitelistButton.disabled = isWhitelisted(candidate.uid);
+        setText(whitelistButton, whitelistButton.disabled ? '已在白名单中' : '添加至白名单');
+        whitelistButton.title = `${candidate.name}（UID ${candidate.uid}）· 仅跳过本直播间随机跟车`;
       }
     }
     function syncPage() {
@@ -4685,7 +4791,7 @@
       }).observe(document.body, {childList: true, subtree: true});
       document.addEventListener('click', event => {
         const el = event.target instanceof Element ? event.target : event.target?.parentElement;
-        if (el?.closest('#bcp-live-panel,#bcp-live-style-dialog,#bcp-live-toolbar-button,[data-bcp-live-follow]')) return;
+        if (el?.closest('#bcp-live-panel,#bcp-live-style-dialog,#bcp-live-whitelist-dialog,#bcp-live-toolbar-button,[data-bcp-live-follow],[data-bcp-live-whitelist]')) return;
         closePanel();
         const row = el?.closest(ROW);
         if (row && chat?.contains(row)) {
@@ -4700,11 +4806,11 @@
         if (event.key === storageKey()) acceptSettings(event.newValue);
         if (event.key === STYLE_PREFIX + room) acceptStyleSettings(event.newValue);
       });
-      window.addEventListener('pagehide', () => { pageActive = false; resetRuntime(); resetCover(); closeStyleEditor(false); restoreStyleTargets(); styleSvg?.remove(); styleSvg = styleFilters = null; closePanel(); });
+      window.addEventListener('pagehide', () => { pageActive = false; resetRuntime(); resetCover(); closeStyleEditor(false); closeWhitelist(); restoreStyleTargets(); styleSvg?.remove(); styleSvg = styleFilters = null; closePanel(); });
       window.addEventListener('pageshow', () => { pageActive = true; syncPage(); baseline(); armRandom(); });
       window.addEventListener('resize', positionPanel);
       window.addEventListener('resize', scheduleCoverLayout);
-      document.addEventListener('fullscreenchange', () => { finishCoverGesture(); closeStyleEditor(false); syncCover(); syncStyle(); });
+      document.addEventListener('fullscreenchange', () => { finishCoverGesture(); closeStyleEditor(false); closeWhitelist(); syncCover(); syncStyle(); });
       document.addEventListener('scroll', positionPanel, true);
       window.addEventListener('popstate', syncPage);
       window.setInterval(syncPage, 1000);

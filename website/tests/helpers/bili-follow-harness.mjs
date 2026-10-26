@@ -15,12 +15,13 @@ export function followHarness(options = {}) {
   }
   const button = { isConnected: true, disabled: true, getClientRects: () => [{}], click: () => { clicks++; throw new Error('Native send must not be clicked') } }
   const controls = { querySelectorAll: selector => selector.startsWith('textarea') ? [input] : [button] }
+  const chat = { isConnected: true, querySelectorAll: () => [], contains: () => true }
   const document = {
     cookie: options.cookie ?? 'DedeUserID=99; bili_jct=qa-token', activeElement: input,
-    getElementById: id => id === 'control-panel-ctnr-box' ? controls : null,
+    getElementById: id => id === 'control-panel-ctnr-box' ? controls : id === 'chat-items' && options.chat ? chat : null,
     querySelectorAll: () => [], addEventListener: () => {},
   }
-  const location = { pathname: '/1001' }
+  const location = { pathname: options.pathname ?? '/1001' }
   const window = {}; window.self = window.top = window
   const timeout = (fn, ms) => { const id = nextTimer++; timers.set(id, { at: clock.now + Math.max(0, ms || 0), fn }); return id }
   async function fetch(url, init = {}) {
@@ -36,20 +37,23 @@ export function followHarness(options = {}) {
     return { ok: true, json: async () => ({ code: 0 }) }
   }
   class TestDate extends Date { static now() { return clock.now } }
-  const context = vm.createContext({ window, document, location, URLSearchParams, URL: options.URL ?? URL, Image: options.Image, AbortController, Date: TestDate, fetch,
+  const math = Object.create(Math); math.random = options.random ?? Math.random
+  const context = vm.createContext({ window, document, location, URLSearchParams, URL: options.URL ?? URL, Image: options.Image, AbortController, Date: TestDate, Math: math, fetch,
     getComputedStyle: options.getComputedStyle ?? (() => ({ visibility: 'visible' })), setTimeout: timeout, clearTimeout: id => timers.delete(id),
-    queueMicrotask, localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) },
+    queueMicrotask, MutationObserver: class { observe() {} disconnect() {} takeRecords() { return [] } },
+    localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) },
   })
   const marker = "    if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot, {once: true});"
   let module = scriptSource.slice(scriptSource.indexOf('  function installLiveFollow() {'), scriptSource.lastIndexOf('\n})();'))
   if (!module.includes(marker)) throw new Error('Live module test boundary changed')
   module = module.replace(marker, `    return {normalizeSettings, begin, removeTarget, processRow, changeSettings, checkRoom, acceptSettings,
+      addWhitelist, removeWhitelist, clearWhitelist, isWhitelisted, bindChat,
       fitCoverRect, dragCoverRect, coverPictureBox, coverContainer, chooseCoverFile, chooseCoverColor, resetCover,
       normalizeStyleCurve, normalizeStylePreset, normalizeStyleSettings, sampleStyleCurve, styleTables,
       readStyleSettings, writeStyleSettings, styleMediaIn, syncStyleTargets, restoreStyleTargets,
       inspectStyle: () => JSON.stringify(styleSettings),
       inspectCover: () => JSON.stringify(cover),
-      inspect: () => JSON.stringify({settings, room, queued: sendQueue.length, pending: !!pending, lastDetail, submitted, acknowledged})};`)
+      inspect: () => JSON.stringify({settings, room, queued: sendQueue.length, pending: !!pending, randomReady, lastDetail, submitted, acknowledged})};`)
   const api = vm.runInContext(`${module}\ninstallLiveFollow()`, context)
   const flush = () => new Promise(resolve => setImmediate(resolve))
   async function tick(ms = 0) {

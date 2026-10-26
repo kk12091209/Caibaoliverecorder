@@ -13,11 +13,11 @@ export const browserPlugins: BrowserPlugin[] = [
   {
     slug: 'bili-comment-blindbox',
     name: 'B站评论盲盒防护',
-    version: '0.20.0',
+    version: '0.21.0',
     summary: '评论按需查看，直播随心遮挡，也能跟上熟悉的声音。',
     homepage: 'https://greasyfork.org/zh-CN/scripts/585978',
     source: '/plugins/bili-comment-blindbox.user.js',
-    tags: ['评论防护', '三人跟车', '托管遮挡', '画面调色'],
+    tags: ['评论防护', '三人跟车', '随机车白名单', '托管遮挡', '画面调色'],
     features: [
       {
         title: '先遮住，再决定看不看',
@@ -25,7 +25,11 @@ export const browserPlugins: BrowserPlugin[] = [
       },
       {
         title: '我来同你玩',
-        body: '在直播弹幕的用户菜单里点击「一键跟车」，最多同时跟车三人，每位后面的 × 都能单独取消。「开启路怒模式（随机车）」与「当前直播间禁用跟车」也保留在设置里。',
+        body: '在直播弹幕的用户菜单里点击「一键跟车」，最多同时跟车三人，每位后面的 × 都能单独取消。也可开启路怒模式（随机车）；单次发送失败或没有回显时跳过本条，跟车保持开启，后续符合规则的新弹幕继续处理。',
+      },
+      {
+        title: '随机跟车，跳过不想跟发的人',
+        body: '点击弹幕用户名，在「一键跟车」下方添加至白名单；名单按直播间独立保存在本地。在随机车开关下方查看白名单，可逐个移除或一键清空；白名单只过滤随机跟车，手动指定的对象仍按你的选择处理。',
       },
       {
         title: '你写你的，跟车照常',

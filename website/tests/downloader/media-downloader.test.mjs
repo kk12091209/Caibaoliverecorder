@@ -19,7 +19,7 @@ test('only platform hosts without credentials, IP literals or custom ports are a
   assert.equal(shareUrl('https://b23.tv/FQ9fWMm这个是分享链接').pathname,'/FQ9fWMm');
   assert.throws(()=>shareUrl('https://v26-web.douyinvod.com/media'));
   assert.equal(approvedUrl('https://v3-dy-o.zjcdn.com/media').hostname,'v3-dy-o.zjcdn.com');
-  assert.throws(()=>approvedUrl('https://other.zjcdn.com/media'));
+  assert.throws(()=>approvedUrl('https://other.akamaized.net/media'));
   assert.throws(()=>approvedUrl('https://v3-dy-o.zjcdn.com.evil.example/media'));
 });
 test('hydrated items must match the requested work and not a recommendation',()=>{

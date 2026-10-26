@@ -20,6 +20,13 @@ import { newId } from '../platforms/resolver.mjs'
 import { saveRemote } from '../infrastructure/network.mjs'
 import { MediaImages } from '../media/images.mjs'
 import { waitFor, WorkPool, StageTimings } from '../infrastructure/cache.mjs'
+import {
+  PUBLIC_DOWNLOAD_BYTES,
+  PUBLIC_STORAGE_BYTES,
+  MIN_FREE_DISK_BYTES,
+  sizeLimitError,
+  diskSpaceError,
+} from '../infrastructure/limits.mjs'
 import { mediaTool as tool } from '../media/tools.mjs'
 import { muxRemoteMp4 } from '../media/streaming.mjs'
 import { reusableMp4 } from '../media/mp4-reuse.mjs'
@@ -116,10 +123,12 @@ export class DownloadJobs {
       publicMode = false,
       fileServer = false,
       tempDir = tmpdir(),
-      maxFileBytes = publicMode ? 1024 ** 3 : 8 * 1024 ** 3,
-      maxJobBytes = publicMode ? 1024 ** 3 : Infinity,
-      maxStorageBytes = publicMode ? 8 * 1024 ** 3 : Infinity,
+      maxFileBytes = publicMode ? PUBLIC_DOWNLOAD_BYTES : 8 * 1024 ** 3,
+      maxJobBytes = publicMode ? PUBLIC_DOWNLOAD_BYTES : Infinity,
+      maxStorageBytes = publicMode ? PUBLIC_STORAGE_BYTES : Infinity,
       keepMs = publicMode ? 3600000 : 12 * 3600000,
+      diskSpace = statfs,
+      diskCheckMs = 1000,
     } = {},
   ) {
     this.resolver = resolver
@@ -150,6 +159,8 @@ export class DownloadJobs {
     this.maxJobBytes = maxJobBytes
     this.maxStorageBytes = maxStorageBytes
     this.keepMs = keepMs
+    this.diskSpace = diskSpace
+    this.diskCheckMs = diskCheckMs
   }
   storageUsage() {
     let bytes = 0
@@ -163,11 +174,12 @@ export class DownloadJobs {
     await this.prune()
     if (this.storageUsage() >= this.maxStorageBytes)
       throw new Error('临时下载空间正在使用中，请稍后重试。')
-    if (this.publicMode) {
-      const disk = await statfs(await this.root)
-      if (disk.bavail * disk.bsize < 5 * 1024 ** 3)
-        throw new Error('服务器临时空间不足，请稍后重试。')
-    }
+    await this.ensureDiskCapacity()
+  }
+  async ensureDiskCapacity() {
+    if (!this.publicMode) return
+    const disk = await this.diskSpace(await this.root)
+    if (disk.bavail * disk.bsize < MIN_FREE_DISK_BYTES) throw diskSpaceError()
   }
   async prune() {
     const now = Date.now()
@@ -354,7 +366,9 @@ export class DownloadJobs {
       signal = AbortSignal.any([job.controller.signal, operation.signal]),
       dir = path.join(await this.root, job.id)
     signal.throwIfAborted()
+    await this.ensureCapacity()
     await mkdir(dir)
+    let capacityFailure, capacityCheck, capacityTimer
     const stage = (name, pool, work) =>
       job.timings.run(name, pool, work, { signal, owner: job.session.owner })
     const run = (command, args) =>
@@ -367,9 +381,9 @@ export class DownloadJobs {
       job.total =
         result.kind === 'images' ? 0 : [...progress.values()].reduce((n, p) => n + p.total, 0)
       if (job.bytes > this.maxJobBytes || job.outputBytes > this.maxJobBytes)
-        throw new Error('当前在线测试版每次下载最多支持 1 GB，请减少本次选中内容。')
+        throw sizeLimitError(this.maxJobBytes)
       if (this.storageUsage() > this.maxStorageBytes)
-        throw new Error('临时下载空间已满，请稍后重试。')
+        throw new Error('服务器临时下载空间正在使用中，请稍后重试。')
     }
     const download = (urls, target, referer) =>
       stage('download', this.network, () =>
@@ -469,7 +483,7 @@ export class DownloadJobs {
                     job.stream.bytes = bytes
                     job.outputBytes = bytes
                     if (this.storageUsage() > this.maxStorageBytes)
-                      throw new Error('临时下载空间已满，请稍后重试。')
+                      throw new Error('服务器临时下载空间正在使用中，请稍后重试。')
                     job.timings.ready()
                     job.publishStream()
                   },
@@ -581,8 +595,7 @@ export class DownloadJobs {
         job.outputBytes = job.streamMode
           ? (await stat(target)).size
           : job.outputBytes + (await stat(target)).size
-        if (job.outputBytes > this.maxJobBytes)
-          throw new Error('当前在线测试版每次下载最多支持 1 GB，请减少本次选中内容。')
+        if (job.outputBytes > this.maxJobBytes) throw sizeLimitError(this.maxJobBytes)
       }
       signal.throwIfAborted()
       const info = await stat(target)
@@ -600,6 +613,22 @@ export class DownloadJobs {
       job.timings.ready()
     }
     try {
+      if (this.publicMode) {
+        // The disk can fill after admission. Stop this producer with a clear
+        // capacity error, and drain it before removing its incomplete files.
+        capacityTimer = setInterval(() => {
+          if (capacityCheck || capacityFailure) return
+          capacityCheck = this.ensureDiskCapacity()
+            .catch((error) => {
+              capacityFailure = error
+              operation.abort(error)
+            })
+            .finally(() => {
+              capacityCheck = null
+            })
+        }, this.diskCheckMs)
+        capacityTimer.unref?.()
+      }
       job.status = 'running'
       job.phase = '正在获取最高可用画质'
       let next = 0
@@ -631,7 +660,9 @@ export class DownloadJobs {
           type: 'application/zip',
           bytes: (await stat(target)).size,
         }
+        if (job.archive.bytes > this.maxJobBytes) throw sizeLimitError(this.maxJobBytes, '打包文件')
       }
+      signal.throwIfAborted()
       job.status = 'done'
       job.phase = '下载准备完成'
       job.total = job.bytes
@@ -639,7 +670,7 @@ export class DownloadJobs {
       const cancelled = job.controller.signal.aborted
       job.status = cancelled ? 'cancelled' : 'failed'
       job.phase = cancelled ? '已取消' : '下载失败'
-      job.error = cancelled ? '' : error.message
+      job.error = cancelled ? '' : (capacityFailure || error).message
       if (job.album && !cancelled && job.files.length) {
         const complete = new Set(job.files.map((file) => path.basename(file.path)))
         await Promise.all(
@@ -652,6 +683,9 @@ export class DownloadJobs {
         job.files = []
       }
       job.archive = null
+    } finally {
+      clearInterval(capacityTimer)
+      await capacityCheck
     }
   }
   async close() {

@@ -5,6 +5,7 @@ import { Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { openRemote } from '../infrastructure/network.mjs'
+import { sizeLimitError } from '../infrastructure/limits.mjs'
 
 // FFmpeg only sees pipes. All remote redirects and DNS still pass through the
 // downloader's allowlist and pinned-address validation, never FFmpeg's network stack.
@@ -58,7 +59,7 @@ export async function muxRemoteMp4(
           }
           if (total > maxBytes) {
             response.stream.destroy()
-            throw new Error('视频源超过本次下载大小限制。')
+            throw sizeLimitError(maxBytes, '视频源')
           }
           response.stream.on('error', () => {})
           responses.push({ ...response, total })
@@ -134,7 +135,7 @@ export async function muxRemoteMp4(
           try {
             bytes += chunk.length
             if (bytes > maxBytes || (response.total && bytes > response.total))
-              throw new Error('视频源超过本次下载大小限制。')
+              throw sizeLimitError(maxBytes, '视频源')
             onProgress(String(index))(bytes, response.total)
             touch()
             callback(null, chunk)
@@ -155,8 +156,7 @@ export async function muxRemoteMp4(
     // Publish only bytes acknowledged by the file writer, so readers never see holes.
     const sink = new Writable({
       write(chunk, _encoding, callback) {
-        if (written + chunk.length > maxBytes)
-          return callback(new Error('视频超过本次下载大小限制。'))
+        if (written + chunk.length > maxBytes) return callback(sizeLimitError(maxBytes, '视频'))
         output.write(chunk, (error) => {
           if (error) return callback(error)
           try {
