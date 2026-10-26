@@ -1,0 +1,27 @@
+name: Attach verified FFmpeg source for 0.3.1
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify unchanged supplier source and attach to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: kk12091209/Caibaoliverecorder
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view v0.3.1 --json isDraft,targetCommitish > release.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open('release.json'))
+          assert r['isDraft'] and r['targetCommitish']=='306569795da92e355c4651c3bcbbf1c9babd4e1c'
+          PY
+          gh release download v0.3.0 --pattern 'Caibo-0.3.0-FFmpeg-upstream-sources.tar.gz'
+          printf '%s\n' '8ab6eca940d9fc95621b43a55a1fe5df795ff5806e453232765944f3cc5b2594  Caibo-0.3.0-FFmpeg-upstream-sources.tar.gz' | sha256sum --check -
+          mv Caibo-0.3.0-FFmpeg-upstream-sources.tar.gz Caibo-0.3.1-FFmpeg-upstream-sources.tar.gz
+          gh release upload v0.3.1 Caibo-0.3.1-FFmpeg-upstream-sources.tar.gz
