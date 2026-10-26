@@ -6,7 +6,7 @@ permissions:
 jobs:
   attach:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Verify unchanged supplier source and attach to draft
         env:
@@ -15,7 +15,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release view v0.3.1 --json isDraft,targetCommitish > release.json
+          for attempt in $(seq 1 40); do
+            if gh release view v0.3.1 --json isDraft,targetCommitish > release.json 2>/dev/null; then break; fi
+            sleep 15
+          done
           python3 - <<'PY'
           import json
           r=json.load(open('release.json'))
