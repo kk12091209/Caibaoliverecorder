@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   package:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -24,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: 306569795da92e355c4651c3bcbbf1c9babd4e1c
           fetch-depth: 0
           submodules: recursive
       - uses: actions/setup-node@v4
@@ -76,6 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: 306569795da92e355c4651c3bcbbf1c9babd4e1c
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
@@ -93,7 +95,7 @@ jobs:
           import hashlib, json, os, re
           root = Path('release-files')
           data = json.loads((root/'windows-build.json').read_text(encoding='utf-8-sig'))
-          assert data['sourceRevision'] == os.environ['GITHUB_SHA']
+          assert data['sourceRevision'] == '306569795da92e355c4651c3bcbbf1c9babd4e1c'
           assert data['version'] == os.environ['RELEASE_VERSION']
           for name in ('nodeTests', 'coreTests', 'coreLifecycle', 'portableZip', 'portable7z', 'installerUpgradeUninstall'):
               assert data[name] == 'passed', name
@@ -107,5 +109,5 @@ jobs:
           assert listed == {p.name for p in root.iterdir()} - {'SHA256SUMS.txt'}
           print('Verified source revision, successful checks and all release hashes.')
           PYVERIFY
-          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
+          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "306569795da92e355c4651c3bcbbf1c9babd4e1c" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
           gh release upload "v$RELEASE_VERSION" release-files/*
