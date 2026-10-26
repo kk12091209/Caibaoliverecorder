@@ -1,0 +1,56 @@
+name: Publish verified 0.3.0 shortcut Windows assets
+on:
+  push:
+    branches: [codex/recorder-030-shortcut-publish]
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: publish-030-shortcut-windows-assets
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-0.3.0
+          run-id: 40271381075
+          repository: kk12091209/Caibaoliverecorder
+          github-token: ${{ github.token }}
+          path: verified-files
+      - name: Verify exact successful build, checksums and shortcut
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,hashlib,zipfile
+          root=Path('verified-files')
+          sums=(root/'SHA256SUMS.txt').read_bytes()
+          assert hashlib.sha256(sums).hexdigest()=='165f19b316a7db9ce2aa4e4f050b4f21bcf10224b8d514514b646e99ebfb7e20'
+          listed=set()
+          for line in sums.decode().splitlines():
+              digest,name=line.split('  ',1)
+              assert Path(name).name==name and name not in listed
+              listed.add(name)
+              with (root/name).open('rb') as stream:
+                  assert hashlib.file_digest(stream,'sha256').hexdigest()==digest,name
+          assert listed=={p.name for p in root.iterdir()}-{'SHA256SUMS.txt'}
+          metadata=json.loads((root/'windows-build.json').read_text(encoding='utf-8-sig'))
+          assert metadata['version']=='0.3.0' and metadata['sourceRevision']=='bdc46c7e262d039a7ad9200f33ead5e1b1192109'
+          for key in ['nodeTests','coreTests','coreLifecycle','portableZip','portable7z','installerUpgradeUninstall']:
+              assert metadata[key]=='passed',key
+          with zipfile.ZipFile(root/'BiliLiveEditor-0.3.0-win-x64.zip') as archive:
+              scripts=[n for n in archive.namelist() if '/live-editor/dist/assets/index-' in n and n.endswith('.js')]
+              assert len(scripts)==1
+              text=archive.read(scripts[0]).decode()
+              assert '⌘+⌥+i' in text and '⌘⌥I' not in text
+          print('Exact successful Windows artifacts verified; no rebuild.')
+          PY
+      - name: Replace only the verified Windows release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/kk12091209/Caibaoliverecorder/releases/tags/v0.3.0 --jq .target_commitish)" = bdc46c7e262d039a7ad9200f33ead5e1b1192109
+          gh release upload v0.3.0 --repo kk12091209/Caibaoliverecorder --clobber verified-files/*
