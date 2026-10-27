@@ -18,3 +18,10 @@ test('已完成素材的已载入窗口可复用，跳出窗口或更换素材�
   assert.equal(containsOverlay(cached, 'done', 50), false);
   assert.equal(containsOverlay(cached, 'other', 100), false);
 });
+
+test('满额响应只缓存实际返回的范围，不把被截掉的未来标为已加载', () => {
+  const messages=Array.from({length:4096},(_,i)=>({time:55+i/100}));
+  const cached=overlayWindow('dense',55,135,200,true,messages);
+  assert.equal(cached.to,95.95);
+  assert.equal(containsOverlay(cached,'dense',100),false);
+});

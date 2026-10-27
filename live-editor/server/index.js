@@ -34,6 +34,7 @@ import { LinkmicIndex } from './linkmic.js';
 import { savedRecordingStyle, validateRecordingStyle, RECORDING_STYLE_SETTING } from '../shared/recording-style.js';
 import { savedTimestampStyle, validateTimestampStyle, TIMESTAMP_STYLE_SETTING, savedTimestampPosition, validateTimestampPosition, TIMESTAMP_POSITION_SETTING } from '../shared/timestamp-style.js';
 import {PlatformCredentials} from './platform-credentials.js';
+import { OVERLAY_MESSAGE_LIMIT, PANEL_MESSAGE_LIMIT } from '../shared/message-limits.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -336,8 +337,10 @@ async function createManagedApp(options,runtime) {
         if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
         const from=Math.max(0,Number(url.searchParams.get('from')||0)),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),search=(url.searchParams.get('q')||'').slice(0,200);
         if(!Number.isFinite(from)||!Number.isFinite(to))throw new Error('时间范围无效。');
+        const atParameter=url.searchParams.get('at'),at=atParameter===null?undefined:Number(atParameter),overlay=url.searchParams.get('overlay')==='1';
+        if(atParameter!==null&&(!atParameter.trim()||!Number.isFinite(at)||at<from||at>to))throw new Error('弹幕跟随时间无效。');
         await store.chatRules.prepare(match[1]);
-        return json(res,store.messages(match[1],from,to,search,url.searchParams.get('overlay')==='1'?3000:500));
+        return json(res,store.messages(match[1],from,to,search,overlay?OVERLAY_MESSAGE_LIMIT:PANEL_MESSAGE_LIMIT,undefined,!overlay&&!search?at:undefined));
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/signals$/.exec(p))&&req.method==='GET'){
         const id=match[1],session=store.session(id);

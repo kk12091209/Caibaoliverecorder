@@ -213,10 +213,14 @@ export class Store {
     this.run('INSERT INTO edits VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET revision=excluded.revision,data=excluded.data', id, current.revision + 1, JSON.stringify(data));
     return { revision: current.revision + 1, ...data };
   }
-  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false) {
+  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at) {
     this.chatRules.sync(id);
     const lottery = filterLottery ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason='lottery')" : '';
-    return this.all("SELECT * FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery + " ORDER BY time,id LIMIT ?", id, from, to, `%${search}%`, `%${search}%`, limit);
+    const query="SELECT * FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery;
+    // Keep the current playback position inside a dense list, then restore
+    // chronological order. Search and non-following callers keep their order.
+    if(Number.isFinite(at))return this.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',id,from,to,`%${search}%`,`%${search}%`,at,limit);
+    return this.all(query+' ORDER BY time,id LIMIT ?',id,from,to,`%${search}%`,`%${search}%`,limit);
   }
   setting(key, value) {
     if (value !== undefined) this.run('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));

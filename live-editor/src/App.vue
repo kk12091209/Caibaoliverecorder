@@ -54,7 +54,7 @@ const previewVolume=ref(1),previewMuted=ref(false);
 try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
 let previewVolumeHold=previewVolume.value>0?previewVolume.value:1;
 const previewSlider=computed(()=>previewMuted.value?0:previewVolume.value);
-const startText=ref('00:00:00'),endText=ref('00:00:00'),startExact=ref(0),endExact=ref(0),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true);
+const startText=ref('00:00:00'),endText=ref('00:00:00'),startExact=ref(0),endExact=ref(0),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true),messageList=ref(null);
 const roomBusyIds=ref([]);
 const modal=ref(''),modalBusy=ref(false),exportMode=ref('dual'),materialDeleteError=ref('');
 const startMarked=ref(false),endMarked=ref(false),sessionMenu=ref(null),confirmTarget=ref(null);
@@ -455,15 +455,24 @@ async function toggleMessage(message){const id=selected.value,version=selectionG
 async function undoMessage(){const sessionId=selected.value,version=selectionGeneration,id=edit.value.undo.pop();if(!id)return;edit.value.excluded=edit.value.excluded.filter(x=>x!==id);await save();if(sessionId===selected.value&&version===selectionGeneration)void loadSignals(true);}
 async function loadMessages(force=false){
   if(!selectionReady.value||dmBusy)return;const id=selected.value,version=selectionGeneration;const key=`${id}:${Math.floor(position.value/10)}:${query.value}:${followMessages.value}`;if(!force&&key===lastMessageKey)return;const request=++messageRequest;dmBusy=true;
-  try{let from=0,to=Math.max(duration.value,1);if(followMessages.value&&!query.value){from=Math.max(0,position.value-20);to=position.value+40;}const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&q=${encodeURIComponent(query.value)}`);if(request===messageRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(messages.value,result))messages.value=result;lastMessageKey=key;}}
+  try{let from=0,to=Math.max(duration.value,1),anchor='';if(followMessages.value&&!query.value){const at=position.value;from=Math.max(0,at-20);to=at+40;anchor=`&at=${at}`;}const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&q=${encodeURIComponent(query.value)}${anchor}`);if(request===messageRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(messages.value,result))messages.value=result;lastMessageKey=key;}}
   catch(e){if(request===messageRequest&&version===selectionGeneration)tell(e.message);}finally{if(request===messageRequest)dmBusy=false;}
 }
 function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user);}
+function followMessagePosition(){
+  const list=messageList.value,rows=visibleMessages.value;
+  if(!followMessages.value||query.value||!danmakuVisible.value||!list?.clientHeight||!rows.length)return;
+  let nearest=0;
+  for(let i=1;i<rows.length;i++)if(Math.abs(rows[i].time-position.value)<Math.abs(rows[nearest].time-position.value))nearest=i;
+  const row=list.children[nearest];if(!row)return;
+  list.scrollTop+=row.getBoundingClientRect().top-list.getBoundingClientRect().top-list.clientHeight/3;
+}
+watch([position,visibleMessages,followMessages,query,danmakuVisible],followMessagePosition,{flush:'post'});
 async function loadOverlay(){
   if(!selectionReady.value||overlayBusy)return;const id=selected.value,t=position.value,version=selectionGeneration;
   if(containsOverlay(overlayWindow,id,t))return;
-  const from=Math.max(0,t-45),to=t+35,window=makeOverlayWindow(id,from,to,duration.value,activeSession.value?.status==='finished'),request=++overlayRequest;overlayBusy=true;
-  try{const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&overlay=1`);if(request===overlayRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(overlayFeed.value,result))overlayFeed.value=result;overlayWindow=window;}}
+  const from=Math.max(0,t-45),to=t+35,recordedDuration=duration.value,finished=activeSession.value?.status==='finished',request=++overlayRequest;overlayBusy=true;
+  try{const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&overlay=1`);if(request===overlayRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(overlayFeed.value,result))overlayFeed.value=result;overlayWindow=makeOverlayWindow(id,from,to,recordedDuration,finished,result);}}
   catch{}finally{if(request===overlayRequest)overlayBusy=false;}
 }
 let applyingUpdate=false;
@@ -602,7 +611,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <p v-if="preparationErrors[activeSession.id]" class="preparation-note preparation-error" role="alert">{{ preparationErrors[activeSession.id] }}</p><p v-else-if="selectedLivePreparation" class="preparation-note">{{ selectedLivePreparation.note }}</p><p v-else-if="activeSession.status==='finished'&&preparationReason(selectedPreparation)" class="preparation-note" :class="{'preparation-error':selectedPreparation?.status==='error'}">{{ preparationReason(selectedPreparation) }}</p>
         </section>
       </main>
-      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>弹幕</h2><button class="icon-button" title="撤销最近一次排除" aria-label="撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="search-input"><Search :size="17"/><input v-model="query" aria-label="搜索弹幕" placeholder="搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>跟随播放位置</label></div><div class="danmaku-list"><div v-if="!visibleMessages.length" class="danmaku-empty"><Radio :size="28"/><strong>{{ query?'没有匹配的弹幕':'这里会显示录制的弹幕' }}</strong><span>{{ selected?'弹幕会随录像持续更新':'选择录像后查看和编辑' }}</span></div><div v-for="message in visibleMessages" :key="message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1}"><button class="message-content" @click="playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text">{{ message.text }}</span></button><button class="icon-button" :aria-label="`${excluded.has(message.id)?'恢复':'删除'}弹幕：${message.text}`" :title="excluded.has(message.id)?'恢复到剪辑':'从剪辑中排除，保留原始弹幕'" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></div><div class="danmaku-footer">已排除 {{ edit.excluded.length }} 条 · 原始弹幕保留</div></aside>
+      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>弹幕</h2><button class="icon-button" title="撤销最近一次排除" aria-label="撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="search-input"><Search :size="17"/><input v-model="query" aria-label="搜索弹幕" placeholder="搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>跟随播放位置</label></div><div ref="messageList" class="danmaku-list"><div v-if="!visibleMessages.length" class="danmaku-empty"><Radio :size="28"/><strong>{{ query?'没有匹配的弹幕':'这里会显示录制的弹幕' }}</strong><span>{{ selected?'弹幕会随录像持续更新':'选择录像后查看和编辑' }}</span></div><div v-for="message in visibleMessages" :key="message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1}"><button class="message-content" @click="playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text">{{ message.text }}</span></button><button class="icon-button" :aria-label="`${excluded.has(message.id)?'恢复':'删除'}弹幕：${message.text}`" :title="excluded.has(message.id)?'恢复到剪辑':'从剪辑中排除，保留原始弹幕'" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></div><div class="danmaku-footer">已排除 {{ edit.excluded.length }} 条 · 原始弹幕保留</div></aside>
     </div>
     <footer class="statusbar"><span><i :class="['live-dot',{online:connected}]"/>剪辑不改动原始录像和弹幕</span><span>{{ saving?'正在保存剪辑…':selected?'剪辑自动保存':'支持 B 站、抖音' }}</span></footer>
     <DismissibleNotice v-if="notice" :key="noticeSequence" class="toast" @dismiss="notice=''" :class="noticeKind" role="status"><Check v-if="noticeKind==='success'" :size="18"/><AlertCircle v-else :size="18"/><span>{{ notice }}</span></DismissibleNotice>
