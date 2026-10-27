@@ -197,6 +197,31 @@ check('manifest 被替换、篡改 spec 或结构损坏时 miss 且不删除视�
   }
 });
 
+check('相同大小和时间戳下改写缓存清单或所有者仍 miss，清理保留未知文件', async () => {
+  const f = await fixture('unchanged-record-metadata');
+  for (const name of ['manifest.json','owner.json']) {
+    const key=spec(),lease=await build(f.cache,key);lease.release();
+    const record=path.join(path.dirname(lease.file),name),original=await fs.lstat(record,{bigint:true});
+    const value=JSON.parse(await fs.readFile(record,'utf8'));
+    value.key=(value.key[0]==='0'?'1':'0')+value.key.slice(1);
+    const text=JSON.stringify(value);await fs.writeFile(record,text);
+    assert.equal(BigInt(Buffer.byteLength(text)),original.size);
+    // NTFS can return the previous timestamps immediately after a same-size
+    // rewrite. Model that deterministically rather than relying on clock speed.
+    const lstat=fs.lstat;
+    fs.lstat=async(file,...args)=>{
+      const stat=await lstat(file,...args);
+      return path.resolve(String(file))===record&&typeof stat.size==='bigint'?original:stat;
+    };
+    try {
+      assert.equal(await f.cache.acquire(key),null);
+      await f.cache.removeSession(key.sessionId);
+      assert.equal(await fs.readFile(record,'utf8'),text);
+      assert.equal(await hashFile(lease.file),digest(minimalMp4));
+    } finally { fs.lstat=lstat; }
+  }
+});
+
 check('缓存 hardlink 和文件 symlink 不能命中或被清理，不操作链接目标', async t => {
   const f = await fixture('links');
   for (const kind of ['hardlink', 'symlink']) {

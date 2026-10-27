@@ -26,6 +26,11 @@ const matchIdentity = (stat, identity) => stat && ['dev', 'ino', 'size', 'mtimeN
 // link-count and manifest checks below. Playback/cache hits stay strict.
 const matchRemovalIdentity = (stat, identity) => stat && ['dev', 'ino', 'size', 'mtimeNs'].every(name => String(stat[name]) === identity?.[name]);
 const publicEntry = entry => ({ path: entry.directory, reason: '缓存身份改变或包含未知文件，已保留' });
+function recordMatches(entry, name, value) {
+  if (!value || value.token !== path.basename(entry.directory) || value.key !== entry.key) return false;
+  if (name === 'owner.json') return value.format === OWNER_FORMAT && value.sessionId === entry.spec.sessionId;
+  return value.format === FORMAT && renderCacheKey(value.spec) === entry.key && value.bytes === entry.bytes && matchIdentity(value.fileIdentity, entry.fileIdentity);
+}
 async function plainDirectory(directory, create = false) {
   const absolute = path.resolve(directory), volume = path.parse(absolute).root; let current = volume;
   for (const part of path.relative(volume, absolute).split(path.sep).filter(Boolean)) {
@@ -160,9 +165,11 @@ export class RenderCache {
     if (entry.removing) return false;
     const stat = await checkedFile(this.root, entry.file);
     if (stat.nlink !== 1n || !matchIdentity(stat, entry.fileIdentity)) return false;
-    const manifest = await checkedFile(this.root, path.join(entry.directory, 'manifest.json'));
-    const owner = await checkedFile(this.root, path.join(entry.directory, 'owner.json'));
-    return manifest.nlink === 1n && owner.nlink === 1n && matchIdentity(manifest, entry.manifestIdentity) && matchIdentity(owner, entry.ownerIdentity);
+    // Same-size rewrites can retain the observed NTFS timestamps. Check the
+    // small records themselves as well as their filesystem identities.
+    const manifest = await readJson(this.root, path.join(entry.directory, 'manifest.json'));
+    const owner = await readJson(this.root, path.join(entry.directory, 'owner.json'));
+    return matchIdentity(manifest.identity, entry.manifestIdentity) && matchIdentity(owner.identity, entry.ownerIdentity) && recordMatches(entry, 'manifest.json', manifest.value) && recordMatches(entry, 'owner.json', owner.value);
   }
   async acquire(spec) {
     spec = normalized(spec); this.assertAllowed(spec.sessionId); const key = renderCacheKey(spec);
@@ -353,6 +360,7 @@ export class RenderCache {
         const stat = await checkedFile(this.root, path.join(entry.directory, name), { missing: !!receipt });
         if (!stat && receipt) continue;
         if (stat.nlink !== 1n || !matchRemovalIdentity(stat, expected)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
+        if (!recordMatches(entry, name, (await readJson(this.root, path.join(entry.directory, name))).value)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
       }
       const names = await fs.readdir(entry.directory);
       if (names.some(name => !['owner.json', 'manifest.json', 'video.mp4', REMOVAL].includes(name))) return { freedBytes: 0, deletedFiles: 0, preserved: [publicEntry(entry)] };
@@ -367,6 +375,7 @@ export class RenderCache {
         const file = path.join(entry.directory, name), stat = await checkedFile(this.root, file, { missing: true });
         if (!stat) continue;
         if (stat.nlink !== 1n || !matchRemovalIdentity(stat, expected)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
+        if (name !== 'video.mp4' && !recordMatches(entry, name, (await readJson(this.root, file)).value)) return { freedBytes, deletedFiles, preserved: [publicEntry(entry)] };
         control?.check();
         await fs.unlink(file); freedBytes += Number(stat.size); deletedFiles++;
         control?.progress();
