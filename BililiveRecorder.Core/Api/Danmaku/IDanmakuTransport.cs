@@ -9,6 +9,6 @@ namespace BililiveRecorder.Core.Api.Danmaku
     internal interface IDanmakuTransport : IDisposable
     {
         Task<PipeReader> ConnectAsync(string host, int port, AllowedAddressFamily allowedAddressFamily, CancellationToken cancellationToken);
-        Task SendAsync(byte[] buffer, int offset, int count);
+        Task SendAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default);
     }
 }

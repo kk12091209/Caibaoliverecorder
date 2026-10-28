@@ -148,7 +148,16 @@ export class DailyDiagnostics{
   attach(stream,component){
     if(!stream?.on)return;
     const decoder=new StringDecoder('utf8');let line='';
-    const emit=()=>{if(/\b(?:warn|error|fatal|exception|WRN|ERR|FTL)\b|失败|异常|错误/i.test(line))this.record(component,line,{level:'警告'});line='';};
+    const lifecycle={connecting:'正在连接弹幕服务器',authenticated:'弹幕认证通过','first-comment':'已收到首条普通弹幕',disconnected:'弹幕连接已断开','remote-closed':'弹幕服务器关闭连接，等待重连','credentials-changed':'登录态已变更，重新认证','connect-failed':'弹幕连接失败，等待重连','authentication-rejected':'弹幕认证被拒绝，等待重连','authentication-invalid':'弹幕认证回应无效，等待重连','authentication-timeout':'弹幕认证等待超时，等待重连','heartbeat-timeout':'弹幕心跳回应超时，等待重连','send-failed':'弹幕发送心跳失败，等待重连','receive-failed':'弹幕接收异常，等待重连','message-invalid':'忽略格式异常的弹幕'};
+    const info=new Set(['connecting','authenticated','first-comment','disconnected','credentials-changed']);
+    const emit=()=>{
+      const event=/\[DanmakuLifecycle\] room=(\d{1,10}) event=([a-z-]+)(?: code=(-?\d{1,10}))?(?:\s|$)/.exec(line);
+      // Retain only known state fields. The rest of a core line may contain
+      // protocol payloads; do not promote arbitrary informational output.
+      if(event&&Object.hasOwn(lifecycle,event[2]))this.record('B站弹幕',`房间 ${event[1]}：${lifecycle[event[2]]}${event[3]===undefined?'':`（代码 ${event[3]}）`}`,{level:info.has(event[2])?'信息':'警告'});
+      else if(/\b(?:warn|error|fatal|exception|WRN|ERR|FTL)\b|失败|异常|错误/i.test(line))this.record(component,line,{level:'警告'});
+      line='';
+    };
     const consume=text=>{const fragments=text.split('\n');for(let n=0;n<fragments.length;n++){line+=fragments[n].slice(0,Math.max(0,4096-line.length));if(n<fragments.length-1)emit();}};
     stream.on('data',chunk=>consume(decoder.write(chunk)));stream.on('end',()=>{consume(decoder.end());emit();});
   }

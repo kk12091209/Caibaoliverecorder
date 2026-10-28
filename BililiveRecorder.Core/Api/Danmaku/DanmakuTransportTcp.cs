@@ -96,13 +96,13 @@ namespace BililiveRecorder.Core.Api.Danmaku
 
         public void Dispose() => this.stream?.Dispose();
 
-        public async Task SendAsync(byte[] buffer, int offset, int count)
+        public async Task SendAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default)
         {
             if (this.stream is not { } s)
                 return;
 
-            await s.WriteAsync(buffer, offset, count).ConfigureAwait(false);
-            await s.FlushAsync().ConfigureAwait(false);
+            await s.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            await s.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 }

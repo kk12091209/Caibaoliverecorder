@@ -24,215 +24,310 @@ namespace BililiveRecorder.Core.Api.Danmaku
         private readonly RuntimeCookie? runtimeCookie;
         private readonly Timer timer;
         private readonly SemaphoreSlim semaphoreSlim = new SemaphoreSlim(1, 1);
+        private readonly Func<DanmakuTransportMode, string?, IDanmakuTransport> transportFactory;
+        private readonly Func<long> now;
+        private readonly TimeSpan authenticationTimeout;
+        private readonly long heartbeatIntervalMs, heartbeatTimeoutMs;
+        private readonly bool automaticHeartbeat;
+        private Session? current;
+        private volatile bool disposedValue;
+        private int credentialVersion;
 
-        private IDanmakuTransport? danmakuTransport;
-        private bool disposedValue;
+        // A receiver, timeout or cookie change may finish after the next socket
+        // opens. Every callback owns its session and can only close that session.
+        private sealed class Session
+        {
+            internal readonly object Sync = new object();
+            internal readonly int RoomId, CredentialVersion;
+            internal readonly CancellationTokenSource Lifetime;
+            internal readonly CancellationToken Token;
+            internal readonly TaskCompletionSource<bool> Authentication = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal IDanmakuTransport? Transport;
+            internal PipeReader? Reader;
+            internal bool Authenticated, Closed, FirstComment;
+            internal long LastHeartbeat, LastPing;
+            internal string? Failure;
+            internal int? AuthenticationCode;
+            private int stopped;
+            internal Session(int roomId, int credentialVersion, CancellationToken cancellationToken)
+            {
+                this.RoomId = roomId; this.CredentialVersion = credentialVersion;
+                this.Lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                this.Token = this.Lifetime.Token;
+            }
+            internal void StopIo()
+            {
+                if (Interlocked.Exchange(ref this.stopped, 1) == 0)
+                {
+                    this.Authentication.TrySetCanceled();
+                    this.Lifetime.Cancel();
+                    this.Lifetime.Dispose();
+                }
+                this.StopTransport();
+            }
+            internal void StopTransport()
+            {
+                try { this.Reader?.CancelPendingRead(); } catch (Exception) { }
+                try { this.Transport?.Dispose(); } catch (Exception) { }
+            }
+        }
 
-        public bool Connected => this.danmakuTransport != null;
-
+        public bool Connected
+        {
+            get { var session = this.current; if (session is null) return false; lock (session.Sync) return session.Authenticated && !session.Closed; }
+        }
         public event EventHandler<StatusChangedEventArgs>? StatusChanged;
         public event EventHandler<DanmakuReceivedEventArgs>? DanmakuReceived;
-
-        public Func<string, string?>? BeforeHandshake { get; set; } = null;
-
+        public Func<string, string?>? BeforeHandshake { get; set; }
         private static readonly JsonSerializerSettings jsonSerializerSettings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
 
         public DanmakuClient(IDanmakuServerApiClient apiClient, ILogger logger, RuntimeCookie? runtimeCookie = null)
+            : this(apiClient, logger, runtimeCookie, CreateTransport) { }
+
+        internal DanmakuClient(IDanmakuServerApiClient apiClient, ILogger logger, RuntimeCookie? runtimeCookie,
+            Func<DanmakuTransportMode, string?, IDanmakuTransport> transportFactory, Func<long>? now = null,
+            TimeSpan? authenticationTimeout = null, TimeSpan? heartbeatInterval = null, TimeSpan? heartbeatTimeout = null,
+            bool automaticHeartbeat = true)
         {
             this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             this.logger = logger?.ForContext<DanmakuClient>() ?? throw new ArgumentNullException(nameof(logger));
-
-            this.timer = new Timer(interval: 1000 * 30)
-            {
-                AutoReset = true,
-                Enabled = false
-            };
+            this.transportFactory = transportFactory;
+            this.now = now ?? (() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1000d / System.Diagnostics.Stopwatch.Frequency)));
+            this.authenticationTimeout = authenticationTimeout ?? TimeSpan.FromSeconds(10);
+            this.heartbeatIntervalMs = (long)(heartbeatInterval ?? TimeSpan.FromSeconds(30)).TotalMilliseconds;
+            this.heartbeatTimeoutMs = (long)(heartbeatTimeout ?? TimeSpan.FromSeconds(90)).TotalMilliseconds;
+            this.automaticHeartbeat = automaticHeartbeat;
+            this.timer = new Timer(1000) { AutoReset = true, Enabled = false };
             this.timer.Elapsed += this.SendPingMessageTimerCallback;
             this.runtimeCookie = runtimeCookie;
             if (runtimeCookie is not null) runtimeCookie.Changed += this.RuntimeCookie_Changed;
         }
 
+        private static IDanmakuTransport CreateTransport(DanmakuTransportMode mode, string? bindAddress) => mode switch
+        {
+            DanmakuTransportMode.Tcp => new DanmakuTransportTcp(bindAddress),
+            DanmakuTransportMode.Ws => new DanmakuTransportWebSocket(bindAddress),
+            DanmakuTransportMode.Wss => new DanmakuTransportSecureWebSocket(bindAddress),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode))
+        };
+
+        // These fixed events are the only informational core lines retained by
+        // the desktop log. Never include cookies, token, handshake or chat text.
+        private void Lifecycle(Session session, string state, bool warning = false, int? code = null)
+        {
+            var level = warning ? Serilog.Events.LogEventLevel.Warning : Serilog.Events.LogEventLevel.Information;
+            if (code.HasValue) this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l} code={Code}", session.RoomId, state, code.Value);
+            else this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l}", session.RoomId, state);
+        }
+
         private void RuntimeCookie_Changed(object? sender, EventArgs e)
         {
-            // Refresh only chat authentication. The video writer stays open.
-            if (this.disposedValue || !this.Connected) return;
-            _ = Task.Run(async () => { try { await this.DisconnectAsync().ConfigureAwait(false); } catch { } });
+            Interlocked.Increment(ref this.credentialVersion);
+            var session = this.current;
+            if (session is null || this.disposedValue) return;
+            session.Failure = "credentials-changed";
+            session.StopIo();
+            _ = this.CloseSessionAsync(session, "credentials-changed");
         }
 
         public async Task DisconnectAsync()
         {
+            var session = this.current;
+            if (session is null) return;
+            session.StopIo(); // Also releases a connection still waiting for authentication.
+            await this.CloseSessionAsync(session, "disconnected").ConfigureAwait(false);
+        }
+
+        // The semaphore is held by the caller. Status publication and detaching
+        // use the session lock so a late authentication cannot publish success.
+        private void Detach(Session session, string reason, bool warning)
+        {
+            lock (session.Sync)
+            {
+                if (!ReferenceEquals(this.current, session) || session.Closed) return;
+                session.Closed = true;
+                this.current = null;
+                try { this.timer.Stop(); } catch (ObjectDisposedException) { }
+                session.StopIo();
+                this.Lifecycle(session, reason, warning, reason == "authentication-rejected" ? session.AuthenticationCode : null);
+                if (session.Authenticated) this.StatusChanged?.Invoke(this, StatusChangedEventArgs.False);
+            }
+        }
+
+        private async Task CloseSessionAsync(Session session, string reason, bool warning = false)
+        {
+            // Unblock ConnectAsync before waiting for its semaphore.
+            session.Authentication.TrySetException(new IOException("弹幕连接在认证完成前结束。"));
             await this.semaphoreSlim.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                this.danmakuTransport?.Dispose();
-                this.danmakuTransport = null;
-
-                this.timer.Stop();
-            }
-            finally
-            {
-                this.semaphoreSlim.Release();
-            }
-
-            StatusChanged?.Invoke(this, StatusChangedEventArgs.False);
+            try { this.Detach(session, reason, warning); }
+            finally { this.semaphoreSlim.Release(); }
         }
 
         public async Task ConnectAsync(int roomId, DanmakuTransportMode transportMode, string? bindAddress, AllowedAddressFamily allowedAddressFamily, CancellationToken cancellationToken)
         {
-            if (this.disposedValue)
-                throw new ObjectDisposedException(nameof(DanmakuClient));
-
-            if (!Enum.IsDefined(typeof(DanmakuTransportMode), transportMode))
-                throw new ArgumentOutOfRangeException(nameof(transportMode), transportMode, "Invalid danmaku transport mode.");
-
+            if (this.disposedValue) throw new ObjectDisposedException(nameof(DanmakuClient));
+            if (!Enum.IsDefined(typeof(DanmakuTransportMode), transportMode)) throw new ArgumentOutOfRangeException(nameof(transportMode));
             await this.semaphoreSlim.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Session? session = null;
             try
             {
-                if (this.danmakuTransport != null)
-                    return;
-
+                if (this.disposedValue) throw new ObjectDisposedException(nameof(DanmakuClient));
+                if (this.current is not null) return;
+                session = new Session(roomId, Volatile.Read(ref this.credentialVersion), cancellationToken);
+                this.current = session;
+                this.Lifecycle(session, "connecting");
                 var serverInfo = await this.apiClient.GetDanmakuServerAsync(roomId).ConfigureAwait(false);
-                if (serverInfo.Data is null)
-                    return;
-
-                var danmakuServerInfo = serverInfo.Data.SelectDanmakuServer(transportMode);
-
-                this.logger.Debug("连接弹幕服务器 {Mode} {Host}:{Port} 房间: {RoomId} TokenLength: {TokenLength}", danmakuServerInfo.TransportMode, danmakuServerInfo.Host, danmakuServerInfo.Port, roomId, danmakuServerInfo.Token?.Length);
-
-                IDanmakuTransport transport = danmakuServerInfo.TransportMode switch
+                session.Token.ThrowIfCancellationRequested();
+                if (serverInfo.Data is null) throw new IOException("未获得弹幕服务器信息。");
+                var server = serverInfo.Data.SelectDanmakuServer(transportMode);
+                session.Transport = this.transportFactory(server.TransportMode, bindAddress);
+                session.Reader = await session.Transport.ConnectAsync(server.Host, server.Port, allowedAddressFamily, session.Token).ConfigureAwait(false);
+                session.Token.ThrowIfCancellationRequested();
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(session.Token))
                 {
-                    DanmakuTransportMode.Tcp => new DanmakuTransportTcp(bindAddress),
-                    DanmakuTransportMode.Ws => new DanmakuTransportWebSocket(bindAddress),
-                    DanmakuTransportMode.Wss => new DanmakuTransportSecureWebSocket(bindAddress),
-                    _ => throw new ArgumentOutOfRangeException(nameof(transportMode), transportMode, "Invalid danmaku transport mode."),
-                };
-
-                var reader = await transport.ConnectAsync(danmakuServerInfo.Host, danmakuServerInfo.Port, allowedAddressFamily, cancellationToken).ConfigureAwait(false);
-
-                this.danmakuTransport = transport;
-
-                await this.SendHelloAsync(roomId, this.apiClient.GetUid(), this.apiClient.GetBuvid3(), danmakuServerInfo.Token ?? string.Empty).ConfigureAwait(false);
-                await this.SendPingAsync().ConfigureAwait(false);
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    this.danmakuTransport.Dispose();
-                    this.danmakuTransport = null;
-                    return;
+                    deadline.CancelAfter(this.authenticationTimeout);
+                    using var registration = deadline.Token.Register(() => { session.Authentication.TrySetCanceled(); session.StopTransport(); });
+                    _ = this.ReceiveAsync(session);
+                    try
+                    {
+                        await this.SendHelloAsync(session, this.apiClient.GetUid(), this.apiClient.GetBuvid3(), server.Token ?? string.Empty, deadline.Token).ConfigureAwait(false);
+                        await session.Authentication.Task.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!session.Token.IsCancellationRequested)
+                    {
+                        session.Failure = "authentication-timeout";
+                        throw new IOException("弹幕认证等待超时，将重新连接。");
+                    }
+                    session.Token.ThrowIfCancellationRequested();
                 }
-
-                this.timer.Start();
-
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await ProcessDataAsync(reader, this.ProcessCommand).ConfigureAwait(false);
-                    }
-                    catch (ObjectDisposedException) { }
-                    catch (Exception ex)
-                    {
-                        this.logger.Debug(ex, "Error running ProcessDataAsync");
-                    }
-
-                    try
-                    {
-                        await this.DisconnectAsync().ConfigureAwait(false);
-                    }
-                    catch (Exception) { }
-                }, CancellationToken.None);
+                await this.SendHeartbeatAsync(session).ConfigureAwait(false);
+                if (this.automaticHeartbeat) this.timer.Start();
             }
+            catch
+            {
+                if (session is not null) this.Detach(session, session.Failure ?? (session.Token.IsCancellationRequested ? "disconnected" : "connect-failed"), !session.Token.IsCancellationRequested);
+                throw;
+            }
+            finally { this.semaphoreSlim.Release(); }
+        }
+
+        private async Task ReceiveAsync(Session session)
+        {
+            var reason = "remote-closed";
+            try { await ProcessDataAsync(session.Reader!, (action, body) => this.ProcessPacket(session, action, body), session.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (session.Token.IsCancellationRequested) { }
+            catch (ObjectDisposedException) { }
+            catch (Exception) { reason = "receive-failed"; } // Parser exceptions can contain remote payloads.
             finally
             {
-                this.semaphoreSlim.Release();
-            }
-
-            StatusChanged?.Invoke(this, StatusChangedEventArgs.True);
-        }
-
-        private void ProcessCommand(string json)
-        {
-            try
-            {
-                var d = new DanmakuModel(json);
-                DanmakuReceived?.Invoke(this, new DanmakuReceivedEventArgs(d));
-            }
-            catch (Exception ex)
-            {
-                this.logger.Warning(ex, "Error running ProcessCommand");
+                session.Authentication.TrySetException(new IOException("弹幕连接在认证完成前结束。"));
+                await this.CloseSessionAsync(session, reason, reason == "receive-failed").ConfigureAwait(false);
             }
         }
 
-#pragma warning disable VSTHRD100 // Avoid async void methods
-        private async void SendPingMessageTimerCallback(object? sender, ElapsedEventArgs e)
-#pragma warning restore VSTHRD100 // Avoid async void methods
+        private void ProcessPacket(Session session, int action, string body)
         {
-            try
+            lock (session.Sync)
             {
-                await this.semaphoreSlim.WaitAsync().ConfigureAwait(false);
-                try
+                if (session.Closed || session.Token.IsCancellationRequested || !ReferenceEquals(this.current, session)) return;
+                if (action == 8 && !session.Authenticated)
                 {
-                    if (this.danmakuTransport is null)
+                    int? code = null;
+                    try
+                    {
+                        var value = Newtonsoft.Json.Linq.JObject.Parse(body)["code"];
+                        if (value?.Type == Newtonsoft.Json.Linq.JTokenType.Integer) code = (int)value;
+                    }
+                    catch (Exception) { }
+                    if (code != 0 || session.CredentialVersion != Volatile.Read(ref this.credentialVersion))
+                    {
+                        session.Failure = code.HasValue ? "authentication-rejected" : "authentication-invalid";
+                        session.AuthenticationCode = code;
+                        session.Authentication.TrySetException(new IOException("弹幕认证未通过，将重新连接。"));
                         return;
-
-                    await this.SendPingAsync().ConfigureAwait(false);
+                    }
+                    session.Authenticated = true;
+                    Interlocked.Exchange(ref session.LastHeartbeat, this.now());
+                    this.Lifecycle(session, "authenticated");
+                    this.StatusChanged?.Invoke(this, StatusChangedEventArgs.True);
+                    session.Authentication.TrySetResult(true);
                 }
-                finally
+                else if (action == 3 && session.Authenticated) Interlocked.Exchange(ref session.LastHeartbeat, this.now());
+                else if (action == 5 && session.Authenticated)
                 {
-                    this.semaphoreSlim.Release();
+                    try
+                    {
+                        var message = new DanmakuModel(body);
+                        if (!session.FirstComment && message.MsgType == DanmakuMsgType.Comment)
+                        {
+                            session.FirstComment = true;
+                            this.Lifecycle(session, "first-comment");
+                        }
+                        this.DanmakuReceived?.Invoke(this, new DanmakuReceivedEventArgs(message));
+                    }
+                    catch (Exception) { this.Lifecycle(session, "message-invalid", true); }
                 }
-            }
-            catch (Exception ex)
-            {
-                this.logger.Warning(ex, "Error running SendPingMessageTimerCallback");
             }
         }
 
-        #region Dispose
-
-        protected virtual void Dispose(bool disposing)
+        private async Task SendHeartbeatAsync(Session session)
         {
-            if (!this.disposedValue)
-            {
-                if (disposing)
-                {
-                    // dispose managed state (managed objects)
-                    this.timer.Dispose();
-                    if (this.runtimeCookie is not null) this.runtimeCookie.Changed -= this.RuntimeCookie_Changed;
-                    this.danmakuTransport?.Dispose();
-                    this.semaphoreSlim.Dispose();
-                }
-
-                // free unmanaged resources (unmanaged objects) and override finalizer
-                // set large fields to null
-                this.disposedValue = true;
-            }
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+            deadline.CancelAfter(this.authenticationTimeout);
+            try { await this.SendMessageAsync(session, 2, string.Empty, deadline.Token).ConfigureAwait(false); session.LastPing = this.now(); }
+            catch { session.Failure = "send-failed"; throw; }
         }
 
-        // override finalizer only if 'Dispose(bool disposing)' has code to free unmanaged resources
-        // ~DanmakuClient()
-        // {
-        //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-        //     Dispose(disposing: false);
-        // }
+        internal async Task HeartbeatTickAsync()
+        {
+            if (this.disposedValue || !await this.semaphoreSlim.WaitAsync(0).ConfigureAwait(false)) return;
+            try
+            {
+                var session = this.current;
+                if (session is null || !session.Authenticated) return;
+                lock (session.Sync)
+                {
+                    if (this.now() - session.LastHeartbeat >= this.heartbeatTimeoutMs)
+                    {
+                        this.Detach(session, "heartbeat-timeout", true);
+                        return;
+                    }
+                }
+                if (this.now() - session.LastPing < this.heartbeatIntervalMs) return;
+                try { await this.SendHeartbeatAsync(session).ConfigureAwait(false); }
+                catch (Exception) { this.Detach(session, "send-failed", true); }
+            }
+            finally { this.semaphoreSlim.Release(); }
+        }
+
+#pragma warning disable VSTHRD100 // Timer callbacks must contain their exceptions.
+        private async void SendPingMessageTimerCallback(object? sender, ElapsedEventArgs e)
+#pragma warning restore VSTHRD100
+        {
+            try { await this.HeartbeatTickAsync().ConfigureAwait(false); }
+            catch (Exception) { /* A concurrent shutdown has already closed its session. */ }
+        }
 
         public void Dispose()
         {
-            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-            this.Dispose(disposing: true);
+            this.disposedValue = true;
+            this.timer.Dispose();
+            if (this.runtimeCookie is not null) this.runtimeCookie.Changed -= this.RuntimeCookie_Changed;
+            var session = Interlocked.Exchange(ref this.current, null);
+            if (session is not null) lock (session.Sync) { session.Closed = true; session.StopIo(); }
+            // Receivers/timer callbacks can still be draining; do not dispose
+            // their semaphore while an asynchronous continuation owns it.
             GC.SuppressFinalize(this);
         }
 
-        #endregion
-
         #region Send
 
-        private Task SendHelloAsync(int roomid, long uid, string? buvid, string token)
+        private Task SendHelloAsync(Session session, long uid, string? buvid, string token, CancellationToken cancellationToken)
         {
             var body = JsonConvert.SerializeObject(new
             {
                 uid,
-                roomid,
+                roomid = session.RoomId,
                 protover = 3,
                 buvid,
                 platform = "web",
@@ -245,20 +340,17 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 var newBody = func(body);
                 if (newBody is not null)
                 {
-                    this.logger.Debug("Danmaku BeforeHandshake: {OldBody} => {NewBody}", body, newBody);
+                    this.logger.Debug("已应用弹幕握手脚本");
                     body = newBody;
                 }
             }
 
-            return this.SendMessageAsync(7, body);
+            return this.SendMessageAsync(session, 7, body, cancellationToken);
         }
 
-        private Task SendPingAsync() => this.SendMessageAsync(2);
-
-        private async Task SendMessageAsync(int action, string body = "")
+        private async Task SendMessageAsync(Session session, int action, string body, CancellationToken cancellationToken)
         {
-            if (this.danmakuTransport is not { } transport)
-                return;
+            var transport = session.Transport ?? throw new IOException("弹幕连接已关闭。");
 
             var payload = Encoding.UTF8.GetBytes(body);
             const int headerLength = 16;
@@ -276,7 +368,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 if (payload.Length > 0)
                     Array.Copy(payload, 0, buffer, headerLength, payload.Length);
 
-                await transport.SendAsync(buffer, 0, totalLength).ConfigureAwait(false);
+                await transport.SendAsync(buffer, 0, totalLength, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -288,24 +380,27 @@ namespace BililiveRecorder.Core.Api.Danmaku
 
         #region Receive
 
-        private static async Task ProcessDataAsync(PipeReader reader, Action<string> callback)
+        private static async Task ProcessDataAsync(PipeReader reader, Action<int, string> callback, CancellationToken cancellationToken)
         {
-            while (true)
+            try
             {
-                var result = await reader.ReadAsync();
-                var buffer = result.Buffer;
-
-                while (TryParseCommand(ref buffer, callback)) { }
-
-                reader.AdvanceTo(buffer.Start, buffer.End);
-
-                if (result.IsCompleted)
-                    break;
+                while (true)
+                {
+                    var result = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                    var buffer = result.Buffer;
+                    while (TryParseCommand(ref buffer, callback)) { }
+                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    if (result.IsCompleted)
+                    {
+                        if (!buffer.IsEmpty) throw new InvalidDataException("弹幕连接在数据包完成前关闭。");
+                        break;
+                    }
+                }
             }
-            await reader.CompleteAsync();
+            finally { await reader.CompleteAsync().ConfigureAwait(false); }
         }
 
-        private static bool TryParseCommand(ref ReadOnlySequence<byte> buffer, Action<string> callback)
+        private static bool TryParseCommand(ref ReadOnlySequence<byte> buffer, Action<int, string> callback)
         {
             if (buffer.Length < 4)
                 return false;
@@ -325,13 +420,11 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 }
             }
 
+            if (length < 16 || length > 16 * 1024 * 1024) throw new InvalidDataException("弹幕数据包长度无效。");
             if (buffer.Length < length)
                 return false;
 
             var headerSlice = buffer.Slice(buffer.Start, 16);
-            buffer = buffer.Slice(headerSlice.End);
-            var bodySlice = buffer.Slice(buffer.Start, length - 16);
-            buffer = buffer.Slice(bodySlice.End);
 
             DanmakuProtocol header;
             if (headerSlice.IsSingleSegment)
@@ -344,6 +437,10 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 headerSlice.CopyTo(stackBuffer);
                 Parse2Protocol(stackBuffer, out header);
             }
+
+            if (header.HeaderLength < 16 || header.HeaderLength > length) throw new InvalidDataException("弹幕数据包头无效。");
+            var bodySlice = buffer.Slice(header.HeaderLength, length - header.HeaderLength);
+            buffer = buffer.Slice(length);
 
             if (header.Version == 2 && header.Action == 5)
             {
@@ -365,7 +462,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
             return true;
         }
 
-        private static void ParseCommandCompressedBody(Stream decompressed, Action<string> callback)
+        private static void ParseCommandCompressedBody(Stream decompressed, Action<int, string> callback)
         {
             var reader = PipeReader.Create(decompressed);
             while (true)
@@ -386,11 +483,12 @@ namespace BililiveRecorder.Core.Api.Danmaku
             reader.Complete();
         }
 
-        private static void ParseCommandNormalBody(ref ReadOnlySequence<byte> buffer, int action, Action<string> callback)
+        private static void ParseCommandNormalBody(ref ReadOnlySequence<byte> buffer, int action, Action<int, string> callback)
         {
             switch (action)
             {
                 case 5:
+                case 8:
                     {
                         if (buffer.Length > int.MaxValue)
                             throw new ArgumentOutOfRangeException(nameof(buffer), "ParseCommandNormalBody buffer length larger than int.MaxValue");
@@ -400,7 +498,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
                         {
                             buffer.CopyTo(b);
                             var json = Encoding.UTF8.GetString(b, 0, (int)buffer.Length);
-                            callback(json);
+                            callback(action, json);
                         }
                         finally
                         {
@@ -409,7 +507,8 @@ namespace BililiveRecorder.Core.Api.Danmaku
                     }
                     break;
                 case 3:
-
+                    if (buffer.Length != 4) throw new InvalidDataException("弹幕心跳回应无效。");
+                    callback(3, string.Empty);
                     break;
                 default:
                     break;

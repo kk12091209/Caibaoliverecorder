@@ -90,8 +90,8 @@ namespace BililiveRecorder.Core.Api.Danmaku
             return this.socket.UsePipeReader();
         }
 
-        public async Task SendAsync(byte[] buffer, int offset, int count)
-            => await this.socket.SendAsync(new ArraySegment<byte>(buffer, offset, count), WebSocketMessageType.Binary, true, default).ConfigureAwait(false);
+        public async Task SendAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default)
+            => await this.socket.SendAsync(new ArraySegment<byte>(buffer, offset, count), WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
 
         public void Dispose() => this.socket.Dispose();
     }

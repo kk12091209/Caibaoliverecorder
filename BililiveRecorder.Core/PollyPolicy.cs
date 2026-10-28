@@ -4,7 +4,6 @@ using BililiveRecorder.Core.Api;
 using Microsoft.Extensions.Caching.Memory;
 using Newtonsoft.Json;
 using Polly;
-using Polly.Caching.Memory;
 using Polly.CircuitBreaker;
 using Polly.Registry;
 using Serilog;
@@ -67,11 +66,12 @@ namespace BililiveRecorder.Core
             var bulkhead = Policy.BulkheadAsync(maxParallelization: 5, maxQueuingActions: 200);
 
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
-            var memoryCacheProvider = new MemoryCacheProvider(this.memoryCache);
-            var cachePolicy = Policy.CacheAsync(memoryCacheProvider, TimeSpan.FromMinutes(2));
 
             this[PolicyNames.PolicyRoomInfoApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
-            this[PolicyNames.PolicyDanmakuApiRequestAsync] = Policy.WrapAsync(cachePolicy, bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
+            // A reconnect must obtain a fresh authentication token. Reusing a
+            // rejected token (or one issued before a cookie change) repeats the
+            // same failure until the old two-minute cache expires.
+            this[PolicyNames.PolicyDanmakuApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
             this[PolicyNames.PolicyStreamApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
         }
 

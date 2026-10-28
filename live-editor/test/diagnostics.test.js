@@ -92,3 +92,22 @@ test('coalesced events retain their identity when one component reports differen
  const f=await fixture(t);for(let n=0;n<4;n++){await f.log.record('核心','磁盘错误');await f.log.record('核心','网络错误');}await f.log.tick();
  const text=await f.read('2026-10-06');assert.match(text,/磁盘错误（相同记录又出现 3 次/);assert.match(text,/网络错误（相同记录又出现 3 次/);
 });
+
+test('danmaku lifecycle logs retain authentication, first comment and reconnect reasons without payloads',async t=>{
+  const f=await fixture(t),stream=new PassThrough();f.log.attach(stream,'B站核心输出');
+  const lines=[
+    '[INF] [DanmakuLifecycle] room=25034104 event=connecting',
+    '[INF] [DanmakuLifecycle] room=25034104 event=authenticated synthetic-token-secret',
+    '[INF] [DanmakuLifecycle] room=25034104 event=first-comment synthetic-chat-secret',
+    '[WRN] [DanmakuLifecycle] room=25034104 event=authentication-rejected code=-101 synthetic-cookie-secret',
+    '[WRN] [DanmakuLifecycle] room=25034104 event=heartbeat-timeout',
+    '[INF] [DanmakuLifecycle] room=25034104 event=credentials-changed',
+    '[INF] unrelated informational protocol payload'
+  ];
+  const bytes=Buffer.from(lines.join('\n')+'\n');for(const byte of bytes)stream.write(Buffer.from([byte]));stream.end();
+  await new Promise(resolve=>stream.once('end',resolve));await f.log.pending;const text=await f.read('2026-10-06');
+  for(const message of ['房间 25034104：正在连接弹幕服务器','弹幕认证通过','已收到首条普通弹幕','代码 -101','弹幕心跳回应超时','登录态已变更'])assert.ok(text.includes(message),message);
+  for(const secret of ['synthetic-token-secret','synthetic-chat-secret','synthetic-cookie-secret','unrelated informational'])assert.ok(!text.includes(secret));
+  assert.match(text,/\[信息\] B站弹幕：房间 25034104：弹幕认证通过/);
+  assert.match(text,/\[警告\] B站弹幕：房间 25034104：弹幕心跳回应超时/);
+});

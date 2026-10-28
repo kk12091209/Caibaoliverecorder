@@ -1,0 +1,70 @@
+name: Internal danmaku recovery validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/danmaku-connection-recovery]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_ROLL_FORWARD: Major
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.425
+      - name: Build and test candidate core without packaging or release
+        shell: pwsh
+        run: |
+          dotnet test test/BililiveRecorder.Core.UnitTests/BililiveRecorder.Core.UnitTests.csproj -c Release -f net8.0 --logger "trx;LogFileName=core.trx" --results-directory .tools/chat-reports
+          if ($LASTEXITCODE -ne 0) { throw 'Core recovery tests failed' }
+          dotnet build BililiveRecorder.Core/BililiveRecorder.Core.csproj -c Release -f net472
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy core compatibility build failed' }
+          dotnet publish BililiveRecorder.Cli/BililiveRecorder.Cli.csproj -c Release -r win-x64 -p:RuntimeIdentifiers=win-x64 --self-contained true -o .tools/chat-candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate core build failed' }
+      - name: Reuse verified public media tools only
+        shell: pwsh
+        run: |
+          node live-editor/scripts/fetch-tool.mjs 'https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.3.2/BiliLiveEditor-0.3.2-win-x64.zip' .tools/chat-baseline.zip '9b63d550ac4eacb415df4c8a0c4b7c5e09f647dbe65e796c09aac87e081ac992'
+          if ($LASTEXITCODE -ne 0) { throw 'Verified media tool download failed' }
+          Expand-Archive .tools/chat-baseline.zip .tools/chat-baseline
+          $ffmpeg = Get-ChildItem .tools/chat-baseline -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem .tools/chat-baseline -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (!$ffmpeg -or !$ffprobe) { throw 'Media tools missing' }
+          "FFMPEG_PATH=$($ffmpeg.FullName)" >> $env:GITHUB_ENV
+          "FFPROBE_PATH=$($ffprobe.FullName)" >> $env:GITHUB_ENV
+          "RECORDER_PATH=$((Resolve-Path .tools/chat-candidate/BililiveRecorder.Cli.exe).Path)" >> $env:GITHUB_ENV
+      - name: Test editor logs, actual recovery and uninterrupted video
+        shell: pwsh
+        run: |
+          Set-Location live-editor
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency restore failed' }
+          node --test --test-concurrency=2 test/diagnostics.test.js test/diagnostics-api.test.js test/recorder-lifecycle.test.js test/startup-diagnostics.test.js test/platform-credentials.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Editor lifecycle tests failed' }
+          $env:CAIBO_CHAT_INTEGRATION='1'
+          $env:CAIBO_CHAT_REPORT=(Join-Path (Split-Path $PWD -Parent) '.tools/chat-reports/windows-recovery.json')
+          node --test test/danmaku-connection-integration.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows recovery test failed' }
+          Remove-Item Env:CAIBO_CHAT_INTEGRATION
+          $env:CAIBO_CORE_SMOKE='1'
+          node --test test/local-endpoint.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Core startup/reuse/quit failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-danmaku-recovery-validation
+          path: .tools/chat-reports/
+          retention-days: 7
+          if-no-files-found: ignore
