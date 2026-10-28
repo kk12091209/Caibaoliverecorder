@@ -6,7 +6,9 @@ import os from 'node:os';
 import {createApp} from '../server/index.js';
 
 test('settings expose a fixed log directory; desktop events require authentication and are saved before exit',async t=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'daily-log-api-'));
+  // ServiceRuntime canonicalizes its root. macOS /var aliases and Windows
+  // 8.3 temp paths must refer to the same actual directory in this assertion.
+  const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'daily-log-api-')));
   const app=await createApp({data:root,noRecorder:true,preparation:false,compact:false,updatesAutoCheck:false});
   t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
   const origin=`http://127.0.0.1:${app.port}`;
