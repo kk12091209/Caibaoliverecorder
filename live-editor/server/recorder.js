@@ -10,8 +10,8 @@ import {RecordingRecovery} from './recording-recovery.js';
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
   optionalRecordDanmakuSuperChat:{hasValue:true,value:false},
-  optionalRecordDanmakuGift:{hasValue:true,value:false},
-  optionalRecordDanmakuGuard:{hasValue:true,value:false}
+  optionalRecordDanmakuGift:{hasValue:true,value:true},
+  optionalRecordDanmakuGuard:{hasValue:true,value:true}
 };
 
 export class Recorder {

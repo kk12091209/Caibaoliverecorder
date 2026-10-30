@@ -7,6 +7,9 @@ import { sourceReaderCount } from './storage-files.js';
 import { isStickerPlaceholder } from './chat-filter.js';
 import { ChatRuleIndex } from './chat-rules.js';
 import { installLayoutTracking } from './layout-tracking.js';
+import {installGifts} from './gifts.js';
+import {installSenders} from './senders.js';
+import {validateSenderFilter} from '../shared/sender-filter.js';
 const sourcePathKey = file => process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
 
 export class Store {
@@ -69,6 +72,8 @@ export class Store {
     this.db.exec(`CREATE INDEX IF NOT EXISTS jobs_session_status_created ON jobs(session,status,created);
       CREATE INDEX IF NOT EXISTS sources_session_start ON sources(session,start);`);
     installLayoutTracking(this);
+    installGifts(this);
+    installSenders(this);
     this.recoveryCount=0;
     this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();
@@ -209,18 +214,25 @@ export class Store {
     if (excluded.length > 200000 || excluded.some(x => typeof x !== 'string' || x.length > 100)) throw new Error('弹幕编辑数据无效。');
     const undo = (input.undo || []).slice(-100).map(x => String(x).slice(0, 100));
     if (input.filterLottery !== undefined && typeof input.filterLottery !== 'boolean') throw new Error('抽奖弹幕设置无效。');
-    const data = { ranges, excluded, undo, filterLottery: true };
+    if(input.highlighted!==undefined&&!Array.isArray(input.highlighted))throw new Error('突出弹幕编辑数据无效。');
+    const highlighted=[...new Set(input.highlighted??current.highlighted??[])];
+    if(highlighted.length>200000||highlighted.some(x=>typeof x!=='string'||x.length>100))throw new Error('突出弹幕编辑数据无效。');
+    const data = { ranges, excluded, undo, filterLottery: true,...(highlighted.length?{highlighted}:{}) };
     this.run('INSERT INTO edits VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET revision=excluded.revision,data=excluded.data', id, current.revision + 1, JSON.stringify(data));
     return { revision: current.revision + 1, ...data };
   }
-  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at) {
+  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at, sender) {
     this.chatRules.sync(id);
     const lottery = filterLottery ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason='lottery')" : '';
-    const query="SELECT * FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery;
+    sender=validateSenderFilter(sender);const args=[id,from,to,`%${search}%`,`%${search}%`];let filter='';
+    if(sender?.mode==='uid'){filter=' AND EXISTS(SELECT 1 FROM danmaku_senders s WHERE s.message=danmaku.id AND s.platform=? AND s.uid=?)';args.push(sender.platform,sender.uid);}
+    if(sender?.mode==='name'){filter=' AND user=?';args.push(sender.name);}
+    if(sender?.mode==='approx'){filter=' AND substr(user,1,length(?))=? AND substr(user,-length(?))=?';args.push(sender.prefix,sender.prefix,sender.suffix,sender.suffix);}
+    const query="SELECT danmaku.*,(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery+filter;
     // Keep the current playback position inside a dense list, then restore
     // chronological order. Search and non-following callers keep their order.
-    if(Number.isFinite(at))return this.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',id,from,to,`%${search}%`,`%${search}%`,at,limit);
-    return this.all(query+' ORDER BY time,id LIMIT ?',id,from,to,`%${search}%`,`%${search}%`,limit);
+    if(Number.isFinite(at))return this.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit);
+    return this.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
   }
   setting(key, value) {
     if (value !== undefined) this.run('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));
@@ -252,7 +264,7 @@ export class Store {
     for(const row of this.all('SELECT key FROM settings WHERE NOT json_valid(value)'))this.setting(row.key);
     for(const row of this.all("SELECT * FROM jobs WHERE NOT json_valid(data) OR CASE WHEN json_valid(data) THEN json_type(data)<>'object' ELSE 0 END"))this.jobDetails(row);
   }
-  close() { this.chatRules?.close(); this.db.close(); }
+  close() { this.closed=true;this.giftIcons?.close(); this.chatRules?.close(); this.db.close(); }
 }
 
 export function validateRanges(ranges, duration, allowEmpty = false) {

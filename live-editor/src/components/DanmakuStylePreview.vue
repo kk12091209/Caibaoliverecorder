@@ -3,7 +3,8 @@ import {ref,computed,watch,nextTick,onBeforeUnmount} from 'vue';
 import image from '../assets/danmaku-style-preview.webp';
 import {danmakuGeometry} from '../../shared/danmaku-style.js';
 import DanmakuAreaSelector from './DanmakuAreaSelector.vue';
-const props=defineProps({style:Object,font:Object,rate:{type:Number,default:50},disabled:Boolean}),emit=defineEmits(['ready','area-change']);
+import {normalizedHighlightStyle} from '../../shared/highlight-style.js';
+const props=defineProps({style:Object,highlightStyle:Object,highlighted:Array,font:Object,rate:{type:Number,default:50},disabled:Boolean}),emit=defineEmits(['ready','area-change']);
 const adjusting=ref(false),percent=value=>Number((value*100).toFixed(1));
 const overlay=ref(''),pendingOverlay=ref(''),loading=ref(true),error=ref(''),samples=ref(0),geometry=computed(()=>danmakuGeometry(940,props.style));
 const clips=ref([]),visibleClip=ref(''),motionLoading=ref(false),motionError=ref(''),players=new Map();
@@ -38,7 +39,7 @@ async function request(input,signal){
 async function render(version,motion){
   if(disposed||version!==generation)return;
   controller=new AbortController();
-  const signal=controller.signal,input={style:{...props.style},rate:props.rate,font:props.font?.id||null};
+  const signal=controller.signal,input={style:{...props.style},highlightStyle:normalizedHighlightStyle(props.highlightStyle),highlighted:props.highlighted||[],rate:props.rate,font:props.font?.id||null};
   // Start the movie first. Prepare its final still offscreen during playback.
   if(motion)motion=await renderMotion(input,version,signal);
   if(disposed||version!==generation)return;
@@ -89,7 +90,7 @@ function playbackError(clip){
   if(clip.version!==generation)return;
   motionFinished=true;finishMotion();motionError.value='滚动预览暂时无法播放，已保留静态预览。';
 }
-watch(()=>[props.style?.size,props.style?.opacity,props.style?.speed,props.style?.fps,props.rate,props.font?.id,props.style?.areaTop,props.style?.areaHeight,adjusting.value],(value,previous=[])=>{
+watch(()=>[props.style?.size,props.style?.opacity,props.style?.speed,props.style?.fps,props.rate,props.font?.id,props.style?.areaTop,props.style?.areaHeight,adjusting.value,JSON.stringify(props.highlightStyle),JSON.stringify(props.highlighted)],(value,previous=[])=>{
   schedule(!!previous.length&&(value[2]!==previous[2]||value[3]!==previous[3]));
 },{immediate:true});
 onBeforeUnmount(()=>{disposed=true;generation++;clearTimeout(timer);controller?.abort();discardPending();finishMotion();if(overlay.value)URL.revokeObjectURL(overlay.value);});

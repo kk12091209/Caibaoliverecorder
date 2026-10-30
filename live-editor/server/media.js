@@ -31,13 +31,17 @@ import { IdleRenderPolicy } from './idle-render-policy.js';
 import {ExportCheckpoints} from './export-checkpoints.js';
 import {retryMedia as retryMediaWork,mediaFailure} from './media-retry.js';
 import {hashRender,commentSignature} from './render-plan.js';
+import {giftMessages,giftAss} from './gifts.js';
+import {giftIconFilter} from './gift-icons.js';
+import {savedGiftStyle} from '../shared/gifts.js';
+import {savedHighlightStyle} from '../shared/highlight-style.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
-export function assText(messages, width = 1280, height = 720, font = null, style) {
+export function assText(messages, width = 1280, height = 720, font = null, style,highlightStyle) {
   const geometry=danmakuGeometry(height,style),{size,lineHeight,top,lanes:laneCount}=geometry,alpha=assOpacity(style),shadowAlpha=assOpacity(style,128);
   const clip=geometry.clipTop>0||geometry.clipBottom<height?`\\clip(0,${Math.ceil(geometry.clipTop)},${width},${Math.floor(geometry.clipBottom)})`:'';
   const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-  const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,duration:danmakuDuration(style),font});
+  const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,duration:danmakuDuration(style),font,highlightStyle});
   return head + planned.map(m => {
     const seconds=Number.isFinite(m.end)?m.end-m.time:danmakuDuration(style);
     if(m.time+seconds<=0)return '';
@@ -45,7 +49,10 @@ export function assText(messages, width = 1280, height = 720, font = null, style
     const delay=m.entryDelay||0,elapsed=Math.max(0,-m.time),speed=(width+m.textWidth)/(seconds-delay);
     const startX=width-Math.max(0,elapsed-delay)*speed;
     const movement=delay?`,${Math.round(Math.max(0,delay-elapsed)*1000)},${Math.round((seconds-elapsed)*1000)}`:'';
-    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})${clip}}${content}\n`;
+    const highlighted=m.highlighted===true,color=Number.isFinite(m.renderColor)?m.renderColor:16777215;
+    const bgr=[color&255,color>>8&255,color>>16&255].map(v=>v.toString(16).padStart(2,'0')).join('').toUpperCase();
+    const decoration=`${Number.isFinite(m.fontSize)?'\\fs'+m.fontSize:''}${highlighted?'\\1c&H'+bgr+'&':''}`;
+    return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})${clip}${decoration}}${content}\n`;
   }).join('');
 }
 
@@ -100,8 +107,9 @@ export class Media {
       }
       inputs.push([source.id,from,to,fingerprint]);
     }
-    const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents];
+    const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents,job.highlightStyle,job.highlighted];
     if(Object.hasOwn(job,'recordingStyle'))snapshot.push(job.recordingStyle,job.cameraEvents);
+    if(job.gifts?.length)snapshot.push(job.gifts,job.giftIcons);
     const checkpoint=await this.checkpoints.open(job,hashRender([details.route,details.encoder,details.profile,details.comments,inputs,snapshot]));
     job.processingRecovery.route=details.route;this.persistExportJob(job);return checkpoint;
   }
@@ -352,16 +360,25 @@ export class Media {
     const ranges=validateRanges(requested.filter(r=>r.selected!==false),session.duration);
     if(['includeDanmaku','burn','danmakuFps'].some(key=>key in input))throw new Error('不支持的导出选项，请使用纯净版、弹幕版或双文件模式。');
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
+    if('giftsEnabled' in input&&typeof input.giftsEnabled!=='boolean')throw new Error('请选择是否在弹幕版显示礼物。');
+    const giftStyle=savedGiftStyle(this.store),giftsEnabled=mode!=='clean'&&(input.giftsEnabled??giftStyle.export);
     await this.store.linkmic?.ensure(id);
     const linkmicEvents=this.store.linkmic?.events(id)||[];
     const cameraEvents=this.store.linkmic?.cameraEvents?.(id)||[];
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
-    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
+    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],highlighted:[...(edit.highlighted||[])],highlightStyle:savedHighlightStyle(this.store),filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     for(const job of jobs) {
       job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
       job.recordingStyle=savedRecordingStyle(this.store);
       job.cameraEvents=cameraEvents.filter(event=>job.ranges.some(range=>event.time<range.end&&event.end>range.start));
+      if(giftsEnabled){
+        job.giftStyle={...giftStyle,export:true};
+        job.gifts=giftMessages(this.store,id,{from:Math.max(0,job.ranges[0].start-5),to:job.ranges.at(-1).end,limit:20001,style:giftStyle})
+          .filter(g=>!job.excluded.includes(g.id)&&job.ranges.some(r=>g.time<r.end&&g.time+5>r.start));
+        if(job.gifts.length>20000)throw new Error('所选片段礼物过多，请拆成较短片段导出。');
+        job.giftIcons=await this.store.giftIcons?.snapshot(job.gifts)||{};
+      }
     }
     try {
       const handoff=this.preparation?.yieldForExport?await this.preparation.yieldForExport(id,jobs):await this.preparation?.yieldForForeground();
@@ -636,6 +653,13 @@ export class Media {
     const recordEncoder=()=>{job.encoder=encoder.id;job.encoderLabel=encoder.label;this.store.run('UPDATE jobs SET data=? WHERE id=?',JSON.stringify(job),job.id);};
     recordEncoder();
     let file;
+    if(job.gifts?.length){
+      // Gift exports use their frozen event/artwork snapshot. Existing prepared
+      // chat-only blocks remain available and cannot hide an opted-in gift.
+      try{return await this.encodeJob(job,encoder,{first,info,copyClean,sourcePlan});}
+      catch(error){if(!encoder.hardware||!error.hardwareEncoderFailure||error.savePending)throw error;
+        encoder=softwareEncoder();recordEncoder();return await this.encodeJob(job,encoder,{first,info,copyClean,sourcePlan});}
+    }
     const selectedDuration=sourcePlan.segments.reduce((sum,segment)=>sum+segment.to-segment.from,0);
     const finished=this.store.session(job.session)?.status==='finished'&&sources.every(source=>source.closed===2);
     const cpuCheckpointed=()=>!legacyRecovery&&!encoder.hardware&&finished&&(selectedDuration>=CPU_CHECKPOINT_SECONDS||job.processingRecovery?.route===CPU_EXPORT_ROUTE);
@@ -709,7 +733,7 @@ export class Media {
     const info=prepared.first?.id===first.id?prepared.info:await this.probeSource(first,segments[0].from);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
-    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont}):null;
+    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[]}):null;
     const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy],comments:commentSignature(chatLayout||[]),segments});
     const workDir=checkpoint.directory;
     try {
@@ -727,7 +751,7 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},from,to);
           // ASS runs before the output seek, so its clock starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,job.font,job.danmakuStyle));
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,job.font,job.danmakuStyle)+giftAss(job.gifts||[],width,height,{base,from,to}));
         }
         const sourceInfo=source.id===first.id?info:await this.probeSource(source,from);
         const filter=recordingLayoutFilter(blockCameraEvents(job.cameraEvents,source.id,from,to),job.recordingStyle??originalRecordingStyle(),width,height,
@@ -739,7 +763,8 @@ export class Media {
         const withNames=async prefix=>[await avatarFilter(this.store,labels,width,height,workDir,{...cardOptions,prefix}),labels.length?`ass=${labelFile}`:''].filter(Boolean).join(',');
         const labelFilter=await withNames('cleanmic'),danmakuLabelFilter=dual?await withNames('danmic'):labelFilter;
         const fps=normalizedDanmakuStyle(job.danmakuStyle).fps;
-        const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`;
+        const giftFilter=await giftIconFilter(job.gifts||[],job.giftIcons,width,height,workDir,{base,from,to});
+        const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`+(giftFilter?','+giftFilter:'');
         const compatibleFull=!prepared.disableStreamCopy&&(prepared.sourcePlan?.canCopyStreams??true)&&singlePart&&canCopyFullSource(job,sources,sourceInfo,base);
         let copyClean=!bakedOnly&&!labels.length&&compatibleFull&&(prepared.sourcePlan?.canCopyOriginal??true);
         let copyAudio=compatibleFull&&sourceInfo.audioStreams===1&&sourceInfo.audioCodec==='aac'&&!job.audioStreamCopyFallback;

@@ -16,8 +16,8 @@ test('protobuf keeps 64-bit IDs, decompresses response and encodes ACK without p
  const fields=[...protobufFields(acknowledgeFrame(frame.logId,frame.internalExt))];assert.equal(fields[0].value,frame.logId);assert.equal(fields[2].value.toString(),'ack-info');
  assert.equal(decodeChat(frame.messages[0],{roomId:'2',sourceStart:start}),null);
 });
-test('gift, like, entry and system messages are discarded before payload decoding or sampling',()=>{
- const irrelevant=['WebcastGiftMessage','WebcastLikeMessage','WebcastMemberMessage','WebcastSocialMessage','WebcastFansclubMessage','WebcastRoomMessage'];
+test('like, entry and system messages are discarded before payload decoding or sampling',()=>{
+ const irrelevant=['WebcastLikeMessage','WebcastMemberMessage','WebcastSocialMessage','WebcastFansclubMessage','WebcastRoomMessage'];
  const frame=decodePushFrame(packet([...irrelevant.map(method=>message(method,Buffer.from([255,255,255]))),chat('普通重复'),chat('普通重复',2n)]));
  assert.equal(frame.messages.length,2);assert.deepEqual(frame.messages.map(message=>decodeChat(message,{roomId,sourceStart:start}).text),['普通重复','普通重复']);
 });

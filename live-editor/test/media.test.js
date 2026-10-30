@@ -219,7 +219,7 @@ test('弹幕不完整 XML 可增量读取，追加后不会重复或丢失排除
   await fs.appendFile(xml,'写完</d></i>');await ingest.tick();await ingest.tick();assert.equal(store.messages(session.id).length,2);assert.equal(store.messages(session.id)[1].text,'还没写完');assert.deepEqual(store.edit(session.id).excluded,[first.id]);store.close();
 });
 
-test('只录普通弹幕：跳过礼物、上舰和付费留言，礼物尾段和半包仍可继续增量读取',async()=>{
+test('普通弹幕查询不混入礼物；礼物上舰独立索引并支持尾段半包',async()=>{
   const video=path.join(root,'chat-only.flv');await fs.copyFile(fixture,video);const xml=video.replace('.flv','.xml');
   await fs.writeFile(xml,'<i><gift ts="1" user="送礼" giftname="粉丝团灯牌" giftcount="1"/><guard ts="2" user="上舰" count="1"/><sc ts="3" user="付费留言">付费内容</sc><d p="4,1,25,16777215" user="聊天">粉丝团灯牌 × 1 是什么？</d><gift ts="5" giftname="礼物"/>');
   const {store,source,session,ingest}=await setup('chat-only',video,false);
@@ -233,7 +233,7 @@ test('只录普通弹幕：跳过礼物、上舰和付费留言，礼物尾段�
   store.close();
 });
 
-test('启动和重新连接录制核心时关闭全局及房间的非聊天事件采集',async()=>{
+test('启动和重新连接录制核心时开启聊天礼物上舰，付费留言仍关闭',async()=>{
   const store=new Store(path.join(root,'chat-config'));opened.push(store);const applied=[],recorders=[];
   try{for(let n=0;n<2;n++){
     const recorder=new Recorder(store,{executable:'already-running-core'});recorders.push(recorder);
@@ -241,7 +241,7 @@ test('启动和重新连接录制核心时关闭全局及房间的非聊天事�
     await recorder.start();recorder.close();
     }
     const changes=applied.filter(x=>x.route==='config/global'||x.route==='room/42/config');assert.equal(changes.length,4);
-    for(const {body} of changes){assert.equal(body.optionalRecordDanmaku.value,true);assert.equal(body.optionalRecordDanmakuGift.value,false);assert.equal(body.optionalRecordDanmakuGuard.value,false);assert.equal(body.optionalRecordDanmakuSuperChat.value,false);}
+    for(const {body} of changes){assert.equal(body.optionalRecordDanmaku.value,true);assert.equal(body.optionalRecordDanmakuGift.value,true);assert.equal(body.optionalRecordDanmakuGuard.value,true);assert.equal(body.optionalRecordDanmakuSuperChat.value,false);}
   }finally{for(const recorder of recorders)recorder.close();store.close();}
 });
 

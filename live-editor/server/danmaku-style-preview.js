@@ -9,6 +9,7 @@ import {danmakuTextWidth} from '../shared/danmaku-tracks.js';
 import {DANMAKU_SAMPLES} from '../shared/danmaku-samples.js';
 import {layoutComments} from './render-plan.js';
 import {videoGeometryFilter} from './export-encoding.js';
+import {normalizedHighlightStyle,validateHighlightStyle,highlightPresentation} from '../shared/highlight-style.js';
 
 export const STYLE_PREVIEW_WIDTH=1672,STYLE_PREVIEW_HEIGHT=940,STYLE_PREVIEW_TIME=4.65;
 export const STYLE_MOTION_WIDTH=836,STYLE_MOTION_HEIGHT=470;
@@ -27,30 +28,38 @@ export async function stylePreviewBackground(imageRoot){
     return background;
   }catch{throw new Error('预览背景资源缺失或无效，请修复软件组件后重试。');}
 }
-export function stylePreviewTime(style,font){
+export function stylePreviewTime(style,font,options={}){
   const {size}=danmakuGeometry(STYLE_PREVIEW_HEIGHT,style);
   // Very large fonts can have left the screen at the default sample time.
   // Freeze earlier on an actual video frame, while the opening samples are
   // still readable. Density changes retain that same frame and placement.
   const width=Math.max(...DANMAKU_SAMPLES.slice(0,2).map(text=>danmakuTextWidth(text,size,font)));
   // 50 ms aligns both 60 fps frames and ASS's centisecond timestamps.
-  return Math.min(STYLE_PREVIEW_TIME*danmakuDuration(style)/6,Math.floor(STYLE_PREVIEW_WIDTH*danmakuDuration(style)/(STYLE_PREVIEW_WIDTH+width)*20)/20);
+  const normal=Math.min(STYLE_PREVIEW_TIME*danmakuDuration(style)/6,Math.floor(STYLE_PREVIEW_WIDTH*danmakuDuration(style)/(STYLE_PREVIEW_WIDTH+width)*20)/20);
+  if(!options.highlighted?.length)return normal;
+  const wide=Math.max(...options.highlighted.map(id=>{
+    const index=Number(id),sample=highlightPresentation({highlighted:true,text:DANMAKU_SAMPLES[index]||'',user:'示例观众'+(index+1)},size,options.highlightStyle);
+    return danmakuTextWidth(sample.text,sample.fontSize,font);
+  }));
+  // Keep the nickname prefix visible in the paused style editor even when a
+  // newly enlarged comment would already have scrolled past its left edge.
+  return Math.max(.05,Math.min(normal,Math.floor(.8*STYLE_PREVIEW_WIDTH*danmakuDuration(style)/(STYLE_PREVIEW_WIDTH+wide)*20)/20));
 }
-export function stylePreviewMessages(rate,style,font){
+export function stylePreviewMessages(rate,style,font,options={}){
   validateChatRate(rate);
-  const step=Math.min(.09,Math.floor(stylePreviewTime(style,font)*100/50)/100);
-  return DANMAKU_SAMPLES.slice(0,rate).map((text,index)=>({id:String(index).padStart(2,'0'),type:'d',text,time:Number((index*step).toFixed(2))}));
+  const highlighted=options.highlighted||[],step=Math.min(.09,Math.floor(stylePreviewTime(style,font,options)*100/50)/100);
+  return DANMAKU_SAMPLES.slice(0,rate).map((text,index)=>({id:String(index).padStart(2,'0'),type:'d',user:'示例观众'+(index+1),text,highlighted:highlighted.includes(String(index).padStart(2,'0')),time:Number((index*step).toFixed(2))}));
 }
-export function stylePreviewEvents(rate,style,font){
+export function stylePreviewEvents(rate,style,font,options={}){
   validateChatRate(rate);validateDanmakuStyle(style);
-  const time=stylePreviewTime(style,font);
-  return layoutComments(stylePreviewMessages(rate,style,font),{rate,width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style,font})
+  const time=stylePreviewTime(style,font,options);
+  return layoutComments(stylePreviewMessages(rate,style,font,options),{rate,width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style,font,highlightStyle:options.highlightStyle})
     .filter(event=>event.time<=time&&event.end>time)
     .map(event=>({...event,time:event.time-time,end:event.end-time}));
 }
-export function stylePreviewMotion(rate,style,font){
+export function stylePreviewMotion(rate,style,font,options={}){
   validateChatRate(rate);style=validateDanmakuStyle(style);
-  const events=layoutComments(stylePreviewMessages(rate,style,font),{rate,width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style,font});
+  const events=layoutComments(stylePreviewMessages(rate,style,font,options),{rate,width:STYLE_PREVIEW_WIDTH,height:STYLE_PREVIEW_HEIGHT,style,font,highlightStyle:options.highlightStyle});
   // Include a final empty frame so even the last sample fully leaves the image.
   const frames=Math.ceil(Math.max(...events.map(event=>event.end))*style.fps)+1;
   return {events,frames};
@@ -60,8 +69,9 @@ export function stylePreviewMotion(rate,style,font){
 export class DanmakuStylePreview{
   constructor(media,{imageRoot=fileURLToPath(new URL('../dist/assets/',import.meta.url))}={}){this.media=media;this.busy=false;this.imageRoot=imageRoot;}
   async render(input,signal){
-    if(!input||Object.keys(input).some(key=>!['style','rate','font','motion'].includes(key))||('motion' in input&&typeof input.motion!=='boolean'))throw new Error('样式预览参数无效。');
+    if(!input||Object.keys(input).some(key=>!['style','rate','font','motion','highlightStyle','highlighted'].includes(key))||('motion' in input&&typeof input.motion!=='boolean')||input.highlighted!==undefined&&(!Array.isArray(input.highlighted)||input.highlighted.length>10||input.highlighted.some(x=>!/^\d{2}$/.test(x)||Number(x)>=50)))throw new Error('样式预览参数无效。');
     const style=validateDanmakuStyle(input.style),rate=validateChatRate(input.rate);
+    const previewOptions={highlightStyle:input.highlightStyle===undefined?normalizedHighlightStyle():validateHighlightStyle(input.highlightStyle),highlighted:input.highlighted||[]};
     if(this.busy)throw Object.assign(new Error('正在更新预览，请稍后重试。'),{status:409});
     this.busy=true;let work;
     try{
@@ -69,8 +79,8 @@ export class DanmakuStylePreview{
       if(signal?.aborted)return null;
       const background=await stylePreviewBackground(this.imageRoot);
       work=await this.media.temporaryDirectory('bili-export-','style-preview');
-      const motion=input.motion?stylePreviewMotion(rate,style,font):null;
-      const events=motion?.events||stylePreviewEvents(rate,style,font);
+      const motion=input.motion?stylePreviewMotion(rate,style,font,previewOptions):null;
+      const events=motion?.events||stylePreviewEvents(rate,style,font,previewOptions);
       await fs.writeFile(path.join(work,'part-0.ass'),assText(events,STYLE_PREVIEW_WIDTH,STYLE_PREVIEW_HEIGHT,font,style));
       const fonts=await this.media.fonts.stage(font,work),chunks=[];let bytes=0;
       const output=new Writable({write(chunk,_encoding,done){bytes+=chunk.length;if(bytes>16*1024*1024)return done(new Error('样式预览超过大小限制。'));chunks.push(chunk);done();}});

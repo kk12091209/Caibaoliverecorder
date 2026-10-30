@@ -22,8 +22,9 @@ import { stableSourceFingerprint, stableSourceRangeStatus, codecHeaderSignature 
 import { liveRenderBlocks, liveMetadataReady, blockLinkmicEvents, liveLayoutWithinBudget } from './render-live-state.js';
 import { savedRecordingStyle, normalizedRecordingStyle, originalRecordingStyle, blockCameraEvents } from '../shared/recording-style.js';
 import { recordingLayoutFilter } from './recording-layout.js';
+import {savedHighlightStyle,normalizedHighlightStyle} from '../shared/highlight-style.js';
 
-export const RENDER_VERSION = 9;
+export const RENDER_VERSION = 10;
 export const CPU_EXPORT_ROUTE = 'cpu-chunks-v1';
 export const CPU_CHECKPOINT_SECONDS = 60;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -40,17 +41,17 @@ function eligibleComments(messages, rate, state = {}) {
     });
 }
 
-export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font } = {}) {
-  const eligible=eligibleComments(messages,rate);
-  return scrollingTracks(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font, ordered: eligible.every(m=>typeof m.id==='string') });
+export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted } = {}) {
+  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate);
+  return scrollingTracks(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font,highlightStyle, ordered: eligible.every(m=>typeof m.id==='string') });
 }
 
 // Long recordings may contain hundreds of thousands of comments. Yield between
 // bounded batches so dense layout cannot block recording, cleanup or cancellation.
-export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font, signal, state = {} } = {}) {
+export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted, signal, state = {} } = {}) {
   canceled(signal);
-  const eligible=eligibleComments(messages,rate,state);
-  const result = [], events = scrollingTrackEvents(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font, ordered: eligible.every(m=>typeof m.id==='string'), state });
+  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate,state);
+  const result = [], events = scrollingTrackEvents(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font,highlightStyle, ordered: eligible.every(m=>typeof m.id==='string'), state });
   for (const event of events) {
     result.push(event);
     if (result.length % 512 === 0) { await yieldTurn(); canceled(signal); }
@@ -144,7 +145,7 @@ export function cleanCheckpointParts(segments,audioFps,fps) {
 }
 
 export function commentSignature(events) {
-  return hashRender(events.map(m => [m.id, m.time, m.text, m.lane, m.y, m.textWidth, m.speed, m.entryDelay, m.color]));
+  return hashRender(events.map(m => [m.id, m.time, m.text, m.lane, m.y, m.textWidth, m.speed, m.entryDelay, m.color,m.fontSize,m.renderColor,m.highlighted]));
 }
 
 function canceled(signal) {
@@ -230,15 +231,16 @@ export class RenderPipeline {
     // Queued jobs own their style. Older jobs keep the previous default;
     // background preparation follows the current settings.
     const danmakuStyle=(Object.hasOwn(snapshot,'danmakuStyle')||Object.hasOwn(snapshot,'mode'))?normalizedDanmakuStyle(snapshot.danmakuStyle):savedDanmakuStyle(this.store);
+    const highlightStyle=Object.hasOwn(snapshot,'mode')?normalizedHighlightStyle(snapshot.highlightStyle):savedHighlightStyle(this.store),highlighted=snapshot.highlighted||[];
     const danmakuPerSecond=validateChatRate(snapshot.danmakuPerSecond??chatRate(this.store));
     if(!live&&!Object.hasOwn(snapshot,'linkmicEvents'))await this.store.linkmic?.ensure(id);
     if(live&&!await liveMetadataReady(this.store,sources,options.signal))return {waiting:'metadata',live:true,blocks:[],allBlocks};
     const linkmicEvents=structuredClone(snapshot.linkmicEvents??this.store.linkmic?.events(id)??[]);
     const recordingStyle=Object.hasOwn(snapshot,'mode')?normalizedRecordingStyle(snapshot.recordingStyle??originalRecordingStyle()):savedRecordingStyle(this.store);
     const cameraEvents=recordingStyle.cameraPosition==='original'?[]:structuredClone(snapshot.cameraEvents??(Object.hasOwn(snapshot,'mode')?[]:this.store.linkmic?.cameraEvents?.(id)??[]));
-    const profile={font:font?.id||null,danmakuStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
+    const profile={font:font?.id||null,danmakuStyle,highlightStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
     if(cameraEvents.length)profile.recordingStyle=recordingStyle;
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font,highlightStyle,highlighted}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
   }
   async sourceFingerprint(source,from,to) {
     const stable=await stableSourceFingerprint(this.store,source,from,to);

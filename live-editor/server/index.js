@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { openRecoveredStore } from './data-recovery.js';
 import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { Ingestor } from './ingest.js';
+import {giftMessages} from './gifts.js';
+import {GiftIcons} from './gift-icons.js';
+import {GIFT_SETTING,savedGiftStyle,validateGiftStyle} from '../shared/gifts.js';
 import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
 import { MAX_FONT_BYTES } from './danmaku-font.js';
@@ -35,6 +38,8 @@ import { savedRecordingStyle, validateRecordingStyle, RECORDING_STYLE_SETTING } 
 import { savedTimestampStyle, validateTimestampStyle, TIMESTAMP_STYLE_SETTING, savedTimestampPosition, validateTimestampPosition, TIMESTAMP_POSITION_SETTING } from '../shared/timestamp-style.js';
 import {PlatformCredentials} from './platform-credentials.js';
 import { OVERLAY_MESSAGE_LIMIT, PANEL_MESSAGE_LIMIT } from '../shared/message-limits.js';
+import {HIGHLIGHT_SETTING,savedHighlightStyle,validateHighlightStyle} from '../shared/highlight-style.js';
+import {validateSenderFilter} from '../shared/sender-filter.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -64,6 +69,7 @@ async function createManagedApp(options,runtime) {
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
+  store.giftIcons=new GiftIcons(store,{ffmpeg});
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
@@ -100,8 +106,8 @@ async function createManagedApp(options,runtime) {
   function settingsSnapshot(){return {
     paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),
     previewTimestampStyle:savedTimestampStyle(store),previewTimestampPosition:savedTimestampPosition(store),
-    recordingStyle:savedRecordingStyle(store),danmakuPerSecond:chatRate(store),
-    danmakuStyle:savedDanmakuStyle(store),danmakuFont:media.fonts.snapshot()
+    recordingStyle:savedRecordingStyle(store),giftStyle:savedGiftStyle(store),danmakuPerSecond:chatRate(store),
+    danmakuStyle:savedDanmakuStyle(store),highlightStyle:savedHighlightStyle(store),danmakuFont:media.fonts.snapshot()
   };}
   function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
   function activity(){
@@ -259,7 +265,9 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','danmakuFont','previewTimestamp','previewTimestampStyle','previewTimestampPosition','recordingStyle'].includes(key)))throw new Error('不支持的设置项。');
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','highlightStyle','danmakuFont','previewTimestamp','previewTimestampStyle','previewTimestampPosition','recordingStyle','giftStyle'].includes(key)))throw new Error('不支持的设置项。');
+        const giftStyle='giftStyle' in input?validateGiftStyle(input.giftStyle):null;
+        const highlightStyle='highlightStyle' in input?validateHighlightStyle(input.highlightStyle):null;
         if('closeAction' in input)validateCloseAction(input.closeAction);
         if('previewTimestamp' in input&&typeof input.previewTimestamp!=='boolean')throw new Error('请选择是否显示预览时间戳。');
         const timestampStyle='previewTimestampStyle' in input?validateTimestampStyle(input.previewTimestampStyle):undefined;
@@ -273,6 +281,7 @@ async function createManagedApp(options,runtime) {
           const font='danmakuFont' in input?await media.fonts.selection(input.danmakuFont):undefined;
           const directory='exportDirectory' in input?await writableDirectory(input.exportDirectory):undefined;
           const changed=(style&&JSON.stringify(style)!==JSON.stringify(savedDanmakuStyle(store)))||
+            (highlightStyle&&JSON.stringify(highlightStyle)!==JSON.stringify(savedHighlightStyle(store)))||
             (recordingStyle&&JSON.stringify(recordingStyle)!==JSON.stringify(savedRecordingStyle(store)))||
             (font!==undefined&&(font?.id||null)!==(media.fonts.snapshot()?.id||null))||
             ('danmakuPerSecond' in input&&input.danmakuPerSecond!==chatRate(store));
@@ -284,7 +293,9 @@ async function createManagedApp(options,runtime) {
             if(timestampPosition!==undefined)store.setting(TIMESTAMP_POSITION_SETTING,timestampPosition);
             if('danmakuPerSecond' in input)store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);
             if(style)store.setting(DANMAKU_STYLE_SETTING,style);
+            if(highlightStyle)store.setting(HIGHLIGHT_SETTING,highlightStyle);
             if(recordingStyle)store.setting(RECORDING_STYLE_SETTING,recordingStyle);
+            if(giftStyle)store.setting(GIFT_SETTING,giftStyle);
             if(font!==undefined)store.setting('danmaku-font',font);
           });
           if('danmakuPerSecond' in input)recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);
@@ -314,7 +325,7 @@ async function createManagedApp(options,runtime) {
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
         const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
-        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort()]);
+        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort(),[...(edit.highlighted||[])].sort()]);
         if(visibility(previous)!==visibility(saved))await preparation.invalidate(id);
         return json(res,saved);
       }
@@ -333,6 +344,18 @@ async function createManagedApp(options,runtime) {
         try{return json(res,await deleteMaterial(id,{signal:controller.signal}));}
         finally{res.removeListener('close',disconnected);}
       }
+      if((match=/^\/api\/gift-icons\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){
+        const png=await store.giftIcons.get(match[1]);if(!png)return json(res,{error:'暂无礼物图标。'},404);
+        res.writeHead(200,{'Content-Type':'image/png','Content-Length':png.length,'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'});return res.end(png);
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/gifts$/.exec(p))&&req.method==='GET'){
+        const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
+        const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
+        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('礼物时间范围无效。');
+        const events=giftMessages(store,id,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style:savedGiftStyle(store)});
+        void store.giftIcons.enrich(events).catch(()=>{});
+        return json(res,events);
+      }
       if((match=/^\/api\/sessions\/([\w-]+)\/messages$/.exec(p))&&req.method==='GET'){
         if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
         const from=Math.max(0,Number(url.searchParams.get('from')||0)),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),search=(url.searchParams.get('q')||'').slice(0,200);
@@ -340,7 +363,9 @@ async function createManagedApp(options,runtime) {
         const atParameter=url.searchParams.get('at'),at=atParameter===null?undefined:Number(atParameter),overlay=url.searchParams.get('overlay')==='1';
         if(atParameter!==null&&(!atParameter.trim()||!Number.isFinite(at)||at<from||at>to))throw new Error('弹幕跟随时间无效。');
         await store.chatRules.prepare(match[1]);
-        return json(res,store.messages(match[1],from,to,search,overlay?OVERLAY_MESSAGE_LIMIT:PANEL_MESSAGE_LIMIT,undefined,!overlay&&!search?at:undefined));
+        const sender=overlay?null:validateSenderFilter(url.searchParams.has('sender')?JSON.parse(url.searchParams.get('sender')):null);
+        if(!overlay)await store.senders.prepare(match[1]);
+        return json(res,store.messages(match[1],from,to,search,overlay?OVERLAY_MESSAGE_LIMIT:PANEL_MESSAGE_LIMIT,undefined,!overlay&&!search&&!sender?at:undefined,sender));
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/signals$/.exec(p))&&req.method==='GET'){
         const id=match[1],session=store.session(id);

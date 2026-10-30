@@ -62,7 +62,7 @@ export function decodePushFrame(bytes) {
   const encoding = text(frame, 6, 32);
   const decoded = encoding === 'gzip' || (payload[0] === 31 && payload[1] === 139)
     ? gunzipSync(payload, { maxOutputLength: PROTOCOL_LIMITS.decodedBytes }) : payload;
-  const messages = []; let needAck = false, internalExt = '', serverTime = null, truncated = false, chats=0,activities=0;
+  const messages = []; let needAck = false, internalExt = '', serverTime = null, truncated = false, chats=0,activities=0,gifts=0;
   for (const entry of protobufFields(decoded)) {
     if (entry.field === 9 && entry.wire === 0) needAck = entry.value !== 0n;
     else if (entry.field === 5 && entry.wire === 2 && entry.value.length <= 65536) internalExt = entry.value.toString('utf8');
@@ -71,6 +71,7 @@ export function decodePushFrame(bytes) {
       const fields = record(entry.value, 64), method = text(fields, 1, 128), body = value(fields, 2, 2);
       if(!body)continue;
       if(method==='WebcastChatMessage'){if(++chats>PROTOCOL_LIMITS.messages){truncated=true;continue;}}
+      else if(method==='WebcastGiftMessage'){if(body.length>PROTOCOL_LIMITS.activityBytes||++gifts>256){truncated=true;continue;}}
       else if(isLotteryMethod(method)){if(++activities>256){truncated=true;continue;}}
       else if(method!=='WebcastControlMessage')continue;
       else if(++activities>256){truncated=true;continue;}
@@ -95,7 +96,27 @@ export function decodeChat(message, { sourceStart, roomId } = {}) {
   const timestamp = stamp(number(fields, 15)) ?? stamp(number(common, 4));
   const content = text(fields, 3, 8192), id = message.id || decimal(number(common, 2));
   if (!content || !id || !Number.isFinite(sourceStart) || timestamp === null || timestamp < sourceStart-2000) return null;
-  return { id, timestamp, time: Math.max(0,(timestamp - sourceStart) / 1000), user: text(user, 3, 1024) || '观众', text: content, color: '16777215' };
+  const senderId=decimal(number(user,1));
+  return { id, timestamp, time: Math.max(0,(timestamp - sourceStart) / 1000), user: text(user, 3, 1024) || '观众', text: content, color: '16777215',...(senderId?{senderId}:{}) };
+}
+
+export function decodeGift(message,{sourceStart,roomId}={}){
+  if(message.method!=='WebcastGiftMessage'||message.payload.length>PROTOCOL_LIMITS.activityBytes)return null;
+  const fields=record(message.payload,256),commonBytes=value(fields,1,2),userBytes=value(fields,7,2),giftBytes=value(fields,15,2);
+  if(!commonBytes||!userBytes||!giftBytes)return null;
+  const common=record(commonBytes),user=record(userBytes),gift=record(giftBytes,256);
+  if(roomId&&decimal(number(common,3))!==roomId)return null;
+  const timestamp=stamp(number(fields,33))??stamp(number(common,4));
+  const id=message.id||decimal(number(common,2)),giftId=decimal(number(fields,2))||decimal(number(gift,5));
+  if(!id||!giftId||timestamp===null||!Number.isFinite(sourceStart)||timestamp<sourceStart-2000)return null;
+  const count=Number(number(fields,5)||number(fields,44)||number(fields,4)||1n);
+  const price=value(gift,12,0),totalPrice=price===undefined?null:Number(price)*count;
+  if(!Number.isSafeInteger(count)||count<1||count>1e9||totalPrice!==null&&(!Number.isSafeInteger(totalPrice)||totalPrice<0||totalPrice>1e12))return null;
+  const imageBytes=value(gift,1,2)||value(gift,21,2);let icon='';
+  if(imageBytes){const image=record(imageBytes,128);icon=text(image,1,2048);}
+  const group=decimal(number(fields,11)),uid=decimal(number(user,1));
+  return {id:group?`combo:${uid}:${giftId}:${group}`:id,time:Math.max(0,(timestamp-sourceStart)/1000),timestamp,
+    user:text(user,3,1024)||'观众',name:text(gift,16,1024)||'礼物',giftId,count,totalPrice,icon,platform:'douyin',type:'gift'};
 }
 
 // LotteryInfo/Condition field numbers are documented in the public web SDK

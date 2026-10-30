@@ -55,7 +55,7 @@ export class ChatIntake {
     }
     // Copy only the common fields: do not retain raw protobuf frames or profiles.
     window.items[index] = { size, message: { id, time: message.time, text: message.text,
-      user: String(message.user || '观众'), color: message.color || '16777215', timestamp: message.timestamp } };
+      user: String(message.user || '观众'), color: message.color || '16777215', timestamp: message.timestamp,...(/^[1-9]\d{0,30}$/.test(message.senderId||'')?{senderId:message.senderId}:{}) } };
     state.bytes += delta; this.bytes += delta;
     if (!old) state.count++; else state.limited++;
     return true;

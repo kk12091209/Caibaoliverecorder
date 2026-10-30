@@ -1,4 +1,5 @@
 import { horizontalConflict } from './danmaku-collision.js';
+import {highlightPresentation} from './highlight-style.js';
 
 export const DANMAKU_SECONDS = 6;
 export const danmakuText = text => String(text).replace(/[{}\\\r\n]/g, ' ').slice(0, 200);
@@ -24,7 +25,7 @@ function trackOrder(count) {
   return order;
 }
 
-export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, clipBottom = height, lanes, top, lineHeight, size, font, measure, duration = DANMAKU_SECONDS, previous = new Map(), ordered = false, state = {} }) {
+export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, clipBottom = height, lanes, top, lineHeight, size, font, measure, highlightStyle, duration = DANMAKU_SECONDS, previous = new Map(), ordered = false, state = {} }) {
   const active = state.active ??= [], gap = danmakuGap(size), rowOrder = trackOrder(lanes);
   const rowUses = state.rowUses ??= Array(lanes).fill(0), glyphHeight = size * 1.4 + 4;
   // Dense traffic can use intermediate positions instead of stacking every
@@ -35,8 +36,7 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
   const firstY = lanes === 1 && Number.isFinite(clipBottom) ? Math.min(clipTop + 20, top) : top;
   const lastY = lanes === 1 && Number.isFinite(clipBottom) ? Math.max(firstY, clipBottom - (firstY - clipTop) - glyphHeight) : top + (lanes - 1) * lineHeight;
   const slots = lanes > 1 ? (lanes - 1) * subdivisions + 1 : lastY > firstY ? 129 : 1;
-  const slotOrder = trackOrder(slots), step = slots > 1 ? (lastY - firstY) / (slots - 1) : lineHeight;
-  const slotY = slot => firstY + slot * step, rowSlot = lane => lanes > 1 ? lane * subdivisions : Math.round((slots - 1) / 2);
+  const slotOrder = trackOrder(slots), rowSlot = lane => lanes > 1 ? lane * subdivisions : Math.round((slots - 1) / 2);
   const scores = new Float64Array(slots), peaks = new Float64Array(slots);
   const collisionScratch = new Float64Array(8);
   // The server already orders its admitted messages. Browser callers retain
@@ -46,10 +46,15 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
   let previousEntry = state.previousEntry ?? -Infinity;
   let index=0;
   for (const raw of feed) {
-    const message=raw.id==null?{...raw,id:String(index)}:raw;index++;
-    const text = danmakuText(message.text), painted = measure?.(text);
+    const original=raw.id==null?{...raw,id:String(index)}:raw;index++;
+    const presentation=highlightPresentation(original,size,highlightStyle),text=danmakuText(presentation.text);
+    const message=original.highlighted===true?{...original,fontSize:presentation.fontSize,renderColor:presentation.renderColor}:original,fontSize=presentation.fontSize,currentHeight=fontSize*1.4+4;
+    const allowedBottom=Math.max(clipTop,clipBottom-20-currentHeight),currentFirst=message.highlighted?Math.min(firstY,allowedBottom):firstY;
+    const currentLast=message.highlighted?Math.max(currentFirst,Math.min(lastY,allowedBottom)):lastY;
+    const step=slots>1?(currentLast-currentFirst)/(slots-1):lineHeight,slotY=slot=>currentFirst+slot*step;
+    const painted = measure?.(text,fontSize);
     // Browser measurement only sizes a sprite; layout and velocity are shared.
-    const textWidth = danmakuTextWidth(text, size, font), old = previous.get(message.id);
+    const textWidth = danmakuTextWidth(text, fontSize, font), old = previous.get(message.id);
     // Integer timestamps can put an entire second's messages on one instant.
     // Spread that burst by 10 ms per comment, capped at half a second. Keep
     // the original timestamp and end, so no delay backlog or extra video tail.
@@ -62,10 +67,10 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
     // Reuse already displayed positions before doing any collision scoring.
     // A sliding workbench window must not repeatedly rerasterize or reflow it.
     const fixedY = old && old.time === message.time && old.textWidth === textWidth && old.speed === speed &&
-      (old.entryDelay || 0) === entryDelay && Number.isFinite(old.y) && old.y >= firstY - .001 && old.y <= lastY + .001 ? old.y : null;
+      (old.fontSize??size)===fontSize&&(old.entryDelay || 0) === entryDelay && Number.isFinite(old.y) && old.y >= currentFirst - .001 && old.y <= currentLast + .001 ? old.y : null;
     if (fixedY !== null) {
       const comment = { ...message, text, textWidth, paintWidth: painted ?? textWidth,
-        lane: Math.max(0, Math.min(lanes - 1, Math.round((fixedY - top) / lineHeight))), y: fixedY, entryDelay, speed, end: message.time + duration };
+        ...(message.highlighted?{glyphHeight:currentHeight}:{}),lane: Math.max(0, Math.min(lanes - 1, Math.round((fixedY - top) / lineHeight))), y: fixedY, entryDelay, speed, end: message.time + duration };
       rowUses[comment.lane]++; active.push(comment); yield comment; continue;
     }
     let remaining = 0;
@@ -76,10 +81,11 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
       const weight = horizontalConflict(before, previousEntry, textWidth, speed, width, gap, message.time + duration, collisionScratch);
       if (!weight) continue;
       const y = before.y;
-      const first = Math.max(0, Math.ceil((y - glyphHeight - firstY) / step));
-      const last = Math.min(slots - 1, Math.floor((y + glyphHeight - firstY) / step));
+      const beforeHeight=before.glyphHeight??glyphHeight;
+      const first = step>0?Math.max(0, Math.ceil((y-currentHeight-currentFirst)/step)):0;
+      const last = step>0?Math.min(slots-1,Math.floor((y+beforeHeight-currentFirst)/step)):slots-1;
       for (let slot = first; slot <= last; slot++) {
-        const overlap = Math.max(0, 1 - Math.abs(slotY(slot) - y) / glyphHeight);
+        const newY=slotY(slot),overlap=currentHeight===glyphHeight&&beforeHeight===glyphHeight?Math.max(0,1-Math.abs(newY-y)/glyphHeight):Math.max(0,Math.min(newY+currentHeight,y+beforeHeight)-Math.max(newY,y))/Math.min(currentHeight,beforeHeight);
         const cost = weight * overlap;
         scores[slot] += cost; peaks[slot] = Math.max(peaks[slot], cost);
       }
@@ -99,7 +105,7 @@ export function* scrollingTrackEvents(messages, { width, height, clipTop = 0, cl
       }
       lane = Math.min(lanes - 1, Math.round(slot / subdivisions));
     }
-    const comment = { ...message, text, textWidth, paintWidth: painted ?? textWidth, lane,
+    const comment = { ...message, text, textWidth, paintWidth: painted ?? textWidth, ...(message.highlighted?{glyphHeight:currentHeight}:{}),lane,
       y: Number(slotY(slot).toFixed(3)), entryDelay, speed, end: message.time + duration };
     rowUses[comment.lane]++; active.push(comment); yield comment;
   }

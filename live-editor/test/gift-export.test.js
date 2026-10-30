@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {execFileSync} from 'node:child_process';
+import {Store} from '../server/store.js';
+import {Ingestor} from '../server/ingest.js';
+import {Media} from '../server/media.js';
+import {saveGift,giftFromXml} from '../server/gifts.js';
+import {GiftIcons,giftIconKey} from '../server/gift-icons.js';
+import {DEFAULT_GIFT_STYLE} from '../shared/gifts.js';
+const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';
+test('real dual export keeps clean output pure, burns optional gift artwork at the right time and freezes the submitted events',async t=>{
+ const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'gift-export-')),video=path.join(root,'fixture.flv');
+ execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=0x101820:size=320x180:rate=15','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','7','-c:v','libx264','-preset','ultrafast','-g','15','-pix_fmt','yuv420p','-c:a','aac','-f','flv','-y',video]);
+ const store=new Store(path.join(root,'data')),session=store.createSession({status:'finished',title:'gift-export'}),source=store.addSource(session.id,video,0,'2026-10-30T00:00:00Z',true),ingest=new Ingestor(store);
+ const media=new Media(store,{ffmpeg,ffprobe,exportAcceleration:'software'});t.after(async()=>{await media.close();store.close();await fs.rm(root,{recursive:true,force:true});});
+ for(let n=0;n<12;n++)await ingest.tick();assert.ok(store.session(session.id).duration>6);
+ const icon='https://i0.hdslb.com/bfs/live/test-icon.png';
+ const gift=giftFromXml('gift',{ts:'2',user:'TEST USER',giftname:'PAID GIFT',giftcount:'1',total_price:'198',icon},source,1);saveGift(store,gift);
+ const png=execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=red:size=96x96','-frames:v','1','-c:v','png','-f','image2pipe','pipe:1']);
+ store.run('INSERT INTO gift_icons VALUES(?,?,?)',giftIconKey(icon),png,Date.now());
+ store.giftIcons=new GiftIcons(store,{ffmpeg,request:()=>assert.fail('cached artwork needs no network')});
+ const run=media.work.bind(media);media.work=()=>{};
+ const first=await media.enqueue(session.id,{scope:'full',mode:'dual',giftsEnabled:true,exportDirectory:path.join(root,'out')});
+ const id=first.id||first.jobs[0].id;
+ const submitted=JSON.parse(store.get('SELECT data FROM jobs WHERE id=?',id).data);assert.equal(submitted.gifts.length,1);assert.equal(submitted.gifts[0].name,'PAID GIFT');assert.ok(submitted.giftIcons[giftIconKey(icon)]);
+ store.run("UPDATE gift_events SET name='AFTER SUBMISSION',total_price=1 WHERE id=?",gift.id);
+ store.setting('gift-style',{...DEFAULT_GIFT_STYLE,preview:true,minBilibili:1000});
+ media.work=run;await media.work();
+ const job=store.get('SELECT * FROM jobs WHERE id=?',id);assert.equal(job.status,'done',job.error);
+ const details=JSON.parse(job.data),clean=job.file,baked=details.output.danmakuFile;
+ const frame=(file,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-vf','crop=104:20:212:2','-pix_fmt','rgb24','-f','rawvideo','pipe:1']);
+ const difference=(a,b)=>a.reduce((n,v,i)=>n+Math.abs(v-b[i]),0);
+ const quiet=difference(frame(clean,.5),frame(baked,.5)),shown=difference(frame(clean,3),frame(baked,3));
+ assert.ok(shown>10000&&shown>quiet*4,`gift pixel difference ${shown}, before event ${quiet}`);
+ const colors=frame(baked,3);assert.ok(Array.from({length:colors.length/3},(_,i)=>[colors[i*3],colors[i*3+1],colors[i*3+2]]).some(([r,g,b])=>r>150&&r>g*2&&r>b*2),'actual red gift artwork is in the encoded frame');
+ const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','stream=codec_type','-of','json',baked]));assert.ok(probe.streams.some(s=>s.codec_type==='audio'));
+ // Preview is deliberately enabled; an omitted export switch still stays off.
+ const off=await media.enqueue(session.id,{scope:'full',mode:'danmaku',exportDirectory:path.join(root,'out')});
+ const offId=off.id||off.jobs[0].id;for(let n=0;n<300;n++){if(store.get('SELECT status FROM jobs WHERE id=?',offId).status!=='queued'&&!media.processing)break;await new Promise(r=>setTimeout(r,20));}
+ const offJob=store.get('SELECT * FROM jobs WHERE id=?',offId);assert.equal(offJob.status,'done',offJob.error);assert.equal(JSON.parse(offJob.data).gifts,undefined);
+ assert.ok(difference(frame(clean,3),frame(offJob.file,3))<shown/4);
+});

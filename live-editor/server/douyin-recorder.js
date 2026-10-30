@@ -9,8 +9,9 @@ import {chatRate} from './chat-rules.js';
 export const xmlText=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
 export async function writeAll(file,bytes){bytes=Buffer.from(bytes);let offset=0;while(offset<bytes.length){const result=await file.write(bytes,offset,bytes.length-offset);if(!result.bytesWritten)throw new Error('录像写入失败。');offset+=result.bytesWritten;}}
 export function chatXml(batch){
-  return batch.messages.map(message=>`<d p="${message.time.toFixed(3)},1,25,${xmlText(message.color)},0,0,0,0" user="${xmlText(message.user)}" uid="${xmlText(message.id)}">${xmlText(message.text)}</d>\n`).join('')+
-    batch.density.map(bucket=>`<density ts="${bucket.second}" count="${bucket.count}" kept="${bucket.kept}"/>\n`).join('');
+  return batch.messages.map(message=>`<d platform="douyin" p="${message.time.toFixed(3)},1,25,${xmlText(message.color)},0,0,0,0" user="${xmlText(message.user)}" uid="${xmlText(message.id)}"${message.senderId?` sender_id="${xmlText(message.senderId)}"`:''}>${xmlText(message.text)}</d>\n`).join('')+
+    batch.density.map(bucket=>`<density ts="${bucket.second}" count="${bucket.count}" kept="${bucket.kept}"/>\n`).join('')+
+    (batch.gifts||[]).map(g=>`<gift platform="douyin" eventid="${xmlText(g.id)}" ts="${g.time.toFixed(3)}" user="${xmlText(g.user)}" giftid="${xmlText(g.giftId)}" giftname="${xmlText(g.name)}" giftcount="${g.count}"${g.totalPrice===null?'':` total_price="${g.totalPrice}"`} icon="${xmlText(g.icon)}"/>\n`).join('');
 }
 
 export class DouyinRecorder {

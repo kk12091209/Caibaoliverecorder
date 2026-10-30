@@ -61,8 +61,10 @@ namespace BililiveRecorder.Core.Api.Danmaku
         public int Num { get; private set; }
 
         public long Price { get; private set; }
+        public bool HasPrice { get; private set; }
 
         public long TotalCoin { get; private set; }
+        public bool HasTotalCoin { get; private set; }
 
         public string? CoinType { get; private set; }
 
@@ -86,9 +88,11 @@ namespace BililiveRecorder.Core.Api.Danmaku
                         break;
                     case 5 when wireType == ProtobufWireType.Varint:
                         result.Price = reader.ReadInt64();
+                        result.HasPrice = true;
                         break;
                     case 7 when wireType == ProtobufWireType.Varint:
                         result.TotalCoin = reader.ReadInt64();
+                        result.HasTotalCoin = true;
                         break;
                     case 8 when wireType == ProtobufWireType.LengthDelimited:
                         result.CoinType = reader.ReadString();

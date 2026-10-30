@@ -1,14 +1,16 @@
 import {parentPort} from 'node:worker_threads';
 import {randomInt} from 'node:crypto';
 import {ChatIntake} from './chat-intake.js';
+import {GiftIntake} from './gift-intake.js';
 import {LotteryActivities} from './lottery-activities.js';
-import {decodePushFrame,decodeChat,decodeLottery,acknowledgeFrame,heartbeatFrame,isLotteryMethod} from './douyin-protocol.js';
+import {decodePushFrame,decodeChat,decodeGift,decodeLottery,acknowledgeFrame,heartbeatFrame,isLotteryMethod} from './douyin-protocol.js';
 import {openDouyinSocket} from './douyin-websocket.js';
 import {signChatUrl} from './douyin-signing.js';
 import {DOUYIN_USER_AGENT} from './douyin-room.js';
 
 const rooms=new Map(),activities=new LotteryActivities();
 const intake=new ChatIntake({filterLottery:(key,message)=>activities.matches(key,message)});
+const giftIntake=new GiftIntake();
 let sequence=0;
 const post=message=>parentPort.postMessage(message);
 function chatSocketUrl({roomId,userUniqueId},now=Date.now()) {
@@ -24,9 +26,9 @@ function chatSocketUrl({roomId,userUniqueId},now=Date.now()) {
 }
 function flush(room) {
   if(room.batch)return;
-  const batch=intake.take(room.key,{force:room.stopped});
-  if(batch){room.batch={...batch,id:++sequence};post({type:'batch',key:room.key,id:room.batch.id,messages:batch.messages,density:batch.density});}
-  else if(room.stopped){intake.drop(room.key);activities.drop(room.key);rooms.delete(room.key);post({type:'stopped',key:room.key});}
+  const batch=intake.take(room.key,{force:room.stopped}),gifts=giftIntake.take(room.key);
+  if(batch||gifts){room.batch={id:++sequence,release(){batch?.release();gifts?.release();}};post({type:'batch',key:room.key,id:room.batch.id,messages:batch?.messages||[],density:batch?.density||[],gifts:gifts?.gifts||[]});}
+  else if(room.stopped){intake.drop(room.key);giftIntake.drop(room.key);activities.drop(room.key);rooms.delete(room.key);post({type:'stopped',key:room.key});}
 }
 function retry(room,error) {
   if(room.stopped||room.retry)return;
@@ -46,7 +48,7 @@ async function connect(room) {
         if(frame.needAck){const ack=acknowledgeFrame(frame.logId,frame.internalExt);if(room.socket)room.socket.send(ack);else room.firstAck=ack;}
         // Activity messages have priority even when chats precede them in the packet.
         for(const message of frame.messages)if(isLotteryMethod(message.method))for(const activity of decodeLottery(message,{roomId:room.roomId,serverTime:frame.serverTime}))activities.update(room.key,activity);
-        for(const message of frame.messages){try{const chat=decodeChat(message,{roomId:room.roomId,sourceStart:room.sourceStart});if(chat)intake.add(room.key,chat);}catch{/* Skip one malformed chat, preserving other messages and the ACK. */}}
+        for(const message of frame.messages){try{const context={roomId:room.roomId,sourceStart:room.sourceStart};const gift=decodeGift(message,context);if(gift)giftIntake.add(room.key,gift);else{const chat=decodeChat(message,context);if(chat)intake.add(room.key,chat);}}catch{/* Skip one malformed event, preserving other messages and the ACK. */}}
       }});
     if(!current()){socket.close();return;}
     room.socket=socket;if(room.firstAck){socket.send(room.firstAck);room.firstAck=null;}socket.send(heartbeatFrame());room.failures=0;room.lastFrame=Date.now();post({type:'status',key:room.key,status:'connected'});
@@ -59,7 +61,7 @@ parentPort.on('message',message=>{
   }else if(message.type==='start'){
     if(rooms.has(message.key)||rooms.size>=64)return;
     const room={...message,key:String(message.key),abort:new AbortController(),failures:0,stopped:false};
-    rooms.set(room.key,room);intake.start(room.key,{start:room.sourceStart});void connect(room);
+    rooms.set(room.key,room);intake.start(room.key,{start:room.sourceStart});giftIntake.start(room.key);void connect(room);
   }else if(message.type==='credentials'){
     const room=rooms.get(message.key);if(room&&!room.stopped&&(room.cookie!==message.cookie||room.userUniqueId!==message.userUniqueId)){
       room.cookie=message.cookie;room.userUniqueId=message.userUniqueId;
@@ -72,7 +74,7 @@ parentPort.on('message',message=>{
     const room=rooms.get(message.key);if(room?.batch?.id===message.id){room.batch.release();room.batch=null;flush(room);}
   }else if(message.type==='stop'){
     const room=rooms.get(message.key);if(!room){post({type:'stopped',key:message.key});return;}
-    room.stopped=true;clearTimeout(room.retry);clearInterval(room.heartbeat);room.abort.abort();room.socket?.close();intake.stop(room.key);flush(room);
+    room.stopped=true;clearTimeout(room.retry);clearInterval(room.heartbeat);room.abort.abort();room.socket?.close();intake.stop(room.key);giftIntake.stop(room.key);flush(room);
   }
 });
 setInterval(()=>{for(const room of rooms.values())flush(room);},200);

@@ -4,11 +4,13 @@ import { api } from '../api.js';
 import { CAMERA_POSITIONS, normalizedRecordingStyle } from '../../shared/recording-style.js';
 import { TIMESTAMP_STYLES, normalizedTimestampStyle, TIMESTAMP_POSITIONS, normalizedTimestampPosition } from '../../shared/timestamp-style.js';
 import TimestampText from './TimestampText.vue';
+import {normalizedGiftStyle} from '../../shared/gifts.js';
 
-const props=defineProps({previewTimestamp:Boolean,previewTimestampStyle:String,previewTimestampPosition:String,recordingStyle:Object});
+const props=defineProps({previewTimestamp:Boolean,previewTimestampStyle:String,previewTimestampPosition:String,recordingStyle:Object,giftStyle:Object});
 const emit=defineEmits(['changed','busy','close']);
 const busy=ref(false),error=ref(''),saved=ref(false),timestamp=ref(props.previewTimestamp);
 const draft=ref(normalizedRecordingStyle(props.recordingStyle));
+const gifts=ref(normalizedGiftStyle(props.giftStyle));
 const timestampStyle=ref(normalizedTimestampStyle(props.previewTimestampStyle));
 const timestampPosition=ref(normalizedTimestampPosition(props.previewTimestampPosition));
 const timestampDemoPosition=computed(()=>({
@@ -23,7 +25,7 @@ const demoStyle=computed(()=>({width:(original.value?24:draft.value.cameraSize)+
 async function save(){
   if(busy.value)return;
   busy.value=true;emit('busy',true);error.value='';
-  try{const value=await api('settings',{previewTimestamp:timestamp.value,previewTimestampStyle:timestampStyle.value,previewTimestampPosition:timestampPosition.value,recordingStyle:draft.value});emit('changed',value);saved.value=true;}
+  try{const value=await api('settings',{previewTimestamp:timestamp.value,previewTimestampStyle:timestampStyle.value,previewTimestampPosition:timestampPosition.value,recordingStyle:draft.value,giftStyle:gifts.value});emit('changed',value);saved.value=true;}
   catch(e){error.value=e.message;}
   finally{busy.value=false;emit('busy',false);}
 }
@@ -46,6 +48,13 @@ async function save(){
       </div>
     </div>
     <p class="muted">显示录制时间（北京时间），默认关闭、位置默认左上角。与摄像头位置独立，选到同一角时按所选位置显示。仅用于本地观看，导出不包含时间戳。</p>
+    <fieldset class="gift-settings" :disabled="busy"><legend>礼物与上舰</legend>
+      <label class="checkbox"><input v-model="gifts.preview" type="checkbox"/>展示礼物（默认关闭）</label>
+      <label class="checkbox"><input v-model="gifts.export" type="checkbox"/>弹幕版导出默认展示礼物（默认关闭）</label>
+      <div class="gift-price-fields"><label>B 站最低单次金额（元）<input v-model.number="gifts.minBilibili" type="number" min="0" max="1000000000" step="0.01" aria-label="B站礼物最低金额"/></label><label>抖音最低单次金额（元）<input v-model.number="gifts.minDouyin" type="number" min="0" max="1000000000" step="0.01" aria-label="抖音礼物最低金额"/></label></div>
+      <p class="muted">统一按人民币折算价值筛选，抖音按 10 抖币 = 1 元计算，不含充值渠道额外费用。按单次送礼合计，连击累计不重复计数。0 表示全部显示，金额未知的礼物仅在最低金额为 0 时显示。舰长、提督、总督单独标注。只改变展示，不删除记录。</p>
+      <p class="muted">预览和导出独立控制。纯净版不叠加礼物；导出窗口可为本次弹幕版单独勾选。旧素材没有采集的礼物无法补回。</p>
+    </fieldset>
     <fieldset class="camera-position" :disabled="busy"><legend>独立摄像头位置</legend>
       <div class="camera-choices"><label v-for="choice in CAMERA_POSITIONS" :key="choice.value" :class="{selected:draft.cameraPosition===choice.value}"><input v-model="draft.cameraPosition" type="radio" name="camera-position" :value="choice.value"/>{{ choice.label }}</label></div>
     </fieldset>
@@ -61,3 +70,4 @@ async function save(){
 <style scoped>
 .recording-style-editor{font-size:13px}.recording-style-editor p{line-height:1.65}.recording-style-demo{position:relative;width:100%;aspect-ratio:16/9;background:#161b25;border-radius:12px;overflow:hidden}.demo-game{position:absolute;inset:0;background:linear-gradient(145deg,#354b67,#6b9b8a);display:grid;place-items:center;color:#e8f5ed;font-size:22px}.demo-grid{position:absolute;inset:0;background:linear-gradient(90deg,#ffffff0b 1px,transparent 1px),linear-gradient(#ffffff0b 1px,transparent 1px);background-size:12.5% 16.666%}.keep-original .demo-game{inset:15% 30% 15% 0}.demo-camera{position:absolute;aspect-ratio:4/3;border:2px solid #f6d7df;border-radius:6px;background:linear-gradient(150deg,#bb7488,#e4b59f);display:grid;place-items:center;color:#fff;font-size:clamp(11px,2vw,16px);box-sizing:border-box}.demo-timestamp{position:absolute;z-index:1;max-width:calc(100% - 16px);font-size:clamp(11px,2vw,14px)}.demo-caption{display:block;text-align:center;color:var(--muted);margin-top:7px}.camera-position{margin:20px 0 16px;padding:0;border:0}.camera-position legend{font-weight:600;margin-bottom:10px}.camera-choices{display:flex;gap:8px;flex-wrap:wrap}.camera-choices label{display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:9px 10px;cursor:pointer}.camera-choices .selected{border-color:var(--rose);background:var(--rose-light,#fff0f4)}.camera-choices input{width:auto;margin:0;accent-color:var(--rose)}.camera-size{display:block}.camera-size>span{display:flex;justify-content:space-between;font-weight:600}.camera-size input{width:100%;padding:0;margin:10px 0;accent-color:var(--rose);box-shadow:none}.camera-size output,.recording-save-state{color:var(--rose-dark)}.timestamp-options{border-top:1px solid var(--line);padding-top:16px;margin-top:18px}.timestamp-choice{margin:0}.timestamp-controls{display:flex;gap:10px 18px;flex-wrap:wrap;margin-top:10px}.timestamp-style-choice{display:flex;flex:1 1 210px;align-items:center;justify-content:space-between;gap:8px}.timestamp-style-choice select{width:auto;min-width:130px;margin:0;padding:8px 10px}.recording-style-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 </style>
+<style scoped>.gift-settings{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:18px}.gift-settings legend{font-weight:600}.gift-settings .checkbox{display:flex;margin:8px 0}.gift-price-fields{display:flex;gap:14px;flex-wrap:wrap}.gift-price-fields label{flex:1 1 180px}.gift-price-fields input{margin-top:6px;width:100%;box-sizing:border-box}</style>

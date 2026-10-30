@@ -29,7 +29,7 @@ namespace BililiveRecorder.Core.Danmaku
         };
 
         private static readonly Regex invalidXMLChars = new Regex(@"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFEFF\uFFFE\uFFFF]", RegexOptions.Compiled);
-        private static string RemoveInvalidXMLChars(string? text) => string.IsNullOrWhiteSpace(text) ? string.Empty : invalidXMLChars.Replace(text, string.Empty);
+        internal static string RemoveInvalidXMLChars(string? text) => string.IsNullOrWhiteSpace(text) ? string.Empty : invalidXMLChars.Replace(text, string.Empty);
 
         private XmlWriter? xmlWriter = null;
         private readonly Stopwatch dmTime = new Stopwatch();
@@ -48,6 +48,7 @@ namespace BililiveRecorder.Core.Danmaku
             internal double Time;
             internal string Text = string.Empty, User = string.Empty;
             internal string? Raw;
+            internal string? GiftXml;
             internal long UserId, Stamp;
             internal int Type, Size, Color;
         }
@@ -169,6 +170,21 @@ namespace BililiveRecorder.Core.Danmaku
             if (!this.userScriptRunner.CallOnDanmaku(this.logger, rawString))
                 return Task.CompletedTask;
 
+            if (danmakuModel.MsgType is DanmakuMsgType.GiftSend or DanmakuMsgType.GuardBuy)
+            {
+                try
+                {
+                    foreach (var xml in GiftEventXml.Create(danmakuModel, time))
+                    {
+                        if (xml.Length == 0 || xml.Length * 2 + 512 > 16 * 1024) continue;
+                        this.pending.Add(new PendingMessage { Time = time, GiftXml = xml }, xml.Length * 2 + 512, (long)time, receiptGeneration, false);
+                    }
+                    lock (this.pumpGate) if (!this.disposedValue && (this.pump is null || this.pump.IsCompleted)) this.pump = this.PumpAsync();
+                }
+                catch (Exception ex) { this.logger.Debug(ex, "忽略格式异常的礼物"); }
+                return Task.CompletedTask;
+            }
+
             PendingMessage message;
             int retainedBytes;
             try
@@ -238,7 +254,8 @@ namespace BililiveRecorder.Core.Danmaku
             }
             catch (Exception ex) { this.logger.Warning(ex, "写入弹幕密度时发生错误"); this.DisableCore(); return; }
             foreach (var message in batch.Items.OrderBy(item => item.Time))
-                if(message.Model is null) await this.WriteCommentLockedAsync(message).ConfigureAwait(false);
+                if(message.GiftXml != null) await this.xmlWriter.WriteRawAsync(message.GiftXml).ConfigureAwait(false);
+                else if(message.Model is null) await this.WriteCommentLockedAsync(message).ConfigureAwait(false);
                 else await this.WriteLockedAsync(message.Model, message.Time).ConfigureAwait(false);
             if (batch.Items.Count > 0 && this.xmlWriter != null)
             {

@@ -9,7 +9,7 @@ export function roomEnabled(room) {
 const validId=id=>Number.isInteger(id)&&id>0&&id<=2147483647;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 export function defaultCoreConfig(rooms=[]) {
-  return {version:3,global:{RecordDanmaku:{HasValue:true,Value:true},CuttingMode:{HasValue:true,Value:0},RecordDanmakuFlushInterval:{HasValue:true,Value:0}},
+  return {version:3,global:{RecordDanmaku:{HasValue:true,Value:true},RecordDanmakuGift:{HasValue:true,Value:true},RecordDanmakuGuard:{HasValue:true,Value:true},RecordDanmakuSuperChat:{HasValue:true,Value:false},CuttingMode:{HasValue:true,Value:0},RecordDanmakuFlushInterval:{HasValue:true,Value:0}},
     // Never start recording before restoring the saved user intent through the API.
     rooms:rooms.map(room=>({RoomId:{HasValue:true,Value:room.roomId},AutoRecord:{HasValue:true,Value:false}}))};
 }
