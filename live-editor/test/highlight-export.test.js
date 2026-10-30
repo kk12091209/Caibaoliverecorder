@@ -36,7 +36,8 @@ test('real dual export freezes highlighted message and style; enlarged green tex
 test('real style preview paints selected highlight samples with custom color and follows scale changes',async t=>{
  if(!ffmpeg||!ffprobe){t.skip('FFmpeg runtime is unavailable');return;}
  const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'highlight-preview-')),store=new Store(path.join(root,'data')),media=new Media(store,{ffmpeg,ffprobe});t.after(async()=>{await media.close();store.close();await fs.rm(root,{recursive:true,force:true});});
- const preview=new DanmakuStylePreview(media),input={style:DEFAULT_DANMAKU_STYLE,rate:8,font:null,highlighted:['00','02'],highlightStyle:{scale:2,showSender:true,color:'#00FF00'}};
+ const assets=path.join(root,'assets');await fs.mkdir(assets);await fs.copyFile(new URL('../src/assets/danmaku-style-preview.webp',import.meta.url),path.join(assets,'danmaku-style-preview-test.webp'));await fs.writeFile(path.join(root,'asset-manifest.json'),JSON.stringify({'src/assets/danmaku-style-preview.webp':{file:'assets/danmaku-style-preview-test.webp'}}));
+ const preview=new DanmakuStylePreview(media,{imageRoot:assets}),input={style:DEFAULT_DANMAKU_STYLE,rate:8,font:null,highlighted:['00','02'],highlightStyle:{scale:2,showSender:true,color:'#00FF00'}};
  const large=await preview.render(input,AbortSignal.timeout(20000)),small=await preview.render({...input,highlightStyle:{...input.highlightStyle,scale:1}},AbortSignal.timeout(20000));
  const colors=png=>execFileSync(ffmpeg,['-v','error','-f','image2pipe','-i','pipe:0','-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','pipe:1'],{input:png,maxBuffer:8*1024*1024});
  const count=bytes=>{let n=0;for(let i=0;i<bytes.length;i+=3)if(bytes[i+1]>150&&bytes[i]<70&&bytes[i+2]<70)n++;return n;};

@@ -23,8 +23,9 @@ export function normalizePlatformCookie(platform,input){
 // Secrets travel through bounded pipes, never argv, environment variables,
 // shell interpolation, ordinary settings, or a plaintext temporary file.
 export class NativeCookieProtection {
-  constructor({platform=process.platform,helper,launch=spawn}={}){
-    this.platform=platform;this.launch=launch;
+  constructor({platform=process.platform,helper,launch=spawn,timeoutMs=15000}={}){
+    if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>60000)throw new Error('Invalid native protection deadline.');
+    this.platform=platform;this.launch=launch;this.timeoutMs=timeoutMs;
     const bundled=path.basename(path.dirname(appRoot))==='Resources';
     this.helper=helper||path.join(path.dirname(appRoot),bundled?'runtime':'.tools/runtime','credentials','cookie-protection');
     this.label=platform==='darwin'?'macOS 钥匙串 + AES-GCM':platform==='win32'?'Windows 当前用户 DPAPI':'此系统暂不支持安全保存';
@@ -43,7 +44,7 @@ export class NativeCookieProtection {
     return new Promise((resolve,reject)=>{
       let child,output=[],size=0,settled=false;
       const done=(error,result)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(failure()):resolve(result);};
-      const timer=setTimeout(()=>{child?.kill();done(true);},operation==='unlock'?120000:15000);
+      const timer=setTimeout(()=>{child?.kill();done(true);},operation==='unlock'?120000:this.timeoutMs);
       try{child=this.launch(executable,args,{windowsHide:true,stdio:['pipe','pipe','pipe']});}catch{done(true);return;}
       child.on('error',()=>done(true));child.stdin.on('error',()=>done(true));child.stderr.resume();
       child.stdout.on('data',chunk=>{size+=chunk.length;if(size>192*1024){child.kill();done(true);}else output.push(chunk);});

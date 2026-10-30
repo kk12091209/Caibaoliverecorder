@@ -77,7 +77,8 @@ test('native helper receives secrets through stdin only and errors never echo ch
  await assert.rejects(failing.run('seal','f'.repeat(64),'bilibili',Buffer.from(biliFixture)),error=>!error.message.includes('synthetic')&&/系统安全存储/.test(error.message));
 });
 test('Windows CurrentUser DPAPI really restores Bilibili and rejects scope changes or tampering',{skip:process.platform!=='win32',timeout:90000},async t=>{
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-dpapi-')),protection=new NativeCookieProtection();
+ // Hosted Windows runners may cold-start PowerShell and DPAPI under antivirus scanning.
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-dpapi-')),protection=new NativeCookieProtection({timeoutMs:45000});
  let vault=await new PlatformCredentials(root,{protection}).initialize();
  t.after(async()=>{await vault.close();await fs.rm(root,{recursive:true,force:true});});
  await vault.save('bilibili',biliFixture);
