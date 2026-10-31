@@ -5,6 +5,10 @@ import GiftOverlay from './components/GiftOverlay.vue';
 import GiftIcon from './components/GiftIcon.vue';
 import {normalizedGiftStyle} from '../shared/gifts.js';
 import {senderFilterFor} from '../shared/sender-filter.js';
+import {applyMessageEdit} from '../shared/message-edits.js';
+import MessageTextEditor from './components/MessageTextEditor.vue';
+import LotteryPanel from './components/LotteryPanel.vue';
+import {lotteryCountLabel} from '../shared/lottery-records.js';
 import LinkmicOverlay from './components/LinkmicOverlay.vue';
 import RecordingTimestamp from './components/RecordingTimestamp.vue';
 import RecordingSettings from './components/RecordingSettings.vue';
@@ -33,7 +37,7 @@ import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFold
 import { api } from './api.js';
 import { stateSync } from './state-sync.js';
 import { previewStream } from './preview-stream.js';
-import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
+import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, Pencil, Trophy, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
 
 const state=ref({sessions:[],rooms:[],jobs:[],recorder:{online:false,error:''},dataPath:'',paths:{},preparation:{enabled:true,items:[]}} );
 const recordingCameraEvents=ref([]);
@@ -61,13 +65,16 @@ const previewSlider=computed(()=>previewMuted.value?0:previewVolume.value);
 const giftRows=shallowRef([]),giftFeed=shallowRef([]),showGifts=ref(false),onlyGifts=ref(false),exportGifts=ref(false);
 watch(showGifts,value=>{if(!value)onlyGifts.value=false;});
 function changeOnlyGifts(){if(onlyGifts.value&&senderFilter.value)clearSenderFilter();void loadMessages(true);}
-watch(()=>state.value.giftStyle?.preview,value=>{showGifts.value=value===true;giftRows.value=[];void loadMessages(true);});
+watch(()=>state.value.giftStyle?.preview,value=>{showGifts.value=value===true;giftRows.value=[];lotteryRows.value=[];void loadMessages(true);});
 async function changeGiftPreview(){try{const result=await api('settings',{giftStyle:{...normalizedGiftStyle(state.value.giftStyle),preview:showGifts.value}});state.value.giftStyle=result.giftStyle;void loadMessages(true);void loadGiftOverlay();}catch(e){showGifts.value=state.value.giftStyle?.preview===true;tell(e.message);}}
 const startText=ref('00:00:00'),endText=ref('00:00:00'),startExact=ref(0),endExact=ref(0),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true),messageList=ref(null);
 const roomBusyIds=ref([]);
 const modal=ref(''),modalBusy=ref(false),exportMode=ref('dual'),materialDeleteError=ref('');
 const startMarked=ref(false),endMarked=ref(false),sessionMenu=ref(null),confirmTarget=ref(null);
 const messageMenu=ref(null),senderFilter=ref(null);
+const messageEditTarget=ref(null);
+const lotteryRows=shallowRef([]),lotteryTarget=ref(null),lotteryEditing=ref(false),lotteryLoading=ref(false),lotteryError=ref('');
+let lotteryDetailRequest=0;
 const senderWarning=computed(()=>senderFilter.value?.mode==='approx'?'按打码昵称首尾近似匹配，结果可能包含其他用户。':senderFilter.value?.mode==='name'?'缺少完整 UID，按昵称匹配，结果可能包含同名用户。':'');
 const jobMenu=ref(null),jobDeleteTarget=ref(null),jobDeletePreview=shallowRef(null),jobPreviewLoading=ref(false),jobDeleteError=ref('');
 const jobDeleteRecordOnly=ref(false);
@@ -115,7 +122,7 @@ const deleteBlock=computed(()=>{
   if(s.archive_status==='running'||state.value.jobs.some(j=>j.session===s.id&&['queued','running','finalizing','saving','cancelling'].includes(j.status)))return '这份素材正在归档、导出或保存，请完成后再删除。';
   return '';
 });
-const modalTitle=computed(()=>({settings:'设置','danmaku-style':'调整弹幕样式','recording-style':'调整录制样式','cookie-management':'Cookie 管理',export:exportScope.value==='full'?'导出完整素材':'导出选段','choose-room':'选择主播','remove-room':'移除监控房间','delete-session':'删除已录制素材','delete-job':'删除导出任务','retry-save':'更换保存位置'})[modal.value]||'');
+const modalTitle=computed(()=>({settings:'设置','edit-message':'编辑文本',lottery:lotteryEditing.value?'编辑奖品备注':'天选时刻 · 中奖名单','danmaku-style':'调整弹幕样式','recording-style':'调整录制样式','cookie-management':'Cookie 管理',export:exportScope.value==='full'?'导出完整素材':'导出选段','choose-room':'选择主播','remove-room':'移除监控房间','delete-session':'删除已录制素材','delete-job':'删除导出任务','retry-save':'更换保存位置'})[modal.value]||'');
 const activeSession=computed(()=>state.value.sessions.find(s=>s.id===selected.value)||detail.value);
 const preparationEnabled=computed(()=>state.value.preparation?.enabled!==false);
 const livePreparationEnabled=computed(()=>state.value.preparation?.liveEnabled===true);
@@ -137,7 +144,7 @@ const source=computed(()=>detail.value?.sources?.find(s=>position.value>=s.start
 const fps=computed(()=>source.value?.metadata?.fps||30);
 const excluded=computed(()=>new Set(edit.value.excluded));
 const highlighted=computed(()=>new Set(edit.value.highlighted||[]));
-const visibleMessages=computed(()=>[...(showGifts.value&&onlyGifts.value?[]:messages.value),...(showGifts.value?giftRows.value:[])].sort((a,b)=>a.time-b.time||a.id.localeCompare(b.id)));
+const visibleMessages=computed(()=>[...(showGifts.value&&onlyGifts.value?[]:messages.value.map(m=>applyMessageEdit(m,edit.value.messageEdits))),...(showGifts.value?[...giftRows.value,...lotteryRows.value]:[])].sort((a,b)=>a.time-b.time||a.id.localeCompare(b.id)));
 const overlayFeed=shallowRef([]),exportDirectory=ref(''),savedExportDirectory=ref('');
 let overlayBusy=false, overlayWindow=null;
 const myJobs=computed(()=>state.value.jobs.filter(j=>j.session===selected.value));
@@ -164,7 +171,7 @@ function parse(text){const values=String(text).split(':').map(Number);if(values.
 function date(text){return new Date(text).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function categoryPath(root,category){const raw=String(root||''),value=raw.replace(/[\\/]+$/,'');return raw?value+(raw.startsWith('/')?'/':'\\')+category:category;}
 function formatBytes(bytes){const size=Math.max(0,Number(bytes)||0);if(size<1024)return size+' 字节';const units=['KB','MB','GB','TB'],power=Math.min(4,Math.floor(Math.log(size)/Math.log(1024)));return (size/1024**power).toFixed(1)+' '+units[power-1];}
-function closeModal(){if(modalBusy.value)return;if(['danmaku-style','recording-style','cookie-management'].includes(modal.value)){const selector=modal.value==='cookie-management'?'.open-cookie-management':modal.value==='danmaku-style'?'.open-danmaku-style':'.open-recording-style';modal.value='settings';void nextTick(()=>document.querySelector(selector)?.focus());return;}const kind=modal.value,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(jobId)void nextTick(()=>focusJob(jobId));}
+function closeModal(){if(modalBusy.value)return;if(['danmaku-style','recording-style','cookie-management'].includes(modal.value)){const selector=modal.value==='cookie-management'?'.open-cookie-management':modal.value==='danmaku-style'?'.open-danmaku-style':'.open-recording-style';modal.value='settings';void nextTick(()=>document.querySelector(selector)?.focus());return;}const kind=modal.value,messageId=kind==='edit-message'?messageEditTarget.value?.message.id:kind==='lottery'?lotteryTarget.value?.record.id:null,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(kind==='lottery'){lotteryDetailRequest++;lotteryLoading.value=false;lotteryTarget.value=null;lotteryError.value='';if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(kind==='edit-message'){messageEditTarget.value=null;if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(jobId)void nextTick(()=>focusJob(jobId));}
 function fullExportBlock(session){return session.status!=='finished'?'录制或整理完成后才能导出完整素材。':!(session.duration>0)?'这份素材暂时没有可导出的画面。':'';}
 function preparationFor(id){return state.value.preparation?.items?.find(item=>item.session===id);}
 function preparationStatus(entry){return ({queued:'等待预处理',preparing:'正在后台预处理',waiting:'暂缓预处理',paused:'预处理已暂停',ready:'预处理已完成',exported:'完整弹幕版已导出',error:'预处理未完成'})[entry?.status]||'尚未预处理';}
@@ -279,7 +286,7 @@ function resetSelection(){
   previewTransport?.dispose();selectionGeneration++;generation++;senderFilter.value=null;selected.value=null;detail.value=null;
   invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();
   previewUrl.value='';loading.value=false;previewEnded.value=false;previewBase.value=0;scrubbing.value=false;
-  edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;
+  edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;
   startMarked.value=false;endMarked.value=false;startExact.value=0;endExact.value=0;
   startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';
 }
@@ -293,13 +300,51 @@ function applyState(value){
 }
 function closeContext(){sessionMenu.value=null;jobMenu.value=null;messageMenu.value=null;}
 async function showMessageContext(event,message){
-  if(message.type!=='d'||modal.value)return;closeContext();const rect=event.currentTarget.getBoundingClientRect();
+  if(!['d','lottery'].includes(message.type)||modal.value)return;closeContext();const rect=event.currentTarget.getBoundingClientRect();
   messageMenu.value={message,x:event.clientX||rect.left,y:event.clientY||rect.bottom};await nextTick();const menu=document.querySelector('.message-context');if(!menu||!messageMenu.value)return;
   const bounds=menu.getBoundingClientRect();messageMenu.value.x=Math.max(8,Math.min(messageMenu.value.x,innerWidth-bounds.width-8));messageMenu.value.y=Math.max(8,Math.min(messageMenu.value.y,innerHeight-bounds.height-8));menu.querySelector('button:not(:disabled)')?.focus();
 }
-function filterSender(message){const filter=senderFilterFor(message);closeContext();if(!filter)return;senderFilter.value=filter;giftRows.value=[];searchChanged();}
+function filterSender(message){const filter=senderFilterFor(message);closeContext();if(!filter)return;senderFilter.value=filter;giftRows.value=[];lotteryRows.value=[];searchChanged();}
 function clearSenderFilter(){senderFilter.value=null;searchChanged();}
 async function toggleHighlight(message){if(saving.value||message.type!=='d')return;closeContext();const marked=new Set(edit.value.highlighted||[]);if(marked.has(message.id))marked.delete(message.id);else marked.add(message.id);edit.value.highlighted=[...marked];await save();}
+async function openLottery(message,editing=false){
+  if(!selectionReady.value||message.type!=='lottery')return;
+  closeContext();lotteryTarget.value={session:selected.value,version:selectionGeneration,record:message};lotteryEditing.value=editing;lotteryError.value='';modal.value='lottery';
+  if(!editing)void playFrom(message.time,false);
+  await refreshLotteryDetail();
+}
+async function refreshLotteryDetail(){
+  const target=lotteryTarget.value;if(!target||lotteryLoading.value)return;const request=++lotteryDetailRequest;lotteryLoading.value=true;lotteryError.value='';
+  try{const record=await api(`sessions/${target.session}/lotteries/${target.record.id}`);
+    if(request===lotteryDetailRequest&&target===lotteryTarget.value&&target.session===selected.value&&target.version===selectionGeneration)target.record=record;
+  }catch(e){if(request===lotteryDetailRequest)lotteryError.value=e.message;}finally{if(request===lotteryDetailRequest)lotteryLoading.value=false;}
+}
+async function saveLotteryRemark(input){
+  const target=lotteryTarget.value;if(!target||modalBusy.value||lotteryLoading.value)return;
+  if(target.session!==selected.value||target.version!==selectionGeneration){lotteryError.value='素材已切换，请重新打开这条天选记录。';return;}
+  modalBusy.value=true;lotteryError.value='';
+  try{const record=await api(`sessions/${target.session}/lotteries/${target.record.id}/note`,input);
+    if(target===lotteryTarget.value&&target.session===selected.value&&target.version===selectionGeneration){target.record=record;lotteryEditing.value=false;invalidateMessages();await loadMessages(true);}
+  }catch(e){lotteryError.value=e.message;}finally{modalBusy.value=false;}
+}
+function openMessageEditor(message){
+  if(saving.value||!selectionReady.value||message.type!=='d')return;
+  closeContext();messageEditTarget.value={session:selected.value,version:selectionGeneration,message:applyMessageEdit(message,edit.value.messageEdits)};modal.value='edit-message';
+}
+async function saveMessageText(patch){
+  const target=messageEditTarget.value;
+  if(!target||saving.value||modalBusy.value)return;
+  if(selected.value!==target.session||selectionGeneration!==target.version){tell('素材已切换，请重新打开要编辑的弹幕。');closeModal();return;}
+  modalBusy.value=true;
+  try{
+    const patches={...(edit.value.messageEdits||{})};if(patch===null)delete patches[target.message.id];else patches[target.message.id]=patch;
+    edit.value={...edit.value,messageEdits:patches};
+    if(await save()){
+      invalidateMessages();await Promise.all([loadMessages(true),loadOverlay()]);
+      if(selected.value===target.session&&selectionGeneration===target.version){modalBusy.value=false;closeModal();tell(patch===null?'已恢复这条弹幕的原文。':'已保存这条弹幕的昵称和内容。','success');}
+    }
+  }catch(e){tell(e.message);}finally{modalBusy.value=false;}
+}
 function messageMenuKey(event){const buttons=[...event.currentTarget.querySelectorAll('button:not(:disabled)')],index=buttons.indexOf(document.activeElement);buttons[(index+(event.key==='ArrowUp'?-1:1)+buttons.length)%buttons.length]?.focus();}
 async function showContext(event,session){closeContext();const rect=event.currentTarget.getBoundingClientRect();sessionMenu.value={session,x:Math.max(8,Math.min(event.clientX||rect.left+30,window.innerWidth-248)),y:Math.max(8,event.clientY||rect.bottom)};await nextTick();const menu=document.querySelector('.session-context');if(menu&&sessionMenu.value)sessionMenu.value.y=Math.max(8,Math.min(sessionMenu.value.y,window.innerHeight-menu.offsetHeight-8));menu?.querySelector('button:not(:disabled)')?.focus();}
 const cancellingJobIds=ref([]);
@@ -399,7 +444,7 @@ async function choose(id){
   if(selected.value===id){closeContext();resetSelection();return;}
   const version=++selectionGeneration;senderFilter.value=null;
   detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();
-  previewTransport?.dispose();overlayWindow=null;closeContext();startMarked.value=false;endMarked.value=false;generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};startExact.value=0;endExact.value=0;startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';messages.value=[];giftRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
+  previewTransport?.dispose();overlayWindow=null;closeContext();startMarked.value=false;endMarked.value=false;generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};startExact.value=0;endExact.value=0;startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
   try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;startExact.value=0;endExact.value=Math.min(10,result.duration);startText.value=format(0);endText.value=format(endExact.value);if(!canUseRecordingTime.value)positionMode.value='video';syncRecordingTexts();query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
@@ -472,14 +517,29 @@ async function selectRange(index,value){edit.value.ranges[index].selected=value;
 async function selectAllRanges(value){for(const range of edit.value.ranges)range.selected=value;await save();}
 async function removeRange(index){edit.value.ranges.splice(index,1);await save();}
 async function moveRange(index,direction){const list=edit.value.ranges,[item]=list.splice(index,1);list.splice(index+direction,0,item);await save();}
-async function toggleMessage(message){const id=selected.value,version=selectionGeneration;if(excluded.value.has(message.id))edit.value.excluded=edit.value.excluded.filter(x=>x!==message.id);else {edit.value.excluded.push(message.id);edit.value.undo.push(message.id);}await save();if(id===selected.value&&version===selectionGeneration)void loadSignals(true);}
+async function toggleMessage(message){if(message.type==='lottery')return;const id=selected.value,version=selectionGeneration;if(excluded.value.has(message.id))edit.value.excluded=edit.value.excluded.filter(x=>x!==message.id);else {edit.value.excluded.push(message.id);edit.value.undo.push(message.id);}await save();if(id===selected.value&&version===selectionGeneration)void loadSignals(true);}
 async function undoMessage(){const sessionId=selected.value,version=selectionGeneration,id=edit.value.undo.pop();if(!id)return;edit.value.excluded=edit.value.excluded.filter(x=>x!==id);await save();if(sessionId===selected.value&&version===selectionGeneration)void loadSignals(true);}
 async function loadMessages(force=false){
-  if(!selectionReady.value||dmBusy)return;const id=selected.value,version=selectionGeneration;const key=`${id}:${Math.floor(position.value/10)}:${query.value}:${followMessages.value}:${JSON.stringify(senderFilter.value)}`;if(!force&&key===lastMessageKey)return;const request=++messageRequest;dmBusy=true;
-  try{let from=0,to=Math.max(duration.value,1),anchor='';if(followMessages.value&&!query.value&&!senderFilter.value){const at=position.value;from=Math.max(0,at-20);to=at+40;anchor=`&at=${at}`;}const result=await api(`sessions/${id}/messages?from=${from}&to=${to}&q=${encodeURIComponent(query.value)}${senderFilter.value?'&sender='+encodeURIComponent(JSON.stringify(senderFilter.value)):''}${anchor}`);if(request===messageRequest&&version===selectionGeneration&&id===selected.value){if(!sameMessages(messages.value,result))messages.value=result;lastMessageKey=key;if(showGifts.value&&!senderFilter.value){const gifts=await api(`sessions/${id}/gifts?from=${from}&to=${to}&q=${encodeURIComponent(query.value)}${anchor}`);if(request===messageRequest&&version===selectionGeneration&&id===selected.value)giftRows.value=gifts;}else giftRows.value=[];}}
-  catch(e){if(request===messageRequest&&version===selectionGeneration)tell(e.message);}finally{if(request===messageRequest)dmBusy=false;}
+  if(!selectionReady.value||dmBusy)return;
+  const id=selected.value,version=selectionGeneration,key=`${id}:${Math.floor(position.value/10)}:${query.value}:${followMessages.value}:${JSON.stringify(senderFilter.value)}`;
+  if(!force&&key===lastMessageKey)return;const request=++messageRequest;dmBusy=true;
+  const current=()=>request===messageRequest&&version===selectionGeneration&&id===selected.value;
+  try{
+    let from=0,to=Math.max(duration.value,1),anchor='';
+    if(followMessages.value&&!query.value&&!senderFilter.value){const at=position.value;from=Math.max(0,at-20);to=at+40;anchor=`&at=${at}`;}
+    const args=`from=${from}&to=${to}&q=${encodeURIComponent(query.value)}${anchor}`;
+    const result=await api(`sessions/${id}/messages?${args}${senderFilter.value?'&sender='+encodeURIComponent(JSON.stringify(senderFilter.value)):''}`);
+    if(!current())return;if(!sameMessages(messages.value,result))messages.value=result;lastMessageKey=key;
+    if(showGifts.value&&!senderFilter.value){
+      const [gifts,lotteries]=await Promise.all([api(`sessions/${id}/gifts?${args}`),api(`sessions/${id}/lotteries?${args}`)]);
+      if(!current())return;giftRows.value=gifts;lotteryRows.value=lotteries;
+      const target=lotteryTarget.value,summary=target&&lotteries.find(x=>x.id===target.record.id);
+      if(modal.value==='lottery'&&!lotteryEditing.value&&!modalBusy.value&&summary&&
+        (summary.state!==target.record.state||summary.winnerCount!==target.record.winnerCount||summary.revision!==target.record.revision))void refreshLotteryDetail();
+    }else{giftRows.value=[];lotteryRows.value=[];}
+  }catch(e){if(current())tell(e.message);}finally{if(request===messageRequest)dmBusy=false;}
 }
-function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user&&m.senderId===b[i].senderId&&m.senderPlatform===b[i].senderPlatform);}
+function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user&&m.senderId===b[i].senderId&&m.senderPlatform===b[i].senderPlatform&&m.edited===b[i].edited&&m.originalUser===b[i].originalUser&&m.originalText===b[i].originalText);}
 function followMessagePosition(){
   const list=messageList.value,rows=visibleMessages.value;
   if(!followMessages.value||query.value||!danmakuVisible.value||!list?.clientHeight||!rows.length)return;
@@ -573,7 +633,7 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <div v-if="!previewUrl" class="preview-empty"><button class="preview-start" :disabled="!canPreview" @click="togglePlay"><Play v-if="canPreview" :size="42"/><Video v-else :size="42"/></button><strong>{{ canPreview?'播放预览':selected?'等待录制画面':'选择一段录像' }}</strong><span>{{ selected?'录制继续进行，已录内容可随时回看':'添加直播间，开播后自动录制' }}</span></div>
           <div v-if="loading" class="video-loading"><LoaderCircle :size="30" class="spin"/><span>正在读取画面</span></div>
           <RecordingLayout v-if="previewUrl" :video="video" :events="recordingCameraEvents" :style="state.recordingStyle" :base="previewBase" :loading="loading"/>
-          <DanmakuOverlay v-if="previewUrl" @font-error="tell('字体未能加载，请在设置中重新导入。')" :font="state.danmakuFont" :style="state.danmakuStyle" :video="video" :base="previewBase" :messages="overlayFeed" :highlighted="highlighted" :highlight-style="state.highlightStyle" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
+          <DanmakuOverlay v-if="previewUrl" @font-error="tell('字体未能加载，请在设置中重新导入。')" :font="state.danmakuFont" :style="state.danmakuStyle" :video="video" :base="previewBase" :messages="overlayFeed" :highlighted="highlighted" :highlight-style="state.highlightStyle" :message-edits="edit.messageEdits" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
           <LinkmicOverlay v-if="previewUrl" @cameras="recordingCameraEvents=$event" :session="selected" :video="video" :base="previewBase" :loading="loading"/>
           <GiftOverlay :events="giftFeed.filter(g=>!excluded.has(g.id))" :time="position" :enabled="showGifts" :video="video" :loading="loading"/>
           <RecordingTimestamp v-if="previewUrl&&state.previewTimestamp===true&&selectionReady" :video="video" :base="previewBase" :session="activeSession" :sources="detail?.sources" :loading="loading" :timestamp-style="state.previewTimestampStyle" :timestamp-position="state.previewTimestampPosition"/>
@@ -640,11 +700,11 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
           <p v-if="preparationErrors[activeSession.id]" class="preparation-note preparation-error" role="alert">{{ preparationErrors[activeSession.id] }}</p><p v-else-if="selectedLivePreparation" class="preparation-note">{{ selectedLivePreparation.note }}</p><p v-else-if="activeSession.status==='finished'&&preparationReason(selectedPreparation)" class="preparation-note" :class="{'preparation-error':selectedPreparation?.status==='error'}">{{ preparationReason(selectedPreparation) }}</p>
         </section>
       </main>
-      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>{{ showGifts?'弹幕与礼物':'弹幕' }}</h2><button class="icon-button" title="撤销最近一次排除" aria-label="撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="search-input"><Search :size="17"/><input v-model="query" aria-label="搜索弹幕" placeholder="搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>跟随播放位置</label><label v-if="showGifts"><input v-model="onlyGifts" type="checkbox" @change="changeOnlyGifts"/>仅显示礼物</label></div><div v-if="senderFilter" class="sender-filter"><span>只看：{{ senderFilter.name }}</span><button type="button" class="text-button" aria-label="清除发送者筛选" @click="clearSenderFilter">清除筛选</button><small v-if="senderWarning" role="status">{{ senderWarning }}</small><small v-if="messages.length>=500">当前显示前 500 条，可输入关键词缩小范围。</small></div><div ref="messageList" class="danmaku-list"><div v-if="!visibleMessages.length" class="danmaku-empty"><Radio :size="28"/><strong>{{ query?'没有匹配的记录':showGifts&&onlyGifts?'这里会显示录制的礼物':'这里会显示录制的弹幕' }}</strong><span>{{ selected?'弹幕会随录像持续更新':'选择录像后查看和编辑' }}</span></div><div v-for="message in visibleMessages" :key="message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1,highlighted:highlighted.has(message.id)}" @contextmenu.prevent.stop="showMessageContext($event,message)" @keydown.shift.f10.prevent.stop="showMessageContext($event,message)" @keydown.context-menu.prevent.stop="showMessageContext($event,message)"><button class="message-content" @click="playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text"><span v-if="highlighted.has(message.id)" class="highlight-mark" title="已突出显示">✦ </span><GiftIcon v-if="message.type!=='d'" :gift="message"/>{{ message.text }}</span></button><button v-if="message.type==='d'" type="button" class="icon-button message-more" :aria-label="'弹幕操作：'+message.text" title="弹幕操作（也可右键）" :aria-haspopup="'menu'" @click="showMessageContext($event,message)">⋯</button><button class="icon-button" :aria-label="`${excluded.has(message.id)?'恢复':'删除'}弹幕：${message.text}`" :title="excluded.has(message.id)?'恢复到剪辑':'从剪辑中排除，保留原始弹幕'" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></div><div class="danmaku-footer">已排除 {{ edit.excluded.length }} 条 · 原始弹幕保留</div></aside>
+      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>{{ showGifts?'弹幕与礼物':'弹幕' }}</h2><button class="icon-button" title="撤销最近一次排除" aria-label="撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="search-input"><Search :size="17"/><input v-model="query" aria-label="搜索弹幕" placeholder="搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>跟随播放位置</label><label v-if="showGifts"><input v-model="onlyGifts" type="checkbox" @change="changeOnlyGifts"/>仅显示礼物</label></div><div v-if="senderFilter" class="sender-filter"><span>只看：{{ senderFilter.name }}</span><button type="button" class="text-button" aria-label="清除发送者筛选" @click="clearSenderFilter">清除筛选</button><small v-if="senderWarning" role="status">{{ senderWarning }}</small><small v-if="messages.length>=500">当前显示前 500 条，可输入关键词缩小范围。</small></div><div ref="messageList" class="danmaku-list"><div v-if="!visibleMessages.length" class="danmaku-empty"><Radio :size="28"/><strong>{{ query?'没有匹配的记录':showGifts&&onlyGifts?'这里会显示录制的礼物':'这里会显示录制的弹幕' }}</strong><span>{{ selected?'弹幕会随录像持续更新':'选择录像后查看和编辑' }}</span></div><div v-for="message in visibleMessages" :key="message.id" :id="'danmaku-'+message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1,highlighted:highlighted.has(message.id),lottery:message.type==='lottery'}" @contextmenu.prevent.stop="showMessageContext($event,message)" @keydown.shift.f10.prevent.stop="showMessageContext($event,message)" @keydown.context-menu.prevent.stop="showMessageContext($event,message)"><button class="message-content" @click="message.type==='lottery'?openLottery(message):playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text"><span v-if="highlighted.has(message.id)" class="highlight-mark" title="已突出显示">✦ </span><Trophy v-if="message.type==='lottery'" class="lottery-icon" :size="19"/><GiftIcon v-else-if="message.type!=='d'" :gift="message"/>{{ message.text }}</span><span v-if="message.type==='lottery'" class="lottery-summary">{{ lotteryCountLabel(message) }} · 仅记录，不导出</span></button><button v-if="message.type==='d'||message.type==='lottery'" type="button" class="icon-button message-more" :aria-label="(message.type==='lottery'?'天选操作：':'弹幕操作：')+message.text" title="弹幕操作（也可右键）" :aria-haspopup="'menu'" @click="showMessageContext($event,message)">⋯</button><button v-if="message.type!=='lottery'" class="icon-button" :aria-label="`${excluded.has(message.id)?'恢复':'删除'}弹幕：${message.text}`" :title="excluded.has(message.id)?'恢复到剪辑':'从剪辑中排除，保留原始弹幕'" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></div><div class="danmaku-footer">已排除 {{ edit.excluded.length }} 条 · 原始弹幕保留</div></aside>
     </div>
     <footer class="statusbar"><span><i :class="['live-dot',{online:connected}]"/>剪辑不改动原始录像和弹幕</span><span>{{ saving?'正在保存剪辑…':selected?'剪辑自动保存':'支持 B 站、抖音' }}</span></footer>
     <DismissibleNotice v-if="notice" :key="noticeSequence" class="toast" @dismiss="notice=''" :class="noticeKind" role="status"><Check v-if="noticeKind==='success'" :size="18"/><AlertCircle v-else :size="18"/><span>{{ notice }}</span></DismissibleNotice>
-    <div v-if="messageMenu" class="session-context message-context" role="menu" aria-label="弹幕操作" :style="{left:messageMenu.x+'px',top:messageMenu.y+'px'}" @pointerdown.stop @keydown.up.prevent="messageMenuKey" @keydown.down.prevent="messageMenuKey"><button role="menuitem" :disabled="!senderFilterFor(messageMenu.message)" :title="senderFilterFor(messageMenu.message)?'':'这条弹幕没有可区分的发送者信息'" @click="filterSender(messageMenu.message)"><Search :size="16"/>只看此人弹幕</button><button role="menuitem" :disabled="saving" @click="toggleHighlight(messageMenu.message)"><span aria-hidden="true">✦</span>{{ highlighted.has(messageMenu.message.id)?'取消突出显示':'突出显示此条弹幕' }}</button><button role="menuitem" :disabled="saving" @click="toggleMessage(messageMenu.message);closeContext()"><Trash2 :size="16"/>{{ excluded.has(messageMenu.message.id)?'恢复此条弹幕':'从剪辑中排除此条' }}</button></div>
+    <div v-if="messageMenu" class="session-context message-context" role="menu" :aria-label="messageMenu.message.type==='lottery'?'天选操作':'弹幕操作'" :style="{left:messageMenu.x+'px',top:messageMenu.y+'px'}" @pointerdown.stop @keydown.up.prevent="messageMenuKey" @keydown.down.prevent="messageMenuKey"><template v-if="messageMenu.message.type==='lottery'"><button role="menuitem" @click="openLottery(messageMenu.message)"><Trophy :size="16"/>查看中奖名单</button><button role="menuitem" @click="openLottery(messageMenu.message,true)"><Pencil :size="16"/>编辑奖品备注</button></template><template v-else><button role="menuitem" :disabled="!senderFilterFor(messageMenu.message)" :title="senderFilterFor(messageMenu.message)?'':'这条弹幕没有可区分的发送者信息'" @click="filterSender(messageMenu.message)"><Search :size="16"/>只看此人弹幕</button><button role="menuitem" :disabled="saving" @click="openMessageEditor(messageMenu.message)"><Pencil :size="16"/>编辑文本</button><button role="menuitem" :disabled="saving" @click="toggleHighlight(messageMenu.message)"><span aria-hidden="true">✦</span>{{ highlighted.has(messageMenu.message.id)?'取消突出显示':'突出显示此条弹幕' }}</button><button role="menuitem" :disabled="saving" @click="toggleMessage(messageMenu.message);closeContext()"><Trash2 :size="16"/>{{ excluded.has(messageMenu.message.id)?'恢复此条弹幕':'从剪辑中排除此条' }}</button></template></div>
     <div v-if="sessionMenu" class="session-context" role="menu" aria-label="素材操作" :style="{left:sessionMenu.x+'px',top:sessionMenu.y+'px'}" @pointerdown.stop><button role="menuitem" :disabled="!!fullExportBlock(sessionMenu.session)" :title="fullExportBlock(sessionMenu.session)" @click="openFullExport(sessionMenu.session)"><Download :size="16"/>导出完整素材</button><p v-if="fullExportBlock(sessionMenu.session)" class="context-hint">{{ fullExportBlock(sessionMenu.session) }}</p><button role="menuitem" :disabled="!!preparationActionBlock(sessionMenu.session)" :title="preparationActionBlock(sessionMenu.session)" @click="actPreparation(sessionMenu.session)"><Pause v-if="preparationAction(preparationFor(sessionMenu.session.id))==='pause'" :size="16"/><Check v-else-if="preparationFor(sessionMenu.session.id)?.status==='ready'" :size="16"/><Play v-else :size="16"/>{{ preparationActionLabel(preparationFor(sessionMenu.session.id),true) }}</button><p v-if="!preparationEnabled&&preparationAction(preparationFor(sessionMenu.session.id))!=='pause'" class="context-hint">请在设置中开启后台预处理。</p><button role="menuitem" class="context-danger" @click="requestDelete(sessionMenu.session)"><Trash2 :size="16"/>删除素材…</button></div>
     <div v-if="jobMenu" class="session-context job-context" role="menu" aria-label="导出任务操作" tabindex="-1" :style="{left:jobMenu.x+'px',top:jobMenu.y+'px'}" @pointerdown.stop>
       <button v-if="['queued','running','finalizing','cancelling','saving'].includes(jobMenuTarget?.status)" role="menuitem" :disabled="!!jobCancellationBlock(jobMenuTarget)" :title="jobCancellationBlock(jobMenuTarget)" @click="cancelJob(jobMenuTarget)"><X :size="16"/>取消导出</button>
@@ -676,6 +736,8 @@ onBeforeUnmount(()=>{panelBreakpoint.removeEventListener('change',updatePanelBre
         <p v-if="roomChoiceError" class="inline-warning" role="alert">{{ roomChoiceError }}</p>
         <div class="confirm-actions"><button class="button" :disabled="modalBusy" @click="closeModal">取消</button><button class="button primary" :disabled="modalBusy||!roomChoicePlatform" @click="confirmRoomChoice"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>确认添加</button></div>
       </template>
+      <template v-else-if="modal==='lottery' && lotteryTarget"><h2><Trophy :size="23"/>{{ lotteryEditing?'编辑奖品备注':'天选时刻 · 中奖名单' }}</h2><LotteryPanel :record="lotteryTarget.record" :editing="lotteryEditing" :busy="modalBusy" :loading="lotteryLoading" :error="lotteryError" @save="saveLotteryRemark" @edit="lotteryEditing=true;lotteryError=''" @refresh="refreshLotteryDetail" @close="closeModal"/></template>
+      <template v-else-if="modal==='edit-message' && messageEditTarget"><h2>编辑文本</h2><MessageTextEditor :message="messageEditTarget.message" :busy="modalBusy" @save="saveMessageText" @close="closeModal"/></template>
       <template v-else-if="modal==='danmaku-style'"><h2><Settings :size="23"/>调整弹幕样式</h2><DanmakuStyleSettings :style="state.danmakuStyle" :highlight-style="state.highlightStyle" :font="state.danmakuFont" :rate="state.danmakuPerSecond??50" @changed="applyDanmakuSettings" @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='recording-style'"><h2><Settings :size="23"/>调整录制样式</h2><RecordingSettings :preview-timestamp="state.previewTimestamp===true" :preview-timestamp-style="state.previewTimestampStyle" :preview-timestamp-position="state.previewTimestampPosition" :recording-style="state.recordingStyle" :gift-style="state.giftStyle" @changed="state.previewTimestamp=$event.previewTimestamp;state.previewTimestampStyle=$event.previewTimestampStyle;state.previewTimestampPosition=$event.previewTimestampPosition;state.recordingStyle=$event.recordingStyle;state.giftStyle=$event.giftStyle" @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='cookie-management'"><h2><Settings :size="23"/>Cookie 管理</h2><PlatformCredentials @busy="modalBusy=$event" @close="closeModal"/></template>

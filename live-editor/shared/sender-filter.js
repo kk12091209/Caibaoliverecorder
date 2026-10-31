@@ -1,7 +1,8 @@
 const uid=value=>typeof value==='string'&&/^[1-9]\d{0,30}$/.test(value);
 export function senderFilterFor(message){
-  if(uid(message.senderId)&&['bilibili','douyin'].includes(message.senderPlatform))return {mode:'uid',platform:message.senderPlatform,uid:message.senderId,name:message.user};
-  const name=String(message.user||'').trim();if(!name||['观众','匿名','匿名用户'].includes(name))return null;
+  const originalName=message.originalUser??message.user;
+  if(uid(message.senderId)&&['bilibili','douyin'].includes(message.senderPlatform))return {mode:'uid',platform:message.senderPlatform,uid:message.senderId,name:originalName};
+  const name=String(originalName||'').trim();if(!name||['观众','匿名','匿名用户'].includes(name))return null;
   const parts=name.split(/[*＊]{2,}|…+|\.{3,}/u);
   return parts.length===2&&parts[0]&&parts[1]?{mode:'approx',name,prefix:parts[0],suffix:parts[1]}:{mode:'name',name};
 }
@@ -16,6 +17,7 @@ export function validateSenderFilter(value){
 export function matchesSender(message,filter){
   if(!filter)return true;
   if(filter.mode==='uid')return message.senderId===filter.uid&&message.senderPlatform===filter.platform;
-  if(filter.mode==='name')return message.user===filter.name;
-  return message.user?.startsWith(filter.prefix)&&message.user?.endsWith(filter.suffix);
+  const name=message.originalUser??message.user;
+  if(filter.mode==='name')return name===filter.name;
+  return name?.startsWith(filter.prefix)&&name?.endsWith(filter.suffix);
 }

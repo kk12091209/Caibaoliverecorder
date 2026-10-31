@@ -40,6 +40,8 @@ import {PlatformCredentials} from './platform-credentials.js';
 import { OVERLAY_MESSAGE_LIMIT, PANEL_MESSAGE_LIMIT } from '../shared/message-limits.js';
 import {HIGHLIGHT_SETTING,savedHighlightStyle,validateHighlightStyle} from '../shared/highlight-style.js';
 import {validateSenderFilter} from '../shared/sender-filter.js';
+import {messageEditsKey} from '../shared/message-edits.js';
+import {LotteryRecorder,lotteryMessages,lotteryRecord,saveLotteryNote} from './lottery-records.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -73,6 +75,7 @@ async function createManagedApp(options,runtime) {
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  const lotteries=new LotteryRecorder(store,options.lotteryOptions);
   const credentialChecks={bilibili:'unknown'};
   const credentialSnapshot=()=>({...credentials.snapshot(),checks:{...credentialChecks},bilibiliCore:{...recorder.credentialStatus}});
   media.isRecording=()=>recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
@@ -325,7 +328,7 @@ async function createManagedApp(options,runtime) {
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
         const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
-        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort(),[...(edit.highlighted||[])].sort()]);
+        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort(),[...(edit.highlighted||[])].sort(),messageEditsKey(edit.messageEdits)]);
         if(visibility(previous)!==visibility(saved))await preparation.invalidate(id);
         return json(res,saved);
       }
@@ -347,6 +350,19 @@ async function createManagedApp(options,runtime) {
       if((match=/^\/api\/gift-icons\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){
         const png=await store.giftIcons.get(match[1]);if(!png)return json(res,{error:'暂无礼物图标。'},404);
         res.writeHead(200,{'Content-Type':'image/png','Content-Length':png.length,'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'});return res.end(png);
+      }
+      if((match=/^\/api\/sessions\/([\w-]+)\/lotteries(?:\/([a-f0-9]{32})(\/note)?)?$/.exec(p))){
+        const [,sessionId,recordId,noteRoute]=match;
+        if(!store.session(sessionId))return json(res,{error:'素材不存在或已删除。'},404);
+        if(recordId){
+          if(req.method==='POST'&&noteRoute)return json(res,saveLotteryNote(store,sessionId,recordId,await body(req,8192)));
+          if(req.method==='GET'&&!noteRoute){const record=lotteryRecord(store,sessionId,recordId);return record?json(res,record):json(res,{error:'天选记录不存在。'},404);}
+        }else if(req.method==='GET'){
+          const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
+          if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('天选记录时间范围无效。');
+          return json(res,lotteryMessages(store,sessionId,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200)}));
+        }
+        return json(res,{error:'请求方式无效。'},405);
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/gifts$/.exec(p))&&req.method==='GET'){
         const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
@@ -450,8 +466,8 @@ async function createManagedApp(options,runtime) {
   };
   const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
   if(!options.noRecorder){void recorder.start().catch(e=>{recorder.error=e.message;});}
-  app={credentials,diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;liveHealth.close();await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
+  app={credentials,diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,lotteries,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
+    closing=true;liveHealth.close();await lotteries.close();await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
     const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
     const preparationClosed=preparation.close();
     const waveformClosed=waveform.close();density.close();
@@ -481,7 +497,7 @@ async function createManagedApp(options,runtime) {
       if(!closing)await media.recoverInterruptedExports();
     }catch(error){store.recovery.error='部分旧任务恢复未完成，可以重新导出；原文件已保留。';diagnostics.record('任务恢复',error,{level:'警告',important:true});}
     finally{store.recovery.recovering=false;}
-    if(!closing){ingestor.start();void media.work();if(options.preparation!==false)preparation.start();maintain();}
+    if(!closing){ingestor.start();void media.work();if(options.preparation!==false)preparation.start();if(!options.noRecorder&&options.lotteries!==false)lotteries.start();maintain();}
   })();
   app.startupRecovery=startupRecovery;
   return app;

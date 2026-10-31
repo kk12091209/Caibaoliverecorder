@@ -1,3 +1,4 @@
+import {isGiftEvent} from './lottery-records.js';
 export const GIFT_SETTING='gift-style';
 export const DEFAULT_GIFT_STYLE=Object.freeze({preview:false,export:false,minBilibili:0,minDouyin:0,currency:'CNY'});
 export function validateGiftStyle(value){
@@ -11,6 +12,7 @@ export function validateGiftStyle(value){
 export function normalizedGiftStyle(value){try{return validateGiftStyle(value);}catch{return {...DEFAULT_GIFT_STYLE};}}
 export const savedGiftStyle=store=>normalizedGiftStyle(store.setting(GIFT_SETTING));
 export function giftEligible(gift,style){
+  if(!isGiftEvent(gift))return false;
   const minimum=gift.platform==='douyin'?style.minDouyin:style.minBilibili;
   const yuan=giftYuan(gift);return minimum===0||(yuan!==null&&yuan>=minimum);
 }
@@ -22,7 +24,7 @@ export function giftPrice(gift){
 export const giftDescription=gift=>`${gift.user} · ${gift.name} × ${gift.count} · ${giftPrice(gift)}`;
 export const GIFT_SECONDS=5;
 // The same three-card layout is used by the DOM preview and exported video.
-export function giftCards(events,time){return events.filter(g=>g.time<=time&&time<g.time+GIFT_SECONDS).slice(-3);}
+export function giftCards(events,time){return events.filter(g=>isGiftEvent(g)&&g.time<=time&&time<g.time+GIFT_SECONDS).slice(-3);}
 export function giftGeometry(width,height,lane=0){
   const scale=height/720,w=Math.min(width*.85,410*scale),h=64*scale,margin=16*scale;
   return {x:width-margin-w,y:margin+lane*(h+8*scale),w,h,size:19*scale,icon:42*scale,pad:10*scale};

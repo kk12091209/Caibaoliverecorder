@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {giftEligible,normalizedGiftStyle,giftDescription,giftGeometry,GIFT_SECONDS} from '../shared/gifts.js';
+import {isGiftEvent} from '../shared/lottery-records.js';
 
 export function safeGiftIcon(value){
   try{const u=new URL(value);if(u.protocol==='http:')u.protocol='https:';
@@ -52,7 +53,7 @@ export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search=
 const assTime=t=>{t=Math.max(0,t);return `${Math.floor(t/3600)}:${String(Math.floor(t/60)%60).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`;};
 const escape=value=>String(value).replace(/[{}\\\r\n]/g,' ').slice(0,180);
 export function giftSegments(events,from=0,to=Infinity){
-  events=[...events].sort((a,b)=>a.time-b.time||a.id.localeCompare(b.id));
+  events=events.filter(isGiftEvent).sort((a,b)=>a.time-b.time||a.id.localeCompare(b.id));
   const cuts=[...new Set(events.flatMap(g=>[Math.max(from,g.time),Math.min(to,g.time+GIFT_SECONDS)]).filter(t=>t>=from&&t<=to))].sort((a,b)=>a-b);
   const segments=[];let cursor=0;
   for(let n=0;n<cuts.length-1;n++){

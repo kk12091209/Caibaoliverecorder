@@ -107,7 +107,7 @@ export class Media {
       }
       inputs.push([source.id,from,to,fingerprint]);
     }
-    const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents,job.highlightStyle,job.highlighted];
+    const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents,job.highlightStyle,job.highlighted,job.messageEdits];
     if(Object.hasOwn(job,'recordingStyle'))snapshot.push(job.recordingStyle,job.cameraEvents);
     if(job.gifts?.length)snapshot.push(job.gifts,job.giftIcons);
     const checkpoint=await this.checkpoints.open(job,hashRender([details.route,details.encoder,details.profile,details.comments,inputs,snapshot]));
@@ -367,7 +367,7 @@ export class Media {
     const cameraEvents=this.store.linkmic?.cameraEvents?.(id)||[];
     // Reserve the entire selection before publishing any task. A failed batch
     // must not leave an invisible subset exporting in the background.
-    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],highlighted:[...(edit.highlighted||[])],highlightStyle:savedHighlightStyle(this.store),filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
+    const batchId=randomUUID(),jobs=(scope==='full'?[ranges]:ranges.map(range=>[range])).map((part,index)=>({id:randomUUID(),session:id,ranges:part,excluded:[...edit.excluded],highlighted:[...(edit.highlighted||[])],highlightStyle:savedHighlightStyle(this.store),messageEdits:edit.messageEdits||{},filterLottery:edit.filterLottery!==false,revision:edit.revision,font:this.fonts.selected(),danmakuStyle:savedDanmakuStyle(this.store),danmakuPerSecond:chatRate(this.store),mode,scope,batchId,clipIndex:index+1,clipCount:scope==='full'?1:ranges.length}));
     for(const job of jobs) {
       job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
       job.recordingStyle=savedRecordingStyle(this.store);
@@ -733,7 +733,7 @@ export class Media {
     const info=prepared.first?.id===first.id?prepared.info:await this.probeSource(first,segments[0].from);
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
-    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[]}):null;
+    const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[],messageEdits:job.messageEdits||{}}):null;
     const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy],comments:commentSignature(chatLayout||[]),segments});
     const workDir=checkpoint.directory;
     try {

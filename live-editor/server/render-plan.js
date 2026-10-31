@@ -23,6 +23,7 @@ import { liveRenderBlocks, liveMetadataReady, blockLinkmicEvents, liveLayoutWith
 import { savedRecordingStyle, normalizedRecordingStyle, originalRecordingStyle, blockCameraEvents } from '../shared/recording-style.js';
 import { recordingLayoutFilter } from './recording-layout.js';
 import {savedHighlightStyle,normalizedHighlightStyle} from '../shared/highlight-style.js';
+import {applyMessageEdit,messageEditsKey} from '../shared/message-edits.js';
 
 export const RENDER_VERSION = 10;
 export const CPU_EXPORT_ROUTE = 'cpu-chunks-v1';
@@ -41,16 +42,16 @@ function eligibleComments(messages, rate, state = {}) {
     });
 }
 
-export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted } = {}) {
-  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate);
+export function layoutComments(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted,messageEdits } = {}) {
+  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate).map(m=>applyMessageEdit(m,messageEdits));
   return scrollingTracks(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font,highlightStyle, ordered: eligible.every(m=>typeof m.id==='string') });
 }
 
 // Long recordings may contain hundreds of thousands of comments. Yield between
 // bounded batches so dense layout cannot block recording, cleanup or cancellation.
-export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted, signal, state = {} } = {}) {
+export async function layoutCommentsAsync(messages, { rate = 50, width = 1280, height = 720, style, font,highlightStyle,highlighted,messageEdits, signal, state = {} } = {}) {
   canceled(signal);
-  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate,state);
+  const marked=highlighted?new Set(highlighted):null,eligible=eligibleComments(marked?messages.map(m=>({...m,highlighted:marked.has(m.id)})):messages,rate,state).map(m=>applyMessageEdit(m,messageEdits));
   const result = [], events = scrollingTrackEvents(eligible, { width, height, ...danmakuGeometry(height, style), duration: danmakuDuration(style), font,highlightStyle, ordered: eligible.every(m=>typeof m.id==='string'), state });
   for (const event of events) {
     result.push(event);
@@ -231,7 +232,7 @@ export class RenderPipeline {
     // Queued jobs own their style. Older jobs keep the previous default;
     // background preparation follows the current settings.
     const danmakuStyle=(Object.hasOwn(snapshot,'danmakuStyle')||Object.hasOwn(snapshot,'mode'))?normalizedDanmakuStyle(snapshot.danmakuStyle):savedDanmakuStyle(this.store);
-    const highlightStyle=Object.hasOwn(snapshot,'mode')?normalizedHighlightStyle(snapshot.highlightStyle):savedHighlightStyle(this.store),highlighted=snapshot.highlighted||[];
+    const highlightStyle=Object.hasOwn(snapshot,'mode')?normalizedHighlightStyle(snapshot.highlightStyle):savedHighlightStyle(this.store),highlighted=snapshot.highlighted||[],messageEdits=snapshot.messageEdits||{};
     const danmakuPerSecond=validateChatRate(snapshot.danmakuPerSecond??chatRate(this.store));
     if(!live&&!Object.hasOwn(snapshot,'linkmicEvents'))await this.store.linkmic?.ensure(id);
     if(live&&!await liveMetadataReady(this.store,sources,options.signal))return {waiting:'metadata',live:true,blocks:[],allBlocks};
@@ -240,7 +241,7 @@ export class RenderPipeline {
     const cameraEvents=recordingStyle.cameraPosition==='original'?[]:structuredClone(snapshot.cameraEvents??(Object.hasOwn(snapshot,'mode')?[]:this.store.linkmic?.cameraEvents?.(id)??[]));
     const profile={font:font?.id||null,danmakuStyle,highlightStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
     if(cameraEvents.length)profile.recordingStyle=recordingStyle;
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font,highlightStyle,highlighted}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font,highlightStyle,highlighted,messageEdits}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
   }
   async sourceFingerprint(source,from,to) {
     const stable=await stableSourceFingerprint(this.store,source,from,to);
@@ -360,7 +361,7 @@ export class RenderPipeline {
     const stamp=this.store.get('SELECT COUNT(*) AS count,COALESCE(MAX(rowid),0) AS last FROM danmaku WHERE session=? AND time<?',id,to);
     const flags=this.store.all('SELECT f.message,f.reason FROM danmaku_filters f JOIN danmaku d ON d.id=f.message WHERE d.session=? AND d.time<? ORDER BY f.message',id,to);
     const edit=this.store.edit(id);
-    return hashRender([stamp,this.store.layoutContentRevision,this.store.get('PRAGMA data_version').data_version,flags,[...(edit.excluded||[])].sort(),edit.filterLottery!==false,savedDanmakuStyle(this.store),chatRate(this.store),this.media.fonts.selected()?.id||null,
+    return hashRender([stamp,this.store.layoutContentRevision,this.store.get('PRAGMA data_version').data_version,flags,[...(edit.excluded||[])].sort(),edit.filterLottery!==false,messageEditsKey(edit.messageEdits),savedDanmakuStyle(this.store),chatRate(this.store),this.media.fonts.selected()?.id||null,
       blockLinkmicEvents(this.store.linkmic?.events(id)||[],block.source.id,block.startMs/1000,to),savedRecordingStyle(this.store),
       blockCameraEvents(this.store.linkmic?.cameraEvents?.(id)||[],block.source.id,block.startMs/1000,to)]);
   }

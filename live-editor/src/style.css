@@ -1080,6 +1080,27 @@ svg { flex-shrink: 0; }
 .timeline-navigator.disabled .timeline-nav-thumb span { opacity: .35; }
 .timeline:focus-within .timeline-track { outline: 2px solid #ff7d92; outline-offset: 2px; }
 .danmaku-options { flex-wrap: wrap; }
+.message-text-editor .field-label { display: grid; gap: 8px; margin: 18px 0; }
+.message-text-editor input,.message-text-editor textarea { width: 100%; min-width: 0; }
+.message-text-editor textarea { resize: vertical; font: inherit; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; color: inherit; background: var(--input); }
+.message-text-editor textarea:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.message-edit-preview { padding: 12px; border-radius: 10px; background: var(--card); overflow-wrap: anywhere; }
+.message-edit-preview p { margin: 6px 0 0; }
+.danmaku-row.lottery { border: 1px solid #8e79b84d; border-left: 3px solid #8e79b8; border-radius: 9px; background: #fff7ff66; padding: 10px; }
+.lottery-icon { display: inline-block; vertical-align: -3px; margin-right: 6px; color: #7955a2; }
+.lottery-summary { display: block; margin-top: 5px; font-size: 11px; color: #76558e; }
+.lottery-record-only { display: flex; align-items: center; gap: 7px; color: #7955a2; }
+.lottery-panel .field-label { display: grid; gap: 8px; margin: 18px 0; }
+.lottery-panel input { width: 100%; }
+.lottery-product,.lottery-original { overflow-wrap: anywhere; }
+.lottery-original { font-size: 12px; color: var(--muted); }
+.lottery-winners { max-height: 340px; overflow: auto; border: 1px solid var(--line-strong); border-radius: 10px; }
+.lottery-winners table { border-collapse: collapse; width: 100%; text-align: left; }
+.lottery-winners td,.lottery-winners th { padding: 10px 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.lottery-winners th { background: var(--card); position: sticky; top: 0; }
+.lottery-winners code { user-select: text; font-size: 12px; }
+.lottery-pages { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }
+.lottery-panel .confirm-actions { flex-wrap: wrap; }
 @media (max-width: 600px) { .ruler-quarter { visibility: hidden; } }
 
 /* The whole editor remains scrollable at laptop heights and display scaling. */

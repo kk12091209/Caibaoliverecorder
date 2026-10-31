@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {execFileSync} from 'node:child_process';
+import {Store} from '../server/store.js';
+import {Ingestor} from '../server/ingest.js';
+import {Media} from '../server/media.js';
+import {saveLotteryObservation,saveLotteryNote,lotteryMessages} from '../server/lottery-records.js';
+import {DEFAULT_GIFT_STYLE} from '../shared/gifts.js';
+const ffmpeg=process.env.FFMPEG_PATH,ffprobe=process.env.FFPROBE_PATH;
+test('real dual video export excludes all lottery text and identities even with gift preview/export enabled',async t=>{
+  if(!ffmpeg||!ffprobe){t.skip('FFmpeg runtime is unavailable');return;}
+  const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'lottery-export-')),file=path.join(root,'source.flv');
+  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=0x101820:size=320x180:rate=15','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','7','-c:v','libx264','-preset','ultrafast','-g','15','-pix_fmt','yuv420p','-c:a','aac','-f','flv','-y',file]);
+  const store=new Store(path.join(root,'data')),wall=Math.floor(Date.now()/1000)*1000,session=store.createSession({room:1852631778,status:'finished',created:new Date(wall).toISOString()}),source=store.addSource(session.id,file,0,session.created,true),ingest=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe,exportAcceleration:'software'});
+  t.after(async()=>{await media.close();store.close();await fs.rm(root,{recursive:true,force:true});});for(let n=0;n<12;n++)await ingest.tick();
+  const original={id:1,room_id:session.room,current_time:wall/1000,time:2,lot_status:0,danmu:'LOTTERY_ONLY_MARKER',award_num:1,award_per_capita:1};
+  let record=saveLotteryObservation(store,session,original,wall);record=saveLotteryObservation(store,session,{...original,current_time:wall/1000+3,time:0,lot_status:2,award_users:[{uid:12345,uname:'WINNER_DONT_BURN'}]},wall+3000);
+  saveLotteryNote(store,session.id,record.id,{revision:0,note:'PRODUCT_PRIVATE_NOTE'});store.setting('gift-style',{...DEFAULT_GIFT_STYLE,preview:true,export:true});
+  const work=media.work.bind(media);media.work=()=>{};
+  const result=await media.enqueue(session.id,{scope:'full',mode:'dual',giftsEnabled:true,exportDirectory:path.join(root,'out'),lotteries:[record]}),id=result.id||result.jobs[0].id;
+  const saved=store.get('SELECT data FROM jobs WHERE id=?',id).data;for(const text of ['LOTTERY_ONLY_MARKER','WINNER_DONT_BURN','PRODUCT_PRIVATE_NOTE','lotteries'])assert.ok(!saved.includes(text),text);
+  media.work=work;await media.work();const job=store.get('SELECT * FROM jobs WHERE id=?',id);assert.equal(job.status,'done',job.error);
+  const details=JSON.parse(job.data),frames=file=>execFileSync(ffmpeg,['-v','error','-ss','3','-i',file,'-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','pipe:1']);
+  const light=bytes=>{let n=0;for(let i=0;i<bytes.length;i+=3)if(Math.max(bytes[i],bytes[i+1],bytes[i+2])>100)n++;return n;};
+  assert.equal(light(frames(job.file)),0);assert.equal(light(frames(details.output.danmakuFile)),0);
+  assert.equal(lotteryMessages(store,session.id)[0].text,'PRODUCT_PRIVATE_NOTE');assert.equal(store.edit(session.id).excluded.length,0);
+});

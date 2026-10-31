@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import {normalizedDanmakuStyle,savedDanmakuStyle} from '../shared/danmaku-style.js';
 import {chatRate} from './chat-rules.js';
 import {exportedJobFile} from './output-names.js';
+import {messageEditsKey} from '../shared/message-edits.js';
 
-const renderingKey = edit => JSON.stringify([[...new Set(edit.excluded||[])].sort(),edit.filterLottery!==false,edit.font?.id||null,normalizedDanmakuStyle(edit.danmakuStyle),edit.danmakuPerSecond??50]);
+const renderingKey = edit => JSON.stringify([[...new Set(edit.excluded||[])].sort(),edit.filterLottery!==false,edit.font?.id||null,normalizedDanmakuStyle(edit.danmakuStyle),edit.danmakuPerSecond??50,messageEditsKey(edit.messageEdits)]);
 
 // Connection-local change tracking also sees SQL issued by deletion/recovery.
 // It stores no extra user data on disk and is rebuilt when the service starts.

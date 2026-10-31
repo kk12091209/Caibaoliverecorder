@@ -4,8 +4,9 @@ import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
 import { danmakuGeometry, danmakuDuration, normalizedDanmakuStyle } from '../../shared/danmaku-style.js';
 import { containedVideoFrame } from '../../shared/video-geometry.js';
+import {applyMessageEdit} from '../../shared/message-edits.js';
 
-const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object,highlighted:Object,highlightStyle:Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
+const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object,highlighted:Object,highlightStyle:Object,messageEdits:Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
 const canvas = ref(null);
 let font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
 const clock = new DanmakuClock(), timeline = new DanmakuTimeline();
@@ -22,7 +23,7 @@ const events = ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'loa
 function rebuild(reset = false) {
   if (!context) return;
   context.font = font;
-  layout = layoutDanmaku(props.messages.map(m=>({...m,highlighted:props.highlighted?.has(m.id)===true})), {
+  layout = layoutDanmaku(props.messages.map(m=>({...applyMessageEdit(m,props.messageEdits),highlighted:props.highlighted?.has(m.id)===true})), {
     width, height, clipTop:geometry.clipTop,clipBottom:geometry.clipBottom,fontSize:geometry.size,lineHeight:geometry.lineHeight,top:geometry.top,maxLanes:geometry.lanes,exportLayout:true,font:props.font,duration:danmakuDuration(props.style),previous: reset ? new Map() : layout,
     highlightStyle:props.highlightStyle,
     measure(text,size) {
@@ -194,6 +195,7 @@ watch(() => props.style?.fps, () => {resetClock();requestPaint();});
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());
 watch(()=>[props.highlighted,props.highlightStyle],()=>{sprites.clear();rebuild(true);});
+watch(()=>props.messageEdits,()=>{sprites.clear();rebuild(true);});
 watch(() => [props.base, props.enabled, props.loading], () => { cancelVideoFrame(); resetClock(); requestPaint(); queueVideoFrame(); });
 watch(() => props.excluded, requestPaint);
 onMounted(() => {

@@ -10,6 +10,8 @@ import { installLayoutTracking } from './layout-tracking.js';
 import {installGifts} from './gifts.js';
 import {installSenders} from './senders.js';
 import {validateSenderFilter} from '../shared/sender-filter.js';
+import {validateMessageEdits} from '../shared/message-edits.js';
+import {installLotteryRecords} from './lottery-records.js';
 const sourcePathKey = file => process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
 
 export class Store {
@@ -74,6 +76,7 @@ export class Store {
     installLayoutTracking(this);
     installGifts(this);
     installSenders(this);
+    installLotteryRecords(this);
     this.recoveryCount=0;
     this.repairRecords();
     this.db.prepare("UPDATE jobs SET status='failed',error='上次导出被中断，可重新导出。' WHERE status IN ('running','queued')").run();
@@ -217,22 +220,33 @@ export class Store {
     if(input.highlighted!==undefined&&!Array.isArray(input.highlighted))throw new Error('突出弹幕编辑数据无效。');
     const highlighted=[...new Set(input.highlighted??current.highlighted??[])];
     if(highlighted.length>200000||highlighted.some(x=>typeof x!=='string'||x.length>100))throw new Error('突出弹幕编辑数据无效。');
-    const data = { ranges, excluded, undo, filterLottery: true,...(highlighted.length?{highlighted}:{}) };
+    const messageEdits=validateMessageEdits(input.messageEdits===undefined?current.messageEdits||{}:input.messageEdits);
+    for(const [message,patch] of Object.entries(messageEdits)){
+      if(current.messageEdits?.[message]?.user===patch.user&&current.messageEdits?.[message]?.text===patch.text)continue;
+      const original=this.get("SELECT user,text FROM danmaku WHERE session=? AND id=? AND type='d'",id,message);
+      if(!original)throw new Error('只能编辑这份素材中存在的普通弹幕。');
+      if(original.user===patch.user&&original.text===patch.text)delete messageEdits[message];
+    }
+    const data = { ranges, excluded, undo, filterLottery: true,...(highlighted.length?{highlighted}:{}),...(Object.keys(messageEdits).length?{messageEdits}:{}) };
     this.run('INSERT INTO edits VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET revision=excluded.revision,data=excluded.data', id, current.revision + 1, JSON.stringify(data));
     return { revision: current.revision + 1, ...data };
   }
   messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at, sender) {
     this.chatRules.sync(id);
     const lottery = filterLottery ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason='lottery')" : '';
-    sender=validateSenderFilter(sender);const args=[id,from,to,`%${search}%`,`%${search}%`];let filter='';
+    const patches=this.edit(id).messageEdits||{},hasPatches=Object.keys(patches).length>0;
+    const prefix=hasPatches?"WITH message_patches AS MATERIALIZED (SELECT key AS id,json_extract(value,'$.user') AS user,json_extract(value,'$.text') AS text FROM json_each(?)) ":'';
+    const user=hasPatches?'COALESCE(p.user,danmaku.user)':'danmaku.user',text=hasPatches?'COALESCE(p.text,danmaku.text)':'danmaku.text';
+    sender=validateSenderFilter(sender);const args=[...(hasPatches?[JSON.stringify(patches)]:[]),id,from,to,`%${search}%`,`%${search}%`];let filter='';
     if(sender?.mode==='uid'){filter=' AND EXISTS(SELECT 1 FROM danmaku_senders s WHERE s.message=danmaku.id AND s.platform=? AND s.uid=?)';args.push(sender.platform,sender.uid);}
-    if(sender?.mode==='name'){filter=' AND user=?';args.push(sender.name);}
-    if(sender?.mode==='approx'){filter=' AND substr(user,1,length(?))=? AND substr(user,-length(?))=?';args.push(sender.prefix,sender.prefix,sender.suffix,sender.suffix);}
-    const query="SELECT danmaku.*,(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku WHERE session=? AND type='d' AND time>=? AND time<=? AND (text LIKE ? OR user LIKE ?) AND NOT is_sticker_placeholder(text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))" + lottery+filter;
+    if(sender?.mode==='name'){filter=' AND danmaku.user=?';args.push(sender.name);}
+    if(sender?.mode==='approx'){filter=' AND substr(danmaku.user,1,length(?))=? AND substr(danmaku.user,-length(?))=?';args.push(sender.prefix,sender.prefix,sender.suffix,sender.suffix);}
+    const fields=hasPatches?`danmaku.id,danmaku.session,danmaku.source,danmaku.time,${user} AS user,${text} AS text,danmaku.type,danmaku.color,danmaku.user AS originalUser,danmaku.text AS originalText,(p.id IS NOT NULL) AS edited`:'danmaku.*';
+    const query=`SELECT ${fields},(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku ${hasPatches?'LEFT JOIN message_patches p ON p.id=danmaku.id ':''}WHERE danmaku.session=? AND danmaku.type='d' AND danmaku.time>=? AND danmaku.time<=? AND (${text} LIKE ? OR ${user} LIKE ?) AND NOT is_sticker_placeholder(danmaku.text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))` + lottery+filter;
     // Keep the current playback position inside a dense list, then restore
     // chronological order. Search and non-following callers keep their order.
-    if(Number.isFinite(at))return this.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit);
-    return this.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
+    if(Number.isFinite(at))return this.all(prefix+'SELECT * FROM ('+query+' ORDER BY ABS(danmaku.time-?),danmaku.time,danmaku.id LIMIT ?) ORDER BY time,id',...args,at,limit);
+    return this.all(prefix+query+' ORDER BY danmaku.time,danmaku.id LIMIT ?',...args,limit);
   }
   setting(key, value) {
     if (value !== undefined) this.run('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));

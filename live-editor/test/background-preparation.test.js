@@ -239,6 +239,17 @@ test('successful full baked export settles failed or paused preparation across r
   await next.invalidate('exported');await next.tick();assert.equal(next.status('exported').status,'ready');assert.deepEqual(f.state.calls,['exported']);
 });
 
+test('editing a comment invalidates a completed full export even when timing and exclusions are unchanged',async t=>{
+  const f=await fixture(t);f.add('edited');f.scheduler.enqueue('edited');
+  f.store.run('INSERT INTO danmaku VALUES(?,?,?,?,?,?,?,?)','one','edited','source',1,'原昵称','原内容','d','16777215');
+  const file=path.join(f.root,'edited.mp4');await fs.writeFile(file,'finished video');
+  const data={scope:'full',mode:'danmaku',ranges:[{start:0,end:120}],excluded:[],filterLottery:true,output:{file:path.join(f.root,'full.mp4'),danmakuFile:file}};
+  f.store.run('INSERT INTO jobs(id,session,status,file,mode,data) VALUES(?,?,?,?,?,?)','done','edited','done',file,'danmaku',JSON.stringify(data));
+  await f.scheduler.tick();assert.equal(f.scheduler.status('edited').status,'exported');assert.deepEqual(f.state.calls,[]);
+  f.store.saveEdit('edited',{...f.store.edit('edited'),messageEdits:{one:{user:'安全昵称',text:'更正内容'}}});
+  await f.scheduler.invalidate('edited');await f.scheduler.tick();assert.equal(f.scheduler.status('edited').status,'ready');assert.deepEqual(f.state.calls,['edited']);
+});
+
 test('a previous full export cannot satisfy preparation after motion or display area changes',async t=>{
   const f=await fixture(t);f.add('motion');f.scheduler.enqueue('motion');
   const file=path.join(f.root,'motion.mp4');await fs.writeFile(file,'finished video');
