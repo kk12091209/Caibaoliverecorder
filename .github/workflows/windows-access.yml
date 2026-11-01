@@ -29,8 +29,10 @@ jobs:
           $env:CAIBO_PLAYWRIGHT_MODULE=(Resolve-Path .tools/ui-probe/node_modules/playwright-core/index.mjs).Path
           $desktop=Get-ChildItem .tools/ui-original -Recurse -Filter '录播机.exe' | Select-Object -First 1
           & ./live-editor/desktop/build.ps1 -OutputDirectory $desktop.Directory.FullName
-          node live-editor/scripts/verify-windows-ui.mjs $desktop.Directory.FullName .tools/ui-results
+          node live-editor/scripts/verify-windows-ui.mjs $desktop.Directory.FullName .tools/ui-results/first
           if ($LASTEXITCODE -ne 0) { throw 'Actual desktop rendering failed' }
+          node live-editor/scripts/verify-windows-ui.mjs $desktop.Directory.FullName .tools/ui-results/reopened
+          if ($LASTEXITCODE -ne 0) { throw 'Reopened desktop rendering failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

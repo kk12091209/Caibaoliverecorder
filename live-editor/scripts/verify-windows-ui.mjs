@@ -38,20 +38,26 @@ try{
  page.on('requestfailed',r=>record('request-failed',{url:safeUrl(r.url()),error:r.failure()?.errorText}));
  page.on('framenavigated',f=>{if(f===page.mainFrame())record('navigation',{url:safeUrl(f.url())});});
  try{
-  await page.getByLabel('主播直播间或抖音名片分享内容').waitFor({state:'visible',timeout:35000});
+  await page.getByRole('button',{name:'设置',exact:true}).waitFor({state:'visible',timeout:35000});
+  if(!await page.getByLabel('主播直播间或抖音名片分享内容').isVisible())await page.getByRole('button',{name:'素材',exact:true}).click();
+  await page.getByLabel('主播直播间或抖音名片分享内容').waitFor({state:'visible',timeout:5000});
   const status=await page.evaluate(async()=>({status:(await fetch('/api/state')).status,text:document.body.innerText.slice(0,800)}));
   assert.equal(status.status,200);assert.match(status.text,/监控主播/);assert.deepEqual(failures,[]);
   record('interface-ready',{url:safeUrl(page.url()),title:await page.title(),apiStatus:status.status});
   await page.screenshot({path:path.join(out,'loaded.png')});
   await page.getByRole('button',{name:'设置',exact:true}).click();
-  await page.getByText('录制设置',{exact:true}).waitFor({timeout:5000});
+  await page.getByRole('button',{name:'调整录制样式',exact:true}).waitFor({timeout:5000});
   record('settings-open');await page.screenshot({path:path.join(out,'settings.png')});
+  await page.reload();
+  await page.getByRole('button',{name:'设置',exact:true}).waitFor({state:'visible',timeout:10000});
+  assert.equal(await page.evaluate(async()=>(await fetch('/api/state')).status),200);
+  record('authenticated-reload');
  }finally{
   try{await page.screenshot({path:path.join(out,'final-page.png'),timeout:5000});}catch{}
   try{await fs.writeFile(path.join(out,'page.txt'),(await page.locator('body').innerText({timeout:3000})).slice(0,16000));}catch{}
  }
  assert.equal((await fetch(endpoint.origin+'/api/state')).status,401,'Private API must still reject unauthenticated access');
- await fs.writeFile(path.join(out,'verification.json'),JSON.stringify({passed:true,actualDesktop:true,webview2:true,meaningfulUI:true,settingsInteraction:true,anonymousDenied:true,errors:failures},null,2));
+ await fs.writeFile(path.join(out,'verification.json'),JSON.stringify({passed:true,actualDesktop:true,webview2:true,meaningfulUI:true,settingsInteraction:true,authenticatedReload:true,anonymousDenied:true,errors:failures},null,2));
  console.log('Actual Windows desktop renders the UI, opens settings and preserves local authentication.');
 }catch(error){
  record('failure',{message:error.message});
