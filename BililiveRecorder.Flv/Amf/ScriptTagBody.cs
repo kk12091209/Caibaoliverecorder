@@ -48,9 +48,10 @@ namespace BililiveRecorder.Flv.Amf
         public static ScriptTagBody Parse(BigEndianBinaryReader binaryReader)
         {
             var list = new List<IScriptDataValue>();
+            var budget = new ParseBudget();
 
             while (binaryReader.BaseStream.Position < binaryReader.BaseStream.Length)
-                list.Add(ParseValue(binaryReader));
+                list.Add(ParseValue(binaryReader, budget, 0));
 
             return new ScriptTagBody(list);
         }
@@ -70,27 +71,58 @@ namespace BililiveRecorder.Flv.Amf
             }
         }
 
-        public static IScriptDataValue ParseValue(BigEndianBinaryReader binaryReader)
+        private sealed class ParseBudget
         {
+            // Includes recorder-written keyframe metadata (>12,600 values).
+            private int bytesLeft = 16 * 1024 * 1024;
+            public int NodesLeft { get; private set; } = 100000;
+            public void Value(int depth)
+            {
+                if (depth > 64 || NodesLeft-- <= 0) throw new AmfException("AMF nesting or value count exceeds the parsing limit.");
+            }
+            public void Bytes(BigEndianBinaryReader reader, long count)
+            {
+                if (count < 0 || count > bytesLeft) throw new AmfException("AMF data exceeds the parsing byte limit.");
+                var stream = reader.BaseStream;
+                if (stream.CanSeek && count > stream.Length - stream.Position) throw new AmfException("AMF data is truncated.");
+                bytesLeft -= (int)count;
+            }
+            public byte[] ReadBytes(BigEndianBinaryReader reader, uint count)
+            {
+                Bytes(reader, count);
+                var value = reader.ReadBytes((int)count);
+                if (value.Length != count) throw new AmfException("AMF string is truncated.");
+                return value;
+            }
+        }
+
+        public static IScriptDataValue ParseValue(BigEndianBinaryReader binaryReader) => ParseValue(binaryReader, new ParseBudget(), 0);
+
+        private static IScriptDataValue ParseValue(BigEndianBinaryReader binaryReader, ParseBudget budget, int depth)
+        {
+            budget.Value(depth);
+            budget.Bytes(binaryReader, 1);
             var type = (ScriptDataType)binaryReader.ReadByte();
             switch (type)
             {
                 case ScriptDataType.Number:
+                    budget.Bytes(binaryReader, 8);
                     return (ScriptDataNumber)binaryReader.ReadDouble();
                 case ScriptDataType.Boolean:
+                    budget.Bytes(binaryReader, 1);
                     return (ScriptDataBoolean)binaryReader.ReadBoolean();
                 case ScriptDataType.String:
-                    return ReadScriptDataString(binaryReader, false) ?? string.Empty;
+                    return ReadScriptDataString(binaryReader, budget, false) ?? string.Empty;
                 case ScriptDataType.Object:
                     {
                         var result = new ScriptDataObject();
                         while (true)
                         {
-                            var propertyName = ReadScriptDataString(binaryReader, true);
+                            var propertyName = ReadScriptDataString(binaryReader, budget, true);
                             if (propertyName is null)
                                 break;
 
-                            var propertyData = ParseValue(binaryReader);
+                            var propertyData = ParseValue(binaryReader, budget, depth + 1);
 
                             result[propertyName] = propertyData;
                         }
@@ -103,18 +135,20 @@ namespace BililiveRecorder.Flv.Amf
                 case ScriptDataType.Undefined:
                     return new ScriptDataUndefined();
                 case ScriptDataType.Reference:
+                    budget.Bytes(binaryReader, 2);
                     return (ScriptDataReference)binaryReader.ReadUInt16();
                 case ScriptDataType.EcmaArray:
                     {
+                        budget.Bytes(binaryReader, 4);
                         binaryReader.ReadUInt32();
                         var result = new ScriptDataEcmaArray();
                         while (true)
                         {
-                            var propertyName = ReadScriptDataString(binaryReader, true);
+                            var propertyName = ReadScriptDataString(binaryReader, budget, true);
                             if (propertyName is null)
                                 break;
 
-                            var propertyData = ParseValue(binaryReader);
+                            var propertyData = ParseValue(binaryReader, budget, depth + 1);
 
                             result[propertyName] = propertyData;
                         }
@@ -124,48 +158,49 @@ namespace BililiveRecorder.Flv.Amf
                     throw new AmfException("Read ObjectEndMarker");
                 case ScriptDataType.StrictArray:
                     {
+                        budget.Bytes(binaryReader, 4);
                         var length = binaryReader.ReadUInt32();
+                        if (length > budget.NodesLeft) throw new AmfException("AMF array exceeds the value count limit.");
                         var result = new ScriptDataStrictArray();
                         for (var i = 0; i < length; i++)
                         {
-                            var value = ParseValue(binaryReader);
+                            var value = ParseValue(binaryReader, budget, depth + 1);
                             result.Add(value);
                         }
                         return result;
                     }
                 case ScriptDataType.Date:
                     {
+                        budget.Bytes(binaryReader, 10);
                         var dateTime = binaryReader.ReadDouble();
                         var offset = binaryReader.ReadInt16();
                         return new ScriptDataDate(dateTime, offset);
                     }
                 case ScriptDataType.LongString:
                     {
+                        budget.Bytes(binaryReader, 4);
                         var length = binaryReader.ReadUInt32();
-                        if (length > int.MaxValue)
-                            throw new AmfException($"LongString larger than {int.MaxValue} is not supported.");
-                        else
-                        {
-                            var bytes = binaryReader.ReadBytes((int)length);
-                            var str = Encoding.UTF8.GetString(bytes);
-                            str = str.Replace("\0", "");
-                            return (ScriptDataLongString)str;
-                        }
+                        var bytes = budget.ReadBytes(binaryReader, length);
+                        return (ScriptDataLongString)Encoding.UTF8.GetString(bytes).Replace("\0", "");
                     }
                 default:
                     throw new AmfException("Unknown ScriptDataValueType");
             }
 
-            static ScriptDataString? ReadScriptDataString(BigEndianBinaryReader binaryReader, bool expectObjectEndMarker)
+            static ScriptDataString? ReadScriptDataString(BigEndianBinaryReader binaryReader, ParseBudget budget, bool expectObjectEndMarker)
             {
+                budget.Bytes(binaryReader, 2);
                 var length = binaryReader.ReadUInt16();
                 if (length == 0)
                 {
-                    if (expectObjectEndMarker && binaryReader.ReadByte() != 9)
-                        throw new AmfException("ObjectEndMarker not matched.");
+                    if (expectObjectEndMarker)
+                    {
+                        budget.Bytes(binaryReader, 1);
+                        if (binaryReader.ReadByte() != 9) throw new AmfException("ObjectEndMarker not matched.");
+                    }
                     return null;
                 }
-                return Encoding.UTF8.GetString(binaryReader.ReadBytes(length)).Replace("\0", ""); ;
+                return Encoding.UTF8.GetString(budget.ReadBytes(binaryReader, length)).Replace("\0", "");
             }
         }
 

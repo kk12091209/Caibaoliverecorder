@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {FLV_HEADER} from '../server/ingest.js';
 
 const client='isolated-preview-window-01';

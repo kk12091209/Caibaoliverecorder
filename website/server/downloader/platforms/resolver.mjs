@@ -11,6 +11,7 @@ import { ExpiringCache, SharedWork, WorkPool } from '../infrastructure/cache.mjs
 import { withDeadline } from '../infrastructure/deadline.mjs'
 import { douyinScriptItem } from './douyin.mjs'
 import { bilibiliMetadata } from './bilibili.mjs'
+import { xhsHosts, xhsShortHosts, resolveXiaohongshu } from './xiaohongshu.mjs'
 
 const inputHosts = new Set([
   'b23.tv',
@@ -22,15 +23,17 @@ const inputHosts = new Set([
   'douyin.com',
   'www.iesdouyin.com',
   'iesdouyin.com',
+  ...xhsHosts,
+  ...xhsShortHosts,
 ])
 export function shareUrl(text) {
   const normalized = String(text).replace(/\\([:_])/g, '$1')
   const link = normalized
     .match(/https?:\/\/[^\s<>「」“”\p{Script=Han}]+/iu)?.[0]
     ?.replace(/[，。；！、）】)\],.]+$/u, '')
-  if (!link) throw new Error('请粘贴抖音或 B 站分享链接，也可以粘贴整段分享文字。')
+  if (!link) throw new Error('请粘贴抖音、B 站或小红书分享链接，也可以粘贴整段分享文字。')
   const u = approvedUrl(link)
-  if (!inputHosts.has(u.hostname)) throw new Error('目前支持抖音和 B 站的作品链接。')
+  if (!inputHosts.has(u.hostname)) throw new Error('目前支持抖音、B 站和小红书的作品链接。')
   if (u.protocol !== 'https:') u.protocol = 'https:'
   if (u.searchParams.has('p'))
     u.searchParams.set('p', u.searchParams.get('p').replace(/[，。；！）]+$/u, ''))
@@ -204,6 +207,7 @@ export function douyinResult(item) {
 export class PlatformResolver {
   constructor({
     browserResolve,
+    browserResolveXhs,
     requestJson = remoteJson,
     requestText = remoteText,
     open = openRemote,
@@ -211,6 +215,7 @@ export class PlatformResolver {
     galleryMode = 'complete',
   } = {}) {
     this.browserResolve = browserResolve
+    this.browserResolveXhs = browserResolveXhs
     this.requestJson = requestJson
     this.requestText = requestText
     this.open = open
@@ -298,18 +303,60 @@ export class PlatformResolver {
   }
   async resolveFresh(input, { signal, measure = (_name, work) => work() } = {}) {
     let url = shareUrl(input)
-    if (url.hostname === 'b23.tv' || url.hostname === 'v.douyin.com') {
+    if (
+      url.hostname === 'b23.tv' ||
+      url.hostname === 'v.douyin.com' ||
+      xhsShortHosts.has(url.hostname)
+    ) {
+      const fromXhs = xhsShortHosts.has(url.hostname)
       const response = await measure('redirect', () =>
         withDeadline(signal, this.budgets.page, (bounded) =>
-          this.open(url, { headers: { 'User-Agent': MOBILE_UA }, signal: bounded }),
+          this.open(url, {
+            headers: {
+              'User-Agent': MOBILE_UA,
+              ...(fromXhs
+                ? {
+                    Accept: 'text/html,application/xhtml+xml',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                  }
+                : {}),
+            },
+            signal: bounded,
+          }),
         ),
       )
       response.stream.destroy()
       url = shareUrl(response.url)
-      if (url.hostname === 'b23.tv' || url.hostname === 'v.douyin.com')
+      if (
+        url.hostname === 'b23.tv' ||
+        url.hostname === 'v.douyin.com' ||
+        xhsShortHosts.has(url.hostname)
+      )
         throw new Error('分享短链没有返回作品地址，请使用完整链接。')
+      if (fromXhs && !xhsHosts.has(url.hostname))
+        throw new Error('小红书短链没有返回笔记地址，请重新复制完整分享内容。')
       return measure('detail', () => this.resolve(url.href, { signal }))
     }
+    if (xhsHosts.has(url.hostname))
+      return measure('share', () =>
+        resolveXiaohongshu(url, {
+          requestText: this.requestText,
+          browserResolve: this.browserResolveXhs
+            ? (input, active) =>
+                measure('browser', () =>
+                  withDeadline(
+                    active,
+                    this.budgets.browser,
+                    (bounded) => this.browserResolveXhs(input, bounded),
+                    '小红书网页解析超时，请稍后重试。',
+                  ),
+                )
+            : undefined,
+          signal,
+          timeout: this.budgets.page,
+        }),
+      )
     const bvid = url.pathname.match(/\/(BV[0-9A-Za-z]{10})(?:\/|$)/)?.[1]
     if (url.hostname.endsWith('bilibili.com') && bvid)
       return measure('metadata', () =>

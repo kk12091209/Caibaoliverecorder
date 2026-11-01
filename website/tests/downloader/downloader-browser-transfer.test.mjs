@@ -45,7 +45,7 @@ test('worker address validation rejects external origins, arbitrary paths and ma
 test('archive-aware worker accepts both protocol versions and leaves ordinary downloads untouched',()=>{
   let handler;const handled=[];
   const source=readFileSync(new URL('../../public/downloader-transfer-worker.js',import.meta.url),'utf8').replace(/^import[^\n]+\n/,'');
-  runInNewContext(source,{URL,downloadAddress,acceleratedDownload:request=>{handled.push(request.url);return 'stream';},self:{location:{origin},addEventListener:(type,callback)=>{assert.equal(type,'fetch');handler=callback;}}});
+  runInNewContext(source,{URL,downloadAddress,acceleratedDownload:request=>{handled.push(request.url);return 'stream';},self:{location:{origin},addEventListener:(type,callback)=>{if(type==='fetch')handler=callback;else assert.equal(type,'message');}}});
   const dispatch=(target,method='GET')=>{let response;handler({request:new Request(target,{method}),respondWith:value=>{response=value;}});return response;};
   for(const version of ['1','2'])assert.equal(dispatch(`${origin}/api/downloader/jobs/${job}/stream?parallel=${version}`),'stream');
   for(const target of [`${origin}/api/downloader/jobs/${job}/stream`,`${origin}/api/downloader/jobs/${job}/stream?parallel=3`,`${origin}/api/downloader/config?parallel=2`,`https://foreign.example/api/downloader/jobs/${job}/stream?parallel=2`])assert.equal(dispatch(target),undefined);

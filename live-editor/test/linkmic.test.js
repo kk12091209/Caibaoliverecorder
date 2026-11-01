@@ -68,10 +68,10 @@ test('bounded SEI parsing handles NAL length sizes, unrelated messages, invalid 
 test('audience floating seats match native bottom-up positions and preserve host and guest IDs',()=>{
   const people=linkmicSei(seiTag(audience(),100))[0].participants;
   assert.equal(people.length,3);
-  assert.deepEqual(people[0],{x:0,y:0,w:1,h:1,linkId:'1_owner',owner:true});
+  assert.deepEqual(people[0],{x:0,y:0,w:1,h:1,linkId:'1_owner',main:true,ownerFallback:true});
   const voice=people.find(p=>p.linkId==='2_voice'),video=people.find(p=>p.linkId==='3_video');
   assert.equal(voice.audioOnly,true);assert.equal(video.audioOnly,undefined);
-  const cameraOn=linkmicSei(seiTag(audience({grids:[{p:1,type:1,uid_str:'2_voice'}]}),100))[0].participants[0];
+  const cameraOn=linkmicSei(seiTag(audience({grids:[{p:1,type:1,uid_str:'2_voice'}]}),100))[0].participants.find(p=>p.linkId==='2_voice');
   assert.equal(cameraOn.audioOnly,undefined,'opening the camera removes the avatar card');
   assert.equal(video.x,.761);assert.equal(video.w,.205);
   assert.ok(Math.abs(video.y+video.h-(1-.149*360/640))<1e-9);
@@ -80,9 +80,34 @@ test('audience floating seats match native bottom-up positions and preserve host
   for(const changes of [{hide_micseat:1},{ui_layout:99},{interactive_scene:1},{canvas:{width:0,height:640}}])
     assert.equal(linkmicSei(seiTag(audience(changes),100))[0].participants.length,0);
   const six=Array.from({length:6},(_,p)=>({p,uid_str:'seat_'+p,type:2}));
-  assert.equal(linkmicSei(seiTag(audience({grids:six}),100))[0].participants.length,6);
+  assert.equal(linkmicSei(seiTag(audience({grids:six}),100))[0].participants.length,7,'room anchor is included when only floating guest seats are supplied');
   assert.equal(linkmicSei(seiTag(audience({grids:[six[0],six[0]]}),100))[0].participants.length,0);
   assert.equal(linkmicSei(seiTag(audience({grids:[{...six[0],visible:0}]}),100))[0].participants.length,0);
+});
+
+test('Douyin focused large picture follows exact identity and host labels use their own bottom-left corner',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-linkmic-focus-')),store=new Store(root);
+  const session=store.createSession({status:'finished'}),file=path.join(root,'sample.flv');
+  const guestOnly=audience({grids:[{p:0,type:1,uid_str:'3_video'}]});
+  const guestMain=audience({grids:[{p:-1,type:1,uid_str:'3_video'},{p:0,type:1,uid_str:'1_owner'}]});
+  const unknownMain=audience({anchor_interact_info:{layout_type:1,focus_id:'unknown_guest'},grids:[{p:-1,type:1,uid_str:'unknown_guest'}]});
+  const focused={app_data:JSON.stringify({channel_id:'998',ver:6,anchor_interact_info:{layout_type:1,focus_id:'3_video'},grids:[
+    {uid_str:'1_owner',x:.8,y:0,w:.2,h:.3},{uid_str:'3_video',x:0,y:0,w:.8,h:1}]})};
+  await fs.writeFile(file,Buffer.concat([FLV_HEADER,seiTag(guestOnly,100,1),seiTag(guestMain,100,2),seiTag(unknownMain,100,3),seiTag(audience({grids:[]}),100,4),seiTag(focused,100,5)]));
+  const source=store.addSource(session.id,file);store.run('UPDATE sources SET duration=8,closed=2 WHERE id=?',source.id);
+  store.setting('linkmic-owner:'+source.id,{id:'101',name:'本房主播',roomId:'998'});
+  for(const [linkId,id,name]of [['1_owner','101','名单中的旧称呼'],['3_video','103','大屏嘉宾']])store.run('INSERT INTO linkmic_people(source,channel,link_id,id,name) VALUES(?,?,?,?,?)',source.id,'998',linkId,id,name);
+  const index=new LinkmicIndex(store,{resolver:{linkmic(){throw new Error('Archived recordings must not use a current roster');}}});
+  t.after(async()=>{await index.close();store.close();await fs.rm(root,{recursive:true,force:true});});await index.ensure(session.id);
+  const events=index.events(session.id),at=time=>labelsAt(events,time);
+  assert.equal(at(1.5).find(p=>p.owner).name,'本房主播');assert.equal(at(1.5).find(p=>p.owner).labelAlign,'left');
+  assert.equal(at(2.5).find(p=>p.main).name,'大屏嘉宾');assert.equal(at(2.5).find(p=>p.main).owner,undefined);assert.equal(at(2.5).find(p=>p.main).labelAlign,'left');
+  assert.equal(at(2.5).find(p=>p.owner).name,'本房主播');
+  assert.equal(participantName(at(3.5)[0]),'连麦 unknown_guest','unknown main picture never inherits the local anchor name');
+  assert.deepEqual(at(4.5),[]);
+  assert.equal(at(5.5).find(p=>p.main).id,'103','focus is matched by ID rather than array order');
+  const g=labelGeometry(at(5.5).find(p=>p.main),640,360);assert.equal(g.align,'left');assert.ok(g.x<10&&g.y>350);
+  const ass=linkmicAss(events,640,360);assert.match(ass,/\\an1\\pos/);assert.match(ass,/大屏嘉宾/);
 });
 test('geometry fits portrait and landscape letterboxing, bounds long names and escapes ASS tags',()=>{
   const p={x:.5,y:.1875,w:.5,h:.40625,name:'嘉宾{\\pos(0,0)}'.repeat(20)};

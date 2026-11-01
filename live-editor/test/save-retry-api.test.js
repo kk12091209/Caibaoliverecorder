@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { Store } from '../server/store.js';
 import { FLV_HEADER } from '../server/ingest.js';
 import { minimalMp4 } from './helpers/mp4-fixture.js';

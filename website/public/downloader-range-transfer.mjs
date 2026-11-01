@@ -5,7 +5,20 @@ export function downloadAddress(value,origin){
   const url=new URL(value,origin),match=jobPath.exec(url.pathname);
   if(url.origin!==origin||!match)return null;
   url.searchParams.delete('parallel');
+  url.searchParams.delete('transfer');
   return {url:url.href,job:match[1],stream:match[2]==='stream'};
+}
+
+// Observe every response path, including a direct/native fallback, without
+// buffering the attachment. Completion means EOF/error/cancel, not headers.
+export function observeDownload(response,complete){
+  if(!response.body){complete();return response;}
+  const reader=response.body.getReader();let finished=false;
+  const finish=()=>{if(finished)return;finished=true;complete();};
+  return new Response(new ReadableStream({
+    async pull(controller){try{const item=await reader.read();if(item.done){finish();reader.releaseLock();controller.close();}else controller.enqueue(item.value);}catch(error){finish();controller.error(error);}},
+    async cancel(reason){try{await reader.cancel(reason);}finally{finish();reader.releaseLock();}},
+  },{highWaterMark:0}),{status:response.status,statusText:response.statusText,headers:response.headers});
 }
 function rangeInfo(response){
   const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range')||'');

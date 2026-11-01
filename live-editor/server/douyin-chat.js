@@ -1,5 +1,6 @@
 import {Worker} from 'node:worker_threads';
 import { DEFAULT_CHAT_RATE, validateChatRate } from './chat-rules.js';
+import {safeChatStatus} from './douyin-chat-status.js';
 
 // Decoding, signing and sampling stay off the editor/SQLite event loop. A room
 // has at most one unacknowledged batch; its quota covers pending disk writes.
@@ -27,21 +28,21 @@ export class DouyinChat {
       const client=this.clients.get(message.key);
       if(message.type==='batch'){
         if(!client){worker.postMessage({type:'ack',key:message.key,id:message.id});return;}
-        client.pending=client.pending.then(()=>client.write(message)).catch(()=>client.status('write-failed')).finally(()=>{
+        client.pending=client.pending.then(async()=>{await client.write(message);if(!client.firstWrite&&((message.messages?.length||0)+(message.gifts?.length||0)>0)){client.firstWrite=true;client.status('first-write',{stage:'write'});}}).catch(()=>client.status('write-failed',{stage:'write',reason:'write'})).finally(()=>{
           if(this.worker===worker)worker.postMessage({type:'ack',key:message.key,id:message.id});
         });
-      }else if(message.type==='status')client?.status(message.status);
+      }else if(message.type==='status'){const event=safeChatStatus(message.status,message);if(event)client?.status(event.status,event);}
       else if(message.type==='stopped')client?.resolveStop?.();
     });
-    const failed=()=>{
+    const failed=(reason='worker-exit')=>{
       if(this.worker!==worker)return;this.worker=null;clearInterval(this.watchdog);void worker.terminate();
-      for(const client of this.clients.values()){client.status('retry');if(client.stopping)client.resolveStop?.();}
+      for(const client of this.clients.values()){client.status('retry',{stage:'worker',reason:reason==='worker-timeout'?reason:'worker-exit',retryMs:2000});if(client.stopping)client.resolveStop?.();}
       if(!this.closed&&[...this.clients.values()].some(client=>!client.stopping))this.retry=setTimeout(()=>{
         this.retry=null;this.ensureWorker();for(const [key,client]of this.clients)if(!client.stopping)this.worker?.postMessage({type:'start',key,...client.details});
       },2000);
     };
-    worker.on('error',failed);worker.on('exit',failed);
-    this.watchdog=setInterval(()=>{if(Date.now()-this.lastHeartbeat>this.timeoutMs)failed();},2000);
+    worker.on('error',()=>failed());worker.on('exit',()=>failed());
+    this.watchdog=setInterval(()=>{if(Date.now()-this.lastHeartbeat>this.timeoutMs)failed('worker-timeout');},2000);
   }
   async stop(key) {
     const client=this.clients.get(key);if(!client)return;

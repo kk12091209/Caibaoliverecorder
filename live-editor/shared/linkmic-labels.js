@@ -32,8 +32,9 @@ export function labelGeometry(person,width,height,sourceWidth=width,sourceHeight
     text+=char;units+=next;
   }
   const audioOnly=person.audioOnly===true&&!person.owner;
+  const align=person.labelAlign==='left'?'left':'right';
   const avatarSize=Math.min(tileWidth*.56,tileHeight*.62);
-  return {text,size,x:left+tileWidth-inset,y:top+tileHeight-inset,left,top,audioOnly,
+  return {text,size,x:align==='left'?left+inset:left+tileWidth-inset,y:top+tileHeight-inset,left,top,audioOnly,align,
     avatar:audioOnly?person.avatarUrl:'',avatarSize,
     avatarX:left+(tileWidth-avatarSize)/2,avatarY:top+Math.max(0,(tileHeight-size*1.8-avatarSize)/2),
     right:left+tileWidth,bottom:top+tileHeight,maxWidth};

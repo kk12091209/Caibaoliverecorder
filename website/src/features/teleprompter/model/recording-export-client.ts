@@ -2,8 +2,8 @@ import type { ExportedRecording } from './recording-export'
 import type { RecordingMode } from './recording'
 
 type Request =
-  | { operation: 'track'; blob: Blob; kind: RecordingMode }
-  | { operation: 'zip'; files: { name: string; blob: Blob }[] }
+  | { operation: 'track'; blob: Blob; kind: RecordingMode; retainedBytes: number }
+  | { operation: 'zip'; files: { name: string; blob: Blob }[]; retainedBytes: number }
 
 async function execute<T>(request: Request, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted()
@@ -13,8 +13,8 @@ async function execute<T>(request: Request, signal?: AbortSignal): Promise<T> {
     const local = await import('./recording-export')
     return (
       request.operation === 'track'
-        ? local.extractRecordingTrack(request.blob, request.kind, signal)
-        : local.zipRecordings(request.files, signal)
+        ? local.extractRecordingTrack(request.blob, request.kind, signal, request.retainedBytes)
+        : local.zipRecordings(request.files, signal, request.retainedBytes)
     ) as Promise<T>
   }
   const worker = new Worker(new URL('./recording-export.worker.ts', import.meta.url), {
@@ -50,7 +50,14 @@ async function execute<T>(request: Request, signal?: AbortSignal): Promise<T> {
     }
   })
 }
-export const extractRecordingTrack = (blob: Blob, kind: RecordingMode, signal?: AbortSignal) =>
-  execute<ExportedRecording>({ operation: 'track', blob, kind }, signal)
-export const zipRecordings = (files: { name: string; blob: Blob }[], signal?: AbortSignal) =>
-  execute<Blob>({ operation: 'zip', files }, signal)
+export const extractRecordingTrack = (
+  blob: Blob,
+  kind: RecordingMode,
+  signal?: AbortSignal,
+  retainedBytes = 0,
+) => execute<ExportedRecording>({ operation: 'track', blob, kind, retainedBytes }, signal)
+export const zipRecordings = (
+  files: { name: string; blob: Blob }[],
+  signal?: AbortSignal,
+  retainedBytes = 0,
+) => execute<Blob>({ operation: 'zip', files, retainedBytes }, signal)

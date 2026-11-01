@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { Store } from '../server/store.js';
 import { ServiceRuntime } from '../server/service-runtime.js';
 import { damagedDatabase } from '../server/data-recovery.js';

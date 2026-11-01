@@ -53,7 +53,7 @@ namespace BililiveRecorder.Core.SimpleWebhook
 
             var dataStr = JsonConvert.SerializeObject(data, Formatting.None);
 
-            logger.Debug("尝试发送 WebhookV2 到 {Urls}, 数据 {WebhookData}", urls, dataStr);
+            logger.Debug("尝试发送 WebhookV2，数据字符数 {CharacterCount}", dataStr.Length);
 
             var bytes = Encoding.UTF8.GetBytes(dataStr);
 
@@ -70,7 +70,7 @@ namespace BililiveRecorder.Core.SimpleWebhook
         {
             if (!IsUrlAllowed(url))
             {
-                logger.Warning("不支持向 {Url} 发送 Webhook，已跳过", url);
+                logger.Warning("Webhook 地址不受支持，已跳过");
                 return;
             }
 
@@ -84,12 +84,12 @@ namespace BililiveRecorder.Core.SimpleWebhook
                     body.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
                     var result = await this.client.PostAsync(url, body).ConfigureAwait(false);
                     result.EnsureSuccessStatusCode();
-                    logger.Debug("发送 WebhookV2 到 {Url} 成功", url);
+                    logger.Debug("发送 WebhookV2 成功");
                     return;
                 }
                 catch (Exception ex)
                 {
-                    logger.Warning(ex, "发送 WebhookV2 到 {Url} 失败", url);
+                    logger.Warning("发送 WebhookV2 失败：{ErrorType}，重试 {Attempt}", ex.GetType().Name, i + 1);
                 }
         }
 

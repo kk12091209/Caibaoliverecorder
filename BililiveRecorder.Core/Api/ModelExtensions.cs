@@ -40,7 +40,12 @@ namespace BililiveRecorder.Core.Api
             }
             else
             {
-                return DefaultServers[random.Next(DefaultServers.Length)];
+                var fallback = DefaultServers.Where(x => transportMode == DanmakuTransportMode.Random || transportMode == x.TransportMode).ToArray();
+                if (fallback.Length == 0)
+                    throw new InvalidOperationException("No danmaku server supports the selected transport.");
+                var result = fallback[random.Next(fallback.Length)];
+                result.Token = danmuInfo.Token;
+                return result;
             }
         }
 

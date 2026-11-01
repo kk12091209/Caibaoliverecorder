@@ -1,12 +1,14 @@
 # 连麦主播名牌
 
-连麦时，在每位主播自己的画面右下角显示小号白字和阴影，优先显示昵称，缺少昵称时显示能够确认的用户 ID / 连麦编号。名牌与弹幕开关、展示区域无关，预览、纯净版、弹幕版和双文件导出均保留；原始 FLV 不重编码、不改写。需要烧入名牌的纯净版会编码导出，不能直接复制视频码流。
+连麦时，抖音本房主播及当前主画面的名牌显示在各自画面左下角，其余麦位及 B 站名牌保留右下角小号白字和阴影。优先显示昵称，缺少昵称时显示能够确认的用户 ID / 连麦编号。名牌与弹幕开关、展示区域无关，预览、纯净版、弹幕版和双文件导出均保留；原始 FLV 不重编码、不改写。需要烧入名牌的纯净版会编码导出，不能直接复制视频码流。
+
+本地开发补充（2026-11-01，未发布）：抖音明确的 `anchor_interact_info.focus_id` 与主画面座位按连麦 ID 匹配名单，不能按名单顺序把本房姓名套到嘉宾大屏。观众悬浮布局缺少主位时补上本房主播名牌；主位匹配到嘉宾时展示该嘉宾姓名。本房身份确认后优先使用该次录制保存的主播名。明确聚焦但身份缺失时保留编号，未知布局继续不推测坐标。索引版本升级会重读保留的素材；预览与新导出共用左下角坐标，导出快照及缓存包含对齐方式。当前验证基于官方播放器字段、既有样本及构造切换场景，仍需后续实播验收大屏切换。
 
 ## 数据来源和定位
 
 - B 站：读取 H.264 SEI type 5 的 `LIVE_SEI_CHANNEL` / `LIVE_MULTI_VIDEO_LINK`。用 `members.position` 匹配 `interact_template.layout_data.cells.position`，按 layout 的宽高归一化坐标；不按成员数组顺序、不按人数猜测分区。姓名取 `uname`，ID 优先用字符串字段。空座位不标注。0.2.9 补充：麦位缺少宽高时继承 `default_cell`；只有布局编号时，使用已核对的官方第 17 版视频布局，包含双人、左右多人、四格、九格及视频连麦小窗。缺少 `uname` 时尝试 `display_name`，再回退 ID；重复座位跳过。明确结束状态清除名牌，未知布局版本且没有内嵌坐标时不猜测位置。
 - 抖音：读取 SEI type 100 的 `app_data`，支持平台当前双人 `ver=2` 和多人 `ver=6` 的明确矩形。双人模式使用 `live_crop.crop_y/crop_h/stride_h` 定位真实视频中的连麦区，保留原始上下留白。通过匿名访客 `GET /webcast/linkmic/list/` 获取名单，以同一频道的 `linkmic_id_str` 精确匹配 `grids.uid_str`。双人协议仅发送远端矩形，本房主播按该协议的左右各半布局补在左侧，身份来自本次录制的房间信息。游戏画面/摄像头复合裁剪尚不标注。
-- 抖音普通观众上麦：已实测 `ver=15 / interactive_scene=8 / ui_layout=7` 的右下角悬浮小窗，视频与语音用户均可标注。`p=-1` 为本房主播，`p=0..5` 为从下向上的小窗；读取 `GET /webcast/linkmic_audience/list/v2/` 名单，仍以连麦 ID 匹配身份，不用名单顺序或 `user_position` 推测 SEI 座位。尺寸依据平台 [VideoRoom 布局样式](https://lf-webcast-platform.bytetos.com/obj/webcast-platform-cdn/webcast/douyin_live/client-entry~1.bc037bea.css) 中 `HLzCnPol`，并与原始录像、网页边界交叉核对。语音麦位（`grids.type=2`）补充圆形抖音头像、半透明深灰背景与昵称；切回视频（`type=1`）立即去掉头像卡片，换位按 SEI 时间轴同步。头像读取同一用户的 `avatar_medium / avatar_thumb`。不通过画面内容推测摄像头状态，不覆盖主主播或视频麦位。礼物计分、动画及其他观众布局尚未重建。
+- 抖音普通观众上麦：已实测 `ver=15 / interactive_scene=8 / ui_layout=7` 的右下角悬浮小窗，视频与语音用户均可标注。`p=-1` 为默认本房主画面座位，身份优先按名单及明确的聚焦信息匹配；`p=0..5` 为从下向上的小窗。读取 `GET /webcast/linkmic_audience/list/v2/` 名单，仍以连麦 ID 匹配身份，不用名单顺序或 `user_position` 推测 SEI 座位。尺寸依据平台 [VideoRoom 布局样式](https://lf-webcast-platform.bytetos.com/obj/webcast-platform-cdn/webcast/douyin_live/client-entry~1.bc037bea.css) 中 `HLzCnPol`，并与原始录像、网页边界交叉核对。语音麦位（`grids.type=2`）补充圆形抖音头像、半透明深灰背景与昵称；切回视频（`type=1`）立即去掉头像卡片，换位按 SEI 时间轴同步。头像读取同一用户的 `avatar_medium / avatar_thumb`。不通过画面内容推测摄像头状态，不覆盖主主播或视频麦位。礼物计分、动画及其他观众布局尚未重建。
 - 浏览器 letterbox 与导出跨画幅的 letterbox 在最后一步计算。长昵称限制在自己的分区内；窄屏预览设可读字号下限，分区太小时仍受分区大小约束。
 
 字段依据：2026-10-20 对用户提供的两个公开直播间进行短时读取，直接核对平台返回的 SEI 和名单；抖音当前[官方 PK SEI 组件](https://lf-webcast-platform.bytetos.com/obj/webcast-platform-cdn/webcast/douyin_live/chunks/PKSEIPlugin.156e90d3.js)、[官方 PK 展示与名单请求组件](https://lf-webcast-platform.bytetos.com/obj/webcast-platform-cdn/webcast/douyin_live/chunks/PKViewPlugin.de2e4662.js)、[官方版本枚举](https://lf-webcast-platform.bytetos.com/obj/webcast-platform-cdn/webcast/douyin_live/client-entry~1.28f20eec.js)可交叉核对。接口与格式可能变化，未知数据不推测坐标。

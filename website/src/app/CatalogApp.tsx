@@ -27,7 +27,13 @@ export default function CatalogApp() {
 
   useEffect(() => {
     if (location.hash) {
-      const target = document.querySelector(location.hash)
+      let id = ''
+      try {
+        id = decodeURIComponent(location.hash.slice(1))
+      } catch {
+        /* Ignore malformed links. */
+      }
+      const target = id ? document.getElementById(id) : null
       if (target) {
         target.scrollIntoView()
         return

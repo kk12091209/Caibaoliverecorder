@@ -22,6 +22,7 @@ internal sealed class BackendService : IDisposable
     private readonly JavaScriptSerializer json = new() { MaxJsonLength = 16 * 1024 * 1024 };
     private string token = "", instance = "";
     private Task<BackendStatus>? connecting;
+    internal string UiToken { get; private set; } = "";
     internal string Origin { get; private set; } = "";
     internal bool ExitRequested { get; private set; }
     internal TimeSpan ConnectionTimeout { get; set; } = TimeSpan.FromSeconds(60);
@@ -55,9 +56,11 @@ internal sealed class BackendService : IDisposable
             if (!value.TryGetValue("protocol", out var protocol) || Convert.ToInt32(protocol) != 1 || !SamePath(Text(value, "dataPath"), data)) return false;
             var address = Text(value, "origin");
             if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.Port < 1 || uri.AbsolutePath != "/" || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != "") return false;
+            var uiSecret = Text(value, "uiToken");
+            if (uiSecret.Length != 0 && (uiSecret.Length != 64 || !uiSecret.All(Uri.IsHexDigit))) return false;
             var secret = Text(value, "token"); var id = Text(value, "instance");
             if (secret.Length != 64 || id.Length != 32 || !secret.All(Uri.IsHexDigit) || !id.All(Uri.IsHexDigit)) return false;
-            Origin = address.TrimEnd('/'); token = secret; instance = id; return true;
+            Origin = address.TrimEnd('/'); token = secret; UiToken = uiSecret; instance = id; return true;
         }
         catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is ArgumentException || error is InvalidOperationException || error is FormatException) { return false; }
     }

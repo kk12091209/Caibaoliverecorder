@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,6 +44,11 @@ namespace BililiveRecorder.Cli
     {
         private static int Main(string[] args)
         {
+            // The desktop reads redirected core output as UTF-8. A Windows
+            // console code page otherwise corrupts Chinese diagnostics.
+            if (Console.IsOutputRedirected || Console.IsErrorRedirected)
+                Console.OutputEncoding = new UTF8Encoding(false);
+
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BREC_SKIP_DISABLE_QUICK_EDIT")))
             {
@@ -56,7 +62,7 @@ namespace BililiveRecorder.Cli
 
             using (var entrypointLogger = BuildLogger(LogEventLevel.Fatal, LogEventLevel.Verbose))
             {
-                entrypointLogger.Information("Starting, {Version}, {CommandLine}", GitVersionInformation.InformationalVersion, args);
+                entrypointLogger.Information("Starting, {Version}, argument count {ArgumentCount}", GitVersionInformation.InformationalVersion, args.Length);
                 try
                 {
                     ServicePointManager.Expect100Continue = false;
@@ -277,6 +283,9 @@ namespace BililiveRecorder.Cli
 
                         sharedArguments.HttpBasicUser ??= Environment.GetEnvironmentVariable("BREC_HTTP_BASIC_USER");
                         sharedArguments.HttpBasicPass ??= Environment.GetEnvironmentVariable("BREC_HTTP_BASIC_PASS");
+
+                        if (string.IsNullOrWhiteSpace(sharedArguments.HttpBasicUser) || string.IsNullOrWhiteSpace(sharedArguments.HttpBasicPass))
+                            throw new InvalidOperationException("HTTP service requires a username and password. Set BREC_HTTP_BASIC_USER and BREC_HTTP_BASIC_PASS.");
 
                         if (sharedArguments.HttpBasicUser is not null || sharedArguments.HttpBasicPass is not null)
                         {

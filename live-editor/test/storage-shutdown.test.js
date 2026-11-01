@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 for(const kind of ['probe','enqueue'])test('关闭服务等待在途'+kind+'退出后再关数据库',async()=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-storage-shutdown-'));
  const app=await createApp({automaticClean:false,preparation:false,data:root,noRecorder:true,compact:false,port:0,ffmpeg:'unused-test-tool',ffprobe:'unused-test-tool'});

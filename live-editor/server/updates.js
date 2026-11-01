@@ -163,12 +163,14 @@ export class Updates {
   async checkRemote(signal){
     let next;
     if (this.mirror) {
+      let received = false;
       try {
         const primarySignal = AbortSignal.any([signal, AbortSignal.timeout(this.mirrorTimeoutMs)]);
         const response = await caibaoFetch(CAIBAO_UPDATE_URL, { fetcher: this.fetcher, signal: primarySignal });
+        received = true;
         next = validateMirrorUpdate(JSON.parse((await boundedBytes(response, 131072)).toString('utf8')), this.current, this.platform, this.mirrorPublicKey);
       } catch (error) {
-        if (signal.aborted || this.closed) throw error;
+        if (signal.aborted || this.closed || received || error.trustFailure) throw error;
         next = await this.githubCandidate(signal);
       }
     } else next = await this.githubCandidate(signal);
@@ -190,11 +192,11 @@ export class Updates {
     const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
     const release=JSON.parse((await boundedBytes(await request(RELEASE_API),1024*1024)).toString('utf8'));
     if(release.draft||release.prerelease||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(release.tag_name))fail('更新渠道信息无效。');
-    const asset=releaseAsset(release,'update-manifest.json');
-    if(asset.size>65536)fail('更新清单过大。');
-    const bytes=await boundedBytes(await request(asset.browser_download_url),65536);
+    const asset=releaseAsset(release,'caibao-update.json');
+    if(asset.size>131072)fail('更新清单过大。');
+    const bytes=await boundedBytes(await request(asset.browser_download_url),131072);
     if(bytes.length!==asset.size||`sha256:${digest(bytes)}`!==asset.digest)fail('更新清单校验失败。');
-    return validateUpdate(release,JSON.parse(bytes.toString('utf8')),this.current,this.platform);
+    return validateUpdate(release,readSignedManifest(JSON.parse(bytes.toString('utf8')),this.mirrorPublicKey),this.current,this.platform);
   }
   async directory(){
     // The update cache is fixed under app data; never follow redirected folders.

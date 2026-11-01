@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B站评论盲盒防护
 // @namespace    local.bili-comment-blindbox
-// @version      0.20.0
-// @description  B站评论防护；最多同时跟车三人，不改动输入草稿；支持托管遮挡，以及按直播间保存、独立摄像头同步生效的画面调色和曲线预设
+// @version      0.22.2
+// @description  B站评论防护；三人跟车独立开关、外地车切换弹幕来源、外国车英日韩翻译、随机车白名单；不改动输入草稿，支持托管遮挡和画面调色
 // @icon         https://greasyfork.org/rails/active_storage/blobs/redirect/eyJfcmFpbHMiOnsiZGF0YSI6MzAyMjM5LCJwdXIiOiJibG9iX2lkIn19--a019e368236259cf0fa8584eaa5b528506cbfe76/2561766c7692aa66dd67b4e252602fa51669777785.jpg?locale=zh-CN
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/585978
 // @supportURL   https://greasyfork.org/zh-CN/scripts/585978/feedback
@@ -17,10 +17,116 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_xmlhttpRequest
+// @connect      translate.googleapis.com
 // ==/UserScript==
 
 (() => {
   "use strict";
+// BEGIN SHARED AUTO SENDER
+function createSharedAutoSender(env = globalThis) {
+  const locks = env.navigator?.locks
+  let held = null,
+    pending = null,
+    generation = 0
+  const failure = (message) => new Error(message)
+  function release() {
+    generation++
+    held?.release()
+    held = null
+    pending = null
+  }
+  async function claim(uid, room) {
+    if (!locks?.request)
+      throw failure('此浏览器无法协调多个标签页，自动发送已暂停。请使用支持 Web Locks 的浏览器。')
+    if (!/^\d{1,24}$/.test(uid) || !/^\d{1,24}$/.test(room))
+      throw failure('无法确认当前账号或直播间，自动发送已暂停。')
+    const key = `caibao:auto-sender:v1:room:${uid}:${room}`
+    if (held?.key === key) return
+    if (pending?.key === key) return pending.promise
+    release()
+    const version = generation
+    let ready, reject
+    const promise = new Promise((resolve, fail) => {
+      ready = resolve
+      reject = fail
+    })
+    pending = { key, promise }
+    void locks
+      .request(key, { ifAvailable: true }, async (lock) => {
+        if (version !== generation) throw failure('自动发送状态已变化，本条已取消。')
+        if (!lock)
+          throw failure('此账号在这个直播间已有另一个标签页自动发送，请先关闭那里的自动发送。')
+        let finish
+        const lifetime = new Promise((resolve) => {
+          finish = resolve
+        })
+        held = { key, release: finish }
+        ready()
+        await lifetime
+      })
+      .catch(reject)
+    try {
+      await promise
+    } finally {
+      if (pending?.promise === promise) pending = null
+    }
+  }
+  async function send({ uid, room, text, isCurrent = () => true }, submit) {
+    await claim(uid, room)
+    const version = generation
+    const reserved = await locks.request(
+      `caibao:auto-sender:v1:account:${uid}`,
+      { ifAvailable: true },
+      (lock) => {
+        if (!lock) throw failure('此账号的另一个发送请求尚未结束，本条跳过。')
+        if (version !== generation || !held || !isCurrent())
+          throw failure('自动发送状态已变化，本条已取消。')
+        const key = `caibao:auto-sender:v1:history:${uid}`
+        let previous
+        try {
+          previous = JSON.parse(env.localStorage.getItem(key) || '{"lastAt":0,"recent":[]}')
+        } catch {
+          throw failure('无法读取共享发送记录，自动发送已暂停。')
+        }
+        if (
+          !Number.isFinite(previous?.lastAt) ||
+          previous.lastAt < 0 ||
+          !Array.isArray(previous.recent) ||
+          previous.recent.length > 64 ||
+          previous.recent.some((item) => typeof item?.key !== 'string' || !Number.isFinite(item.at))
+        )
+          throw failure('共享发送记录异常，自动发送已暂停。')
+        const now = env.Date.now()
+        if (previous.lastAt && now - previous.lastAt < 5000)
+          throw failure('此账号距离上次自动发送不足 5 秒，本条跳过。')
+        const recent = previous.recent.filter((item) => now - item.at < 15000)
+        const fingerprint = `${room}:${text}`
+        if (recent.some((item) => item.key === fingerprint))
+          throw failure('此直播间 15 秒内已自动发送相同内容，本条跳过。')
+        // Reserve BEFORE submission. Ambiguous network failures must retain the
+        // cooldown and duplicate guard; no implicit retry or rollback.
+        try {
+          env.localStorage.setItem(
+            key,
+            JSON.stringify({
+              lastAt: now,
+              recent: [...recent.slice(-63), { key: fingerprint, at: now }],
+            }),
+          )
+        } catch {
+          throw failure('无法保存共享发送记录，自动发送已暂停。')
+        }
+        // The atomic lock covers reservation and starting the request, not an
+        // unresponsive network promise. The persisted clock protects later sends.
+        return { result: submit() }
+      },
+    )
+    return reserved.result
+  }
+  return { send, release }
+}
+// END SHARED AUTO SENDER
 
   // 直播页面使用独立模块，避免评论遮罩影响弹幕和原生菜单。
   if (location.hostname === "live.bilibili.com") {
@@ -87,6 +193,7 @@
     CFG.sendInterceptCookie,
     CFG.sendInterceptKey,
   );
+  let sendHookState = 'pending';
   sendInterceptEnabled =
     sendInterceptEnabled === null
       ? CFG.defaultSendIntercept
@@ -447,6 +554,8 @@
   const originalMap = new WeakMap();
   const hoverTimerMap = new WeakMap();
   const observedRoots = new WeakSet();
+  const rootObservers = new WeakMap();
+  const eventRoots = new WeakSet();
   const styledRoots = new WeakSet();
   const knownRoots = new Set();
   const pendingRoots = new Set();
@@ -468,6 +577,7 @@
   enqueue(document);
 
   window.setInterval(() => {
+    pruneDetachedRoots();
     scanShadowRoots(document);
     syncSharedStateFromCookie();
     syncAllCommentEditorPlaceholders();
@@ -1187,6 +1297,7 @@
 
   function runImmediateSweep() {
     if (!enabled) return;
+    pruneDetachedRoots();
     scanShadowRoots(document);
     for (const root of new Set([document, ...knownRoots])) {
       processRoot(root);
@@ -1194,7 +1305,7 @@
   }
 
   function observeRoot(root) {
-    if (!root || observedRoots.has(root)) return;
+    if (!root || observedRoots.has(root) || (root.host && !root.host.isConnected)) return false;
 
     injectStyle(root);
 
@@ -1203,12 +1314,11 @@
     bindEvents(root);
 
     const observer = new MutationObserver((records) => {
-      scanShadowRoots(root);
-      syncAllCommentEditorPlaceholders();
-      if (!enabled) return;
-
+      if (records.some((record) => record.removedNodes?.length)) pruneDetachedRoots();
       for (const record of records) {
         if (record.type === "attributes") {
+          if (record.target.getAttribute(record.attributeName) === record.oldValue) continue;
+          syncCommentEditorPlaceholders(record.target);
           enqueue(record.target);
           continue;
         }
@@ -1223,6 +1333,8 @@
             node.nodeType === Node.ELEMENT_NODE ||
             node.nodeType === Node.DOCUMENT_FRAGMENT_NODE
           ) {
+            scanShadowRoots(node);
+            syncCommentEditorPlaceholders(node);
             enqueue(node);
           }
         }
@@ -1234,12 +1346,30 @@
       childList: true,
       characterData: true,
       attributes: true,
+      attributeOldValue: true,
       attributeFilter: ["src", "data-src", "srcset", "style", "class"],
     });
+    rootObservers.set(root, observer);
+    return true;
+  }
+
+  function pruneDetachedRoots() {
+    for (const root of knownRoots) {
+      if (root === document || root.host?.isConnected) continue;
+      rootObservers.get(root)?.disconnect();
+      rootObservers.delete(root);
+      observedRoots.delete(root);
+      knownRoots.delete(root);
+      pendingRoots.delete(root);
+    }
+    for (const root of pendingRoots) {
+      if (root !== document && !root.isConnected) pendingRoots.delete(root);
+    }
   }
 
   function bindEvents(root) {
-    if (!root || !root.addEventListener) return;
+    if (!root || !root.addEventListener || eventRoots.has(root)) return;
+    eventRoots.add(root);
 
     root.addEventListener("click", onClick, true);
 
@@ -1965,12 +2095,11 @@
   function renderMaskedAvatarImg(img, info) {
     if (!info) return;
 
-    img.src = MASK_AVATAR;
-    img.setAttribute("src", MASK_AVATAR);
-    img.setAttribute("data-src", MASK_AVATAR);
-    img.removeAttribute("srcset");
-    img.removeAttribute("sizes");
-    img.classList.add("bcp-masked-avatar");
+    if (img.getAttribute("src") !== MASK_AVATAR) img.setAttribute("src", MASK_AVATAR);
+    if (img.getAttribute("data-src") !== MASK_AVATAR) img.setAttribute("data-src", MASK_AVATAR);
+    if (img.hasAttribute("srcset")) img.removeAttribute("srcset");
+    if (img.hasAttribute("sizes")) img.removeAttribute("sizes");
+    if (!img.classList.contains("bcp-masked-avatar")) img.classList.add("bcp-masked-avatar");
 
     markProtected(img, "avatar", "masked");
   }
@@ -1990,7 +2119,7 @@
   function renderMaskedAvatarBox(box, info) {
     if (!info) return;
 
-    box.classList.add("bcp-avatar-box-mask");
+    if (!box.classList.contains("bcp-avatar-box-mask")) box.classList.add("bcp-avatar-box-mask");
     applyMaskedAvatarBoxInline(box, info);
     markProtected(box, "avatar", "masked");
   }
@@ -2050,18 +2179,22 @@
     cover.setAttribute("data-bcp-avatar-cover", "1");
     cover.dataset.bcpAvatarCoverFor = coverId;
     cover.setAttribute("aria-hidden", "true");
-    cover.style.setProperty("display", "block", "important");
-    cover.style.setProperty("width", size.width || "100%", "important");
-    cover.style.setProperty(
+    setMaskStyle(cover, "display", "block");
+    setMaskStyle(cover, "width", size.width || "100%");
+    setMaskStyle(cover,
       "height",
       size.height || size.width || "100%",
-      "important",
     );
-    cover.style.setProperty("left", placement.left, "important");
-    cover.style.setProperty("top", placement.top, "important");
+    setMaskStyle(cover, "left", placement.left);
+    setMaskStyle(cover, "top", placement.top);
 
-    host.style.setProperty("position", "relative", "important");
+    setMaskStyle(host, "position", "relative");
     if (cover.parentElement !== host) host.appendChild(cover);
+  }
+
+  function setMaskStyle(element, property, value) {
+    if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== "important")
+      element.style.setProperty(property, value, "important");
   }
 
   function removeAvatarCover(box) {
@@ -2423,7 +2556,7 @@
   function renderMaskedName(el, info) {
     if (!info) return;
 
-    el.textContent = info.masked;
+    if (el.textContent !== info.masked) el.textContent = info.masked;
     markProtected(el, "name", "masked");
   }
 
@@ -2447,7 +2580,7 @@
       if (info.mediaSize?.mode) el.dataset.bcpMediaMode = info.mediaSize.mode;
     } else {
       clearMediaPlaceholderSize(el);
-      el.textContent = info.masked;
+      if (el.textContent !== info.masked) el.textContent = info.masked;
     }
 
     markProtected(el, "comment", "masked");
@@ -2760,8 +2893,8 @@
   }
 
   function markProtected(el, kind, state) {
-    el.dataset.bcpKind = kind;
-    el.dataset.bcpState = state;
+    if (el.dataset.bcpKind !== kind) el.dataset.bcpKind = kind;
+    if (el.dataset.bcpState !== state) el.dataset.bcpState = state;
   }
 
   function readImgAttrs(img) {
@@ -3184,7 +3317,8 @@
   }
 
   function getSendInterceptLabel() {
-    return sendInterceptEnabled ? "发送拦截：开" : "发送拦截：关";
+    if (!sendInterceptEnabled) return "发送拦截：关";
+    return sendHookState === 'ready' ? "发送拦截：开" : sendHookState === 'pending' ? '发送拦截：确认中' : '发送拦截：未生效，请刷新';
   }
 
   function getLanguageName(value = language) {
@@ -3206,6 +3340,7 @@
   }
 
   function getSendInterceptPlaceholder() {
+    if (sendHookState !== 'ready') return sendHookState === 'pending' ? '正在确认发送拦截，请稍候' : '发送拦截未生效，请刷新后确认，暂勿发送敏感内容';
     return `当前已开启屏蔽自己发送评论，所有发出去的文字都会变成${getCommentMaskText().repeat(3)}`;
   }
 
@@ -3264,6 +3399,19 @@
   }
 
   function installSendInterceptHook() {
+    const ack = 'bcp-send-hook-' + crypto.randomUUID();
+    let confirmed = false;
+    const received = event => {
+      if (event.detail !== 'ready') return;
+      confirmed = true; sendHookState = 'ready';
+      document.removeEventListener(ack, received);
+      queueMicrotask(() => { updateLanguageMenu(); runImmediateSweep(); });
+    };
+    document.addEventListener(ack, received);
+    setTimeout(() => {
+      document.removeEventListener(ack, received);
+      if (!confirmed) { sendHookState = 'failed'; updateLanguageMenu(); runImmediateSweep(); }
+    }, 1500);
     const petSounds = Object.fromEntries(
       Object.entries(PETS).map(([key, item]) => [key, item.sound]),
     );
@@ -3273,12 +3421,13 @@
       defaultPet: CFG.defaultPet,
       length: CFG.sendInterceptMaskLength,
       petSounds,
+      ack,
     };
 
     const code = `(() => {
       const cfg = ${JSON.stringify(payload)};
-      if (window.__BCP_SEND_INTERCEPT_INSTALLED__) return;
-      window.__BCP_SEND_INTERCEPT_INSTALLED__ = true;
+      const acknowledge = () => document.dispatchEvent(new CustomEvent(cfg.ack, { detail: 'ready' }));
+      if (window.__BCP_SEND_INTERCEPT_INSTALLED__?.version === 2) { acknowledge(); return; }
 
       const targetReplyUrl = (url) => {
         const raw = String(url || '');
@@ -3342,20 +3491,31 @@
       };
 
       const nativeFetch = window.fetch;
+      let fetchReady = false, xhrReady = false;
       if (typeof nativeFetch === 'function') {
-        window.fetch = function bcpFetch(input, init) {
-          let nextInput = input;
-          let nextInit = init;
-
-          try {
-            const url = typeof input === 'string' ? input : input?.url;
-            if (targetReplyUrl(url) && init && Object.prototype.hasOwnProperty.call(init, 'body')) {
-              nextInit = { ...init, body: rewriteBody(init.body) };
-            }
-          } catch (_) {}
-
-          return nativeFetch.call(this, nextInput, nextInit);
+        const wrapped = async function bcpFetch(input, init) {
+          const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url;
+          if (!targetReplyUrl(url) || !isEnabled()) return nativeFetch.call(this, input, init);
+          const request = new Request(input instanceof Request ? input.clone() : input, init);
+          if (request.method !== 'POST' || !request.body) return nativeFetch.call(this, input, init);
+          const headers = new Headers(request.headers), type = headers.get('content-type') || '';
+          let body;
+          if (/multipart\\/form-data/i.test(type)) {
+            body = rewriteBody(await request.formData()); headers.delete('content-type');
+          } else if (/application\\/json/i.test(type)) {
+            const data = await request.json();
+            if (typeof data.message === 'string') data.message = maskText();
+            body = JSON.stringify(data);
+          } else if (!type || /urlencoded|text\\/plain/i.test(type)) {
+            body = rewriteBody(await request.text());
+          } else {
+            throw new Error('发送拦截无法识别当前正文格式，已停止这次请求。');
+          }
+          // Decode a clone once and submit once. Never retry the original body
+          // after parsing or network failure, which could expose unmasked text.
+          return nativeFetch.call(this, new Request(request, { headers, body }));
         };
+        window.fetch = wrapped; fetchReady = window.fetch === wrapped;
       }
 
       const proto = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
@@ -3377,7 +3537,9 @@
           } catch (_) {}
           return nativeSend.call(this, nextBody);
         };
+        xhrReady = proto.open.name === 'bcpOpen' && proto.send.name === 'bcpSend';
       }
+      if (fetchReady && xhrReady) { window.__BCP_SEND_INTERCEPT_INSTALLED__ = { version: 2 }; acknowledge(); }
     })();`;
 
     const script = document.createElement("script");
@@ -3465,14 +3627,12 @@
     if (!root || !root.querySelectorAll) return;
 
     if (root.nodeType === Node.ELEMENT_NODE && root.shadowRoot) {
-      observeRoot(root.shadowRoot);
-      enqueue(root.shadowRoot);
+      if (observeRoot(root.shadowRoot)) enqueue(root.shadowRoot);
     }
 
     for (const el of root.querySelectorAll("*")) {
       if (el.shadowRoot) {
-        observeRoot(el.shadowRoot);
-        enqueue(el.shadowRoot);
+        if (observeRoot(el.shadowRoot)) enqueue(el.shadowRoot);
       }
     }
   }
@@ -3516,17 +3676,39 @@
     const ROW = '.chat-item.danmaku-item[data-uid][data-danmaku]';
     const STORAGE_PREFIX = 'bcp.liveFollow.room.v2.';
     const MAX_TARGETS = 3, MAX_QUEUE = 12, MAX_QUEUE_AGE = 15000;
-    const MIN_INTERVAL = 2000, REPEAT_WINDOW = 15000, ACK_TIMEOUT = 8000;
+    const MIN_INTERVAL = 5000, REPEAT_WINDOW = 15000, ACK_TIMEOUT = 8000, MIN_TEXT_LENGTH = 3;
+    const LANGUAGES = {en: '英语', ja: '日语', ko: '韩语'};
+    const textSegmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, {granularity: 'grapheme'}) : null;
     const seen = new Map(), recentTexts = new Map(), watchedMenus = new WeakSet(), watchedRooms = new Set();
     let room = roomId(), settings = readSettings(room);
     let chat = null, chatObserver = null, awaitingRoom = false;
     let candidate = null, menuQueued = false, syncQueued = false;
-    let toolbarButton = null, panel = null, feedback = null, feedbackTimer = 0;
+    let toolbarButton = null, panel = null, feedback = null, feedbackTimer = 0, whitelistDialog = null;
     let randomTimer = 0, randomReady = false, randomDue = 0;
     let pending = null, session = 0, lastSentAt = -Infinity, pageActive = true;
     const sendQueue = [];
     let queueTimer = 0, canonicalRoom = null;
     let lastDetail = '', submitted = 0, acknowledged = 0;
+    const SENDER_ATTRIBUTE = 'data-caibao-auto-sender';
+    const sharedAutoSender = createSharedAutoSender();
+    function senderBlocked() {
+      const owner = document.documentElement?.getAttribute(SENDER_ATTRIBUTE);
+      return Boolean(owner && owner !== 'live-follow');
+    }
+    function syncSenderLease(value = settings) {
+      const root = document.documentElement;
+      if (value.targetEnabled || value.random) {
+        if (senderBlocked()) {
+          value.targetEnabled = false; value.random = false;
+          lastDetail = '请先关闭菜包直播同传的自动发送，再开启自动跟车。'; return false;
+        }
+        root?.setAttribute(SENDER_ATTRIBUTE, 'live-follow');
+      } else if (root?.getAttribute(SENDER_ATTRIBUTE) === 'live-follow') root.removeAttribute(SENDER_ATTRIBUTE);
+      return true;
+    }
+    syncSenderLease();
+    let externalController = null, externalReady = false, externalStatus = '', externalDialog = null, roomSelection = null;
+    const externalSeen = new Set();
     const COVER_COLORS = [['黑色', '#000000'], ['白色', '#ffffff'], ['蓝色', '#2563eb'], ['灰色', '#64748b'], ['粉色', '#f4a7b9']];
     const cover = {enabled: false, color: '#000000', image: '', name: '', locked: false,
       rect: {x: .55, y: .12, width: .35, height: .35}};
@@ -4111,36 +4293,47 @@
     function storageKey(id = room) { return STORAGE_PREFIX + id; }
     function validUid(uid) { return /^[1-9]\d*$/.test(uid || ''); }
     function ownUid() { return document.cookie.match(/(?:^|;\s*)DedeUserID=(\d+)(?:;|$)/)?.[1] || ''; }
+    function normalizePeople(people, limit = Infinity) {
+      const result = [], uids = new Set();
+      for (const person of Array.isArray(people) ? people : []) {
+        const uid = String(person?.uid || '');
+        if (!validUid(uid) || uids.has(uid)) continue;
+        uids.add(uid); result.push({uid, name: String(person.name || `用户 ${uid}`).slice(0, 120)});
+        if (result.length === limit) break;
+      }
+      return result;
+    }
     function normalizeSettings(raw) {
       try {
         const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
         // 兼容旧版仅有 target 的房间设置；空数组表示明确取消全部对象。
         const people = Array.isArray(value?.targets) ? value.targets : value?.target ? [value.target] : [];
-        const targets = [];
-        for (const person of people) {
-          const uid = String(person?.uid || '');
-          if (!validUid(uid) || targets.some(item => item.uid === uid)) continue;
-          targets.push({uid, name: String(person.name || `用户 ${uid}`).slice(0, 120)});
-          if (targets.length === MAX_TARGETS) break;
-        }
-        return {targets, random: targets.length === 0 && value?.random === true, disabled: value?.disabled === true};
-      } catch (_) { return {targets: [], random: false, disabled: false}; }
+        const targets = normalizePeople(people, MAX_TARGETS);
+        // 升级保留已锁定的对象，但旧配置必须显式开启后才跟车。
+        const targetEnabled = targets.length > 0 && value?.targetEnabled === true;
+        const externalRoom = validUid(String(value?.externalRoom || '')) ? String(value.externalRoom) : '';
+        return {targets, targetEnabled, random: !targetEnabled && value?.random === true,
+          externalRoom, externalEnabled: !targetEnabled && !!externalRoom && value?.externalEnabled === true,
+          foreignEnabled: value?.foreignEnabled === true, language: Object.hasOwn(LANGUAGES, value?.language) ? value.language : 'en',
+          whitelist: normalizePeople(value?.whitelist)};
+      } catch (_) { return normalizeSettings(null); }
     }
 
     function readSettings(id) {
       if (!id) return normalizeSettings(null);
+      const preferences = value => ({...normalizeSettings(value), targetEnabled: false, random: false});
       try {
         if (typeof GM_getValue === 'function') {
           const value = GM_getValue(storageKey(id), null);
-          if (value != null) return normalizeSettings(value);
+          if (value != null) return preferences(value);
         }
       } catch (_) {}
-      try { return normalizeSettings(localStorage.getItem(storageKey(id))); }
+      try { return preferences(localStorage.getItem(storageKey(id))); }
       catch (_) { return normalizeSettings(null); }
     }
     function saveSettings() {
       if (!room) return;
-      const value = JSON.stringify(settings);
+      const value = JSON.stringify({...settings, targetEnabled: false, random: false});
       let saved = false;
       try {
         if (typeof GM_setValue === 'function') { GM_setValue(storageKey(), value); saved = true; }
@@ -4157,15 +4350,23 @@
       });
     }
     function acceptSettings(value) {
-      const next = normalizeSettings(value);
+      const next = normalizeSettings({...normalizeSettings(value), targetEnabled: settings.targetEnabled, random: settings.random});
+      syncSenderLease(next);
       if (JSON.stringify(next) === JSON.stringify(settings)) return;
-      resetRuntime(); settings = next; baseline(); armRandom(); render(); queueMenu();
+      const modeChanged = ['random', 'targetEnabled', 'externalRoom', 'externalEnabled', 'foreignEnabled', 'language', 'targets']
+        .some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
+      if (modeChanged) resetRuntime();
+      settings = next;
+      if (modeChanged) { baseline(); syncExternal(); armRandom(); } else pruneWhitelisted();
+      render(); queueMenu();
     }
     function changeSettings(patch, detail) {
       if (checkRoom()) return;
+      const next = normalizeSettings({...settings, ...patch});
+      if (!syncSenderLease(next)) { tell(lastDetail); return; }
       resetRuntime();
-      settings = normalizeSettings({...settings, ...patch});
-      baseline(); saveSettings(); armRandom(); render(); queueMenu();
+      settings = next;
+      baseline(); saveSettings(); syncExternal(); armRandom(); render(); queueMenu();
       if (detail) tell(detail);
     }
     function clearPending() {
@@ -4174,36 +4375,187 @@
     }
     function resetRuntime() {
       session += 1;
+      sharedAutoSender.release();
+      stopExternal();
       clearTimeout(randomTimer); randomTimer = 0; randomReady = false; randomDue = 0;
       clearPending(); clearTimeout(queueTimer); queueTimer = 0; sendQueue.length = 0;
     }
     function effectiveRandom() {
-      return pageActive && !!room && !awaitingRoom && !!chat?.isConnected &&
-        settings.random && settings.targets.length === 0 && !settings.disabled;
+      return pageActive && !!room && !awaitingRoom && settings.random && !settings.targetEnabled &&
+        (settings.externalEnabled || !!chat?.isConnected);
     }
+    function isWhitelisted(uid) { return settings.whitelist.some(person => person.uid === uid); }
     function canSend(message, mode) {
-      if (!pageActive || roomId() !== room || awaitingRoom || settings.disabled) return false;
-      return mode === 'random' ? settings.random && settings.targets.length === 0 : settings.targets.some(person => person.uid === message.uid);
+      if (!pageActive || senderBlocked() || roomId() !== room || awaitingRoom || message.emoji || !hasMinimumText(message.plain)) return false;
+      return mode === 'random' ? settings.random && !settings.targetEnabled && !isWhitelisted(message.uid) &&
+        message.source === (settings.externalEnabled ? settings.externalRoom : room) && (!settings.externalEnabled || externalReady)
+        : settings.targetEnabled && message.source === room && settings.targets.some(person => person.uid === message.uid);
     }
     function armRandom() {
-      if (!effectiveRandom() || randomTimer || randomReady) return;
+      if (!effectiveRandom() || randomTimer || randomReady || externalController) return;
       const version = session, delay = 6000 + Math.floor(Math.random() * 9001);
       randomDue = Date.now() + delay;
       randomTimer = setTimeout(() => {
         randomTimer = 0; randomDue = 0;
         if (version !== session || checkRoom() || !effectiveRandom()) return;
-        randomReady = true; render();
+        if (settings.externalEnabled) void pollExternal(version, settings.externalRoom, true);
+        else { randomReady = true; render(); }
       }, delay);
       render();
     }
     function checkRoom() {
       const next = roomId();
       if (next === room) return false;
-      resetRuntime(); resetCover(); closeStyleEditor(false); restoreStyleTargets();
-      room = next; settings = readSettings(room); styleSettings = readStyleSettings(room); candidate = null; canonicalRoom = null;
+      resetRuntime(); resetCover(); closeStyleEditor(false); closeWhitelist(); closeExternalDialog(); restoreStyleTargets();
+      room = next; settings = readSettings(room); syncSenderLease(); styleSettings = readStyleSettings(room); candidate = null; canonicalRoom = null;
       awaitingRoom = !!chat; seen.clear(); submitted = acknowledged = 0; lastDetail = '';
-      baseline(); closePanel(); watchRoom(); watchStyleRoom(); syncStyle(); render(); queueMenu();
+      baseline(); closePanel(); watchRoom(); watchStyleRoom(); syncStyle(); syncExternal(); render(); queueMenu();
       return true;
+    }
+    function stopExternal() {
+      externalController?.abort(); externalController = null; externalReady = false; externalSeen.clear(); externalStatus = '';
+    }
+    function wantsExternal() {
+      return pageActive && !!room && !awaitingRoom && settings.random && settings.externalEnabled && !settings.targetEnabled;
+    }
+    function syncExternal() {
+      if (!wantsExternal() || externalController || externalReady || randomTimer) return;
+      // 开启时只读取一次以排除历史；之后完全跟随路怒模式的随机周期。
+      void pollExternal(session, settings.externalRoom);
+    }
+    async function pollExternal(version, source, selectMessage = false) {
+      if (version !== session || !wantsExternal() || source !== settings.externalRoom || externalController) return;
+      const controller = new AbortController(); externalController = controller;
+      const timeout = setTimeout(() => controller.abort(), 7000);
+      try {
+        const response = await fetch(`https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid=${encodeURIComponent(source)}`, {credentials: 'include', signal: controller.signal});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (result?.code !== 0 || !Array.isArray(result?.data?.room)) throw new Error('弹幕来源暂不可用');
+        if (controller.signal.aborted || version !== session || !wantsExternal()) return;
+        const first = !externalReady, candidates = [];
+        for (const item of result.data.room) {
+          const uid = String(item?.uid || ''), text = typeof item?.text === 'string' ? item.text.slice(0, 1000) : '';
+          if (!validUid(uid) || !text || typeof item.timeline !== 'string') continue;
+          const key = `${source}:${uid}:${item.timeline}:${text}`;
+          if (externalSeen.has(key)) continue;
+          externalSeen.add(key);
+          if (externalSeen.size > 1500) externalSeen.delete(externalSeen.values().next().value);
+          // 首次连接或断线恢复只建立基线，绝不把历史弹幕当成新弹幕。
+          if (!first && selectMessage) candidates.push({uid, text, plain: plainText(text), source,
+            emoji: Number(item.dm_type) === 1 || !!item.emoticon?.url, key});
+        }
+        externalReady = true; externalStatus = `直播间 ${source} · 每 6～15 秒抽取一条合格新弹幕`;
+        // 只选本次结果中最新的一条合格弹幕；其余记录已标记，不留到下一轮补发。
+        const selected = candidates.reverse().find(message => message.uid !== ownUid() && canSend(message, 'random'));
+        if (selected) { randomReady = true; consumeMessage(selected); }
+        randomReady = false; render();
+      } catch (_) {
+        if (version !== session || !wantsExternal()) return;
+        externalReady = false; externalSeen.clear();
+        clearTimeout(randomTimer); randomTimer = 0; randomReady = false; randomDue = 0;
+        for (let i = sendQueue.length - 1; i >= 0; i--) if (sendQueue[i].mode === 'random') sendQueue.splice(i, 1);
+        if (pending?.mode === 'random' && !pending.clicked) clearPending();
+        externalStatus = '外地车读取失败，下一随机周期重试；暂不跟发'; render();
+      } finally {
+        clearTimeout(timeout);
+        if (externalController === controller) externalController = null;
+        if (version === session && wantsExternal()) armRandom();
+      }
+    }
+    function parseExternalRoom(input) {
+      const value = String(input || '').trim();
+      if (/^[1-9]\d{0,19}$/.test(value)) return value;
+      try {
+        const url = new URL(value);
+        if (url.protocol !== 'https:' || url.hostname !== 'live.bilibili.com' || url.port || url.username || url.password) return '';
+        return url.pathname.match(/^\/(?:blanc\/)?([1-9]\d{0,19})\/?$/)?.[1] || '';
+      } catch (_) { return ''; }
+    }
+    async function setExternalRoom(input, signal) {
+      const source = parseExternalRoom(input);
+      if (!source) throw new Error('请输入正确的 B 站直播间号或 https://live.bilibili.com/ 直播间链接。');
+      const current = room;
+      const id = await lookupRoom(source, signal), own = await resolveRoom(signal);
+      if (signal?.aborted || current !== room || roomId() !== current) return false;
+      if (id === own) throw new Error('这是当前直播间，请添加其他直播间。');
+      changeSettings({externalRoom: id}, `已选择外地车直播间 ${id}；同时开启外地车与路怒模式后才会跟发。`);
+      return true;
+    }
+    function closeExternalDialog() {
+      roomSelection?.abort(); roomSelection = null;
+      externalDialog?.close(); externalDialog?.remove(); externalDialog = null;
+    }
+    function openExternalDialog() {
+      if (checkRoom() || !room) return;
+      if (externalDialog) return externalDialog.focus();
+      closePanel();
+      const dialog = document.createElement('dialog'); externalDialog = dialog; dialog.id = 'bcp-live-external-dialog';
+      dialog.setAttribute('aria-labelledby', 'bcp-live-external-title');
+      dialog.innerHTML = `<form><header><h2 id="bcp-live-external-title">外地车 · 添加直播间</h2><button type="button" data-bcp-external-close aria-label="关闭添加直播间">×</button></header><div class="bcp-external-body"><label for="bcp-external-room">直播间号或链接</label><input id="bcp-external-room" name="room" required autocomplete="off" maxlength="200" placeholder="例如 12345 或直播间链接"><p>仅保留一个直播间，保存会替换原选择。弹幕仍发送至当前直播间；同时开启外地车与路怒模式后生效。</p><p data-bcp-external-error role="status"></p></div><footer><button type="button" data-bcp-external-remove>移除直播间</button><button type="button" data-bcp-external-cancel>取消</button><button type="submit">保存直播间</button></footer></form>`;
+      dialog.querySelector('input').value = settings.externalRoom;
+      dialog.querySelector('[data-bcp-external-remove]').disabled = !settings.externalRoom;
+      for (const selector of ['[data-bcp-external-close]', '[data-bcp-external-cancel]']) dialog.querySelector(selector).addEventListener('click', closeExternalDialog);
+      dialog.querySelector('[data-bcp-external-remove]').addEventListener('click', () => {
+        changeSettings({externalRoom: '', externalEnabled: false}, '已移除外地车直播间，路怒模式使用本直播间弹幕。'); closeExternalDialog();
+      });
+      dialog.querySelector('form').addEventListener('submit', async event => {
+        event.preventDefault(); if (roomSelection) return;
+        const controller = new AbortController(); roomSelection = controller;
+        const timeout = setTimeout(() => controller.abort(), 8000), button = dialog.querySelector('[type="submit"]');
+        button.disabled = true; setText(button, '正在确认…');
+        setText(dialog.querySelector('[data-bcp-external-error]'), '');
+        try { if (await setExternalRoom(dialog.querySelector('input').value, controller.signal)) closeExternalDialog(); }
+        catch (problem) { if (externalDialog === dialog) setText(dialog.querySelector('[data-bcp-external-error]'), controller.signal.aborted ? '确认超时，请稍后重试。' : problem.message); }
+        finally { clearTimeout(timeout); if (roomSelection === controller) roomSelection = null; button.disabled = false; setText(button, '保存直播间'); }
+      });
+      dialog.addEventListener('cancel', event => { event.preventDefault(); closeExternalDialog(); });
+      const fullscreen = document.fullscreenElement;
+      (fullscreen && !['VIDEO', 'BWP-VIDEO'].includes(fullscreen.tagName) ? fullscreen : document.body).appendChild(dialog);
+      syncTheme(); dialog.showModal(); dialog.querySelector('input').focus();
+    }
+    const translationCache = new Map();
+    let translationBlockedUntil = 0;
+    function translationRequest(text, language, signal) {
+      return new Promise((resolve, reject) => {
+        if (typeof GM_xmlhttpRequest !== 'function') return reject(new Error('翻译需要脚本管理器授权，请更新安装此版本插件。'));
+        let request, settled = false;
+        const finish = (problem, value) => {
+          if (settled) return; settled = true; clearTimeout(timeout); signal.removeEventListener('abort', abort);
+          if (problem) reject(problem); else resolve(value);
+        };
+        const abort = () => { finish(new Error('翻译已取消')); request?.abort(); };
+        const timeout = setTimeout(() => { finish(new Error('翻译超时，本条不发送')); request?.abort(); }, 5000);
+        signal.addEventListener('abort', abort, {once: true});
+        if (signal.aborted) { abort(); return; }
+        try {
+          request = GM_xmlhttpRequest({method: 'GET', anonymous: true, timeout: 5000,
+            url: 'https://translate.googleapis.com/translate_a/single?' + new URLSearchParams({client: 'gtx', sl: 'auto', tl: language, dt: 't', q: text}),
+            onload: response => {
+              if (response.status === 429) translationBlockedUntil = Date.now() + 30000;
+              if (response.status !== 200) return finish(new Error(`翻译不可用（HTTP ${response.status}），本条不发送`));
+              try {
+                const result = JSON.parse(response.responseText);
+                const translated = Array.isArray(result?.[0]) ? result[0].map(part => typeof part?.[0] === 'string' ? part[0] : '').join('').trim() : '';
+                if (!translated || translated.length > 2000) throw new Error('翻译结果无效，本条不发送');
+                finish(null, translated);
+              } catch (_) { finish(new Error('翻译结果无效，本条不发送')); }
+            },
+            onerror: () => finish(new Error('无法连接 Google 翻译，本条不发送')),
+            ontimeout: () => finish(new Error('翻译超时，本条不发送')),
+            onabort: () => finish(new Error('翻译已取消'))});
+        } catch (problem) { finish(problem); }
+      });
+    }
+    async function translateText(text, language, signal) {
+      const key = `${language}:${text}`;
+      if (translationBlockedUntil > Date.now()) throw new Error('翻译服务限流，稍后再处理新弹幕');
+      if (translationCache.has(key)) return translationCache.get(key);
+      const translated = await translationRequest(text, language, signal);
+      if (signal.aborted) throw new Error('翻译已取消');
+      translationCache.set(key, translated);
+      if (translationCache.size > 100) translationCache.delete(translationCache.keys().next().value);
+      return translated;
     }
     function visible(el) {
       return Boolean(el?.isConnected && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
@@ -4227,8 +4579,8 @@
       feedbackTimer = setTimeout(() => { feedback.hidden = true; }, 3500);
     }
     function skip(detail) { lastDetail = `已跳过：${detail}`; render(); }
-    function pause(detail) {
-      changeSettings({disabled: true}, `${detail} 已开启当前直播间禁用，检查后可手动关闭禁用。`);
+    function finishFailedSend(detail) {
+      clearPending(); skip(`${detail} 本次不再重试，跟车保持开启。`); scheduleQueue();
     }
     function readRow(row) {
       if (!row.matches(ROW)) return null;
@@ -4242,10 +4594,17 @@
         const token = image.getAttribute('alt');
         if (token) plain = plain.split(token).join('');
       }
-      plain = plain.replace(/(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)/gu, '')
-        .replace(/[\u200D\uFE0F\uFE0E\u{E0020}-\u{E007F}]/gu, '').trim();
-      return {uid, text, plain, emoji, name: row.getAttribute('data-uname') || `用户 ${uid}`,
+      return {uid, text, plain: plainText(plain), emoji, source: room, name: row.getAttribute('data-uname') || `用户 ${uid}`,
         key: id ? `${uid}:id:${id}` : `${uid}:fallback:${ts}:${text}`};
+    }
+    function plainText(text) {
+      return text.replace(/(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)/gu, '')
+        .replace(/[\u200D\uFE0F\uFE0E\u{E0020}-\u{E007F}]/gu, '').trim();
+    }
+    function hasMinimumText(text) {
+      const visibleText = plainText(text).replace(/[\s\p{Cf}]/gu, '');
+      const characters = textSegmenter ? textSegmenter.segment(visibleText) : visibleText;
+      return Array.from(characters).length >= MIN_TEXT_LENGTH;
     }
     function remember(message) {
       if (seen.has(message.key)) return false;
@@ -4263,11 +4622,94 @@
       if (person.uid === ownUid()) return tell('不能跟随自己。');
       if (settings.targets.some(item => item.uid === person.uid)) return tell('已在跟车列表中。');
       if (settings.targets.length >= MAX_TARGETS) return tell('最多同时跟车 3 人，请先取消一位再添加。');
-      changeSettings({targets: [...settings.targets, {uid: person.uid, name: person.name}], random: false},
-        settings.disabled ? '已保存跟车对象；当前直播间仍处于禁用状态。' : `已添加跟车对象（${settings.targets.length + 1}/3），等待新的文字弹幕。`);
+      changeSettings({targets: [...settings.targets, {uid: person.uid, name: person.name}]},
+        settings.targetEnabled ? `已添加跟车对象（${settings.targets.length + 1}/3），继续跟车。` : `已锁定对象（${settings.targets.length + 1}/3），开启「我来同你玩」后才会跟车。`);
     }
     function removeTarget(uid) {
       changeSettings({targets: settings.targets.filter(person => person.uid !== uid)}, '已取消此用户的跟车，其他对象保持不变。');
+    }
+    function toggleTarget() {
+      if (!settings.targetEnabled && (settings.random || settings.externalEnabled || !settings.targets.length)) return;
+      changeSettings({targetEnabled: !settings.targetEnabled}, settings.targetEnabled ? '已暂停「我来同你玩」，锁定对象保留。' : '已开启「我来同你玩」，等待新的弹幕。');
+    }
+    function toggleRandom() {
+      if (settings.targetEnabled) return;
+      changeSettings({random: !settings.random}, '路怒模式设置已保存。');
+    }
+    function toggleExternal() {
+      if (settings.targetEnabled || !settings.externalRoom) return;
+      changeSettings({externalEnabled: !settings.externalEnabled}, settings.externalEnabled ? '已关闭外地车，路怒模式恢复读取本直播间的新弹幕。' : '已开启外地车；路怒模式开启时读取所选直播间。');
+    }
+    function pruneWhitelisted() {
+      for (let i = sendQueue.length - 1; i >= 0; i--) {
+        if (sendQueue[i].mode === 'random' && isWhitelisted(sendQueue[i].message.uid)) sendQueue.splice(i, 1);
+      }
+      // 请求已经发出就等待它结束；尚在确认房间的随机任务可以取消。
+      if (pending?.mode === 'random' && !pending.clicked && isWhitelisted(pending.uid)) clearPending();
+      scheduleQueue();
+    }
+    function updateWhitelist(people, detail) {
+      if (checkRoom()) return;
+      acceptSettings({...settings, whitelist: people}); saveSettings();
+      if (detail) tell(detail);
+    }
+    function addWhitelist(person) {
+      if (checkRoom() || awaitingRoom) return tell('直播间正在切换，请稍后重新选择。');
+      if (!person || !validUid(person.uid)) return tell('无法识别此用户的 UID。');
+      if (isWhitelisted(person.uid)) return tell('此用户已在当前直播间的白名单中。');
+      updateWhitelist([...settings.whitelist, person], '已添加至本直播间白名单，随机跟车会跳过此用户。');
+    }
+    function removeWhitelist(uid) {
+      updateWhitelist(settings.whitelist.filter(person => person.uid !== uid), '已从当前直播间白名单移除。');
+    }
+    function clearWhitelist() { updateWhitelist([], '已清空当前直播间白名单。'); }
+    function renderWhitelist() {
+      setText(panel.querySelector('[data-bcp-whitelist-open]'), `查看白名单（${settings.whitelist.length}）`);
+      if (!whitelistDialog) return;
+      const list = whitelistDialog.querySelector('[data-bcp-whitelist-list]'), signature = JSON.stringify(settings.whitelist);
+      setText(whitelistDialog.querySelector('[data-bcp-whitelist-total]'), `共 ${settings.whitelist.length} 人`);
+      whitelistDialog.querySelector('[data-bcp-whitelist-clear]').disabled = settings.whitelist.length === 0;
+      if (list.dataset.members === signature) return;
+      list.dataset.members = signature; list.replaceChildren();
+      if (!settings.whitelist.length) {
+        const empty = document.createElement('p'); empty.className = 'bcp-whitelist-empty';
+        empty.textContent = '白名单为空，可在弹幕用户菜单中添加。'; list.appendChild(empty);
+      }
+      for (const person of settings.whitelist) {
+        const item = document.createElement('div'); item.className = 'bcp-whitelist-person';
+        const identity = document.createElement('div'); identity.className = 'bcp-whitelist-identity';
+        const name = document.createElement('span'); name.textContent = person.name; name.title = person.name;
+        const uid = document.createElement('small'); uid.textContent = `UID ${person.uid}`;
+        const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '移除';
+        remove.dataset.bcpWhitelistRemove = person.uid; remove.setAttribute('aria-label', `移除白名单用户 ${person.name}`);
+        remove.addEventListener('click', () => {
+          removeWhitelist(person.uid);
+          (whitelistDialog?.querySelector('[data-bcp-whitelist-remove]') || whitelistDialog?.querySelector('[data-bcp-whitelist-done]'))?.focus();
+        });
+        identity.append(name, uid); item.append(identity, remove); list.appendChild(item);
+      }
+    }
+    function closeWhitelist() {
+      if (!whitelistDialog) return;
+      whitelistDialog.close(); whitelistDialog.remove(); whitelistDialog = null;
+    }
+    function openWhitelist() {
+      if (checkRoom() || !room) return;
+      if (whitelistDialog) return whitelistDialog.focus();
+      closePanel();
+      whitelistDialog = document.createElement('dialog'); whitelistDialog.id = 'bcp-live-whitelist-dialog';
+      whitelistDialog.setAttribute('aria-labelledby', 'bcp-live-whitelist-title');
+      whitelistDialog.innerHTML = `<header><div><h2 id="bcp-live-whitelist-title">当前直播间白名单</h2><small data-bcp-whitelist-room></small></div><button type="button" data-bcp-whitelist-close aria-label="关闭白名单">×</button></header><p class="bcp-whitelist-note">名单中的用户不会触发本直播间的随机跟车。</p><div data-bcp-whitelist-list></div><footer><span data-bcp-whitelist-total></span><button type="button" data-bcp-whitelist-clear>一键清空</button><button type="button" data-bcp-whitelist-done>完成</button></footer>`;
+      setText(whitelistDialog.querySelector('[data-bcp-whitelist-room]'), `房间 ${room} · 仅在本机保存`);
+      for (const selector of ['[data-bcp-whitelist-close]', '[data-bcp-whitelist-done]']) whitelistDialog.querySelector(selector).addEventListener('click', closeWhitelist);
+      whitelistDialog.querySelector('[data-bcp-whitelist-clear]').addEventListener('click', () => {
+        clearWhitelist(); whitelistDialog?.querySelector('[data-bcp-whitelist-done]')?.focus();
+      });
+      whitelistDialog.addEventListener('cancel', event => { event.preventDefault(); closeWhitelist(); });
+      const fullscreen = document.fullscreenElement;
+      (fullscreen && !['VIDEO', 'BWP-VIDEO'].includes(fullscreen.tagName) ? fullscreen : document.body).appendChild(whitelistDialog);
+      syncTheme(); renderWhitelist(); whitelistDialog.showModal();
+      whitelistDialog.querySelector('[data-bcp-whitelist-close]').focus();
     }
     function enqueueFollow(message, mode) {
       if (checkRoom() || !canSend(message, mode)) return;
@@ -4288,14 +4730,17 @@
         }
       }, Math.max(0, lastSentAt + MIN_INTERVAL - Date.now()));
     }
-    async function resolveRoom(signal) {
-      if (canonicalRoom?.source === room) return canonicalRoom.id;
-      const source = room;
+    async function lookupRoom(source, signal) {
       const response = await fetch(`https://api.live.bilibili.com/room/v1/Room/room_init?id=${encodeURIComponent(source)}`, {credentials: 'omit', signal});
-      if (!response.ok) throw new Error('无法确认当前直播间。');
+      if (!response.ok) throw new Error('无法确认直播间，请稍后重试。');
       const result = await response.json();
       const id = String(result?.data?.room_id || '');
-      if (result?.code !== 0 || !validUid(id)) throw new Error('无法确认当前直播间。');
+      if (result?.code !== 0 || !validUid(id)) throw new Error('直播间不存在或暂不可用。');
+      return id;
+    }
+    async function resolveRoom(signal) {
+      if (canonicalRoom?.source === room) return canonicalRoom.id;
+      const source = room, id = await lookupRoom(source, signal);
       if (source === room) canonicalRoom = {source, id};
       return id;
     }
@@ -4305,36 +4750,48 @@
     }
     async function sendRepeat(message, mode) {
       if (checkRoom() || !canSend(message, mode) || pending) return;
-      if (!validUid(ownUid())) return pause('登录状态不可用。');
+      if (!validUid(ownUid())) return skip('登录状态不可用，跟车设置保留，登录后会继续处理新弹幕。');
       if (message.uid === ownUid()) return;
-      const text = mode === 'random' ? message.plain : message.text;
+      let text = settings.foreignEnabled || mode === 'random' ? message.plain : message.text;
       if (message.emoji || !text.trim()) return skip('表情或空内容。');
       const now = Date.now();
       for (const [key, at] of recentTexts) if (now - at >= REPEAT_WINDOW) recentTexts.delete(key);
-      const repeatKey = `${room}:${text}`;
+      const repeatKey = `${room}:source:${settings.foreignEnabled ? settings.language : 'original'}:${text}`;
       if (recentTexts.has(repeatKey)) return skip('15 秒内已跟发过相同内容。');
       const {input} = controls();
       if (!input) return skip('弹幕发送控件尚不可用。');
       if (disabled(input) || input.readOnly) return skip('网页暂不允许发送。');
-      if (input.maxLength > 0 && text.length > input.maxLength) return skip('内容超过输入框字数限制。');
       const csrf = document.cookie.match(/(?:^|;\s*)bili_jct=([^;]+)(?:;|$)/)?.[1] || '';
-      if (!csrf) return pause('登录校验不可用，请重新登录直播间。');
+      if (!csrf) return skip('登录校验不可用，跟车设置保留，请重新登录直播间。');
       // 独立请求不触碰网页输入框：草稿、选区、焦点和中文输入法状态均保持原样。
-      const version = session, flight = {text, timer: 0, clicked: false, controller: new AbortController()};
+      const version = session, flight = {text, uid: message.uid, mode, timer: 0, clicked: false, controller: new AbortController()};
       pending = flight;
       flight.timer = setTimeout(() => {
-        if (pending === flight) pause('发送或回显确认超过 8 秒，不自动重试。');
+        if (pending === flight) finishFailedSend('发送或回显确认超过 8 秒。');
       }, ACK_TIMEOUT);
       try {
+        if (settings.foreignEnabled) {
+          text = await translateText(text, settings.language, flight.controller.signal);
+          if (version !== session || pending !== flight || !canSend(message, mode)) return;
+          flight.text = text;
+        }
+        if (!hasMinimumText(text)) throw new Error('文字不足 3 个字符，本条不发送。');
+        if (input.maxLength > 0 && text.length > input.maxLength) throw new Error('内容超过输入框字数限制，本条不发送。');
+        const sentKey = `${room}:${text}`;
+        if (recentTexts.has(sentKey)) throw new Error('15 秒内已跟发过相同内容。');
         const id = await resolveRoom(flight.controller.signal);
         if (version !== session || pending !== flight || !canSend(message, mode)) {
           if (pending === flight) clearPending(); return;
         }
         const body = new URLSearchParams({bubble: '0', msg: text, color: '16777215', mode: '1', fontsize: '25',
           rnd: String(Math.floor(Date.now() / 1000)), roomid: id, csrf, csrf_token: csrf});
-        lastSentAt = Date.now(); recentTexts.set(repeatKey, lastSentAt); submitted += 1; flight.clicked = true;
-        const response = await fetch('https://api.live.bilibili.com/msg/send', {
-          method: 'POST', credentials: 'include', body, signal: flight.controller.signal,
+        const senderUid = ownUid();
+        const response = await sharedAutoSender.send({uid: senderUid, room: id, text,
+          isCurrent: () => senderUid === ownUid() && version === session && pending === flight && canSend(message, mode)}, () => {
+          lastSentAt = Date.now(); recentTexts.set(repeatKey, lastSentAt); recentTexts.set(sentKey, lastSentAt); submitted += 1; flight.clicked = true;
+          return fetch('https://api.live.bilibili.com/msg/send', {
+            method: 'POST', credentials: 'include', body, signal: flight.controller.signal,
+          });
         });
         if (version !== session || pending !== flight) return;
         if (!response.ok) throw new Error(`发送请求失败（HTTP ${response.status}）。`);
@@ -4344,7 +4801,7 @@
         lastDetail = '已提交，等待本人的弹幕回显。'; render();
       } catch (problem) {
         if (version !== session || pending !== flight) return;
-        pause(`自动发送未完成：${problem instanceof Error ? problem.message : '网络或权限异常。'}`);
+        finishFailedSend(`自动发送未完成：${problem instanceof Error ? problem.message : '网络或权限异常。'}`);
       }
     }
 
@@ -4354,10 +4811,13 @@
       if (pending?.clicked && message.uid === ownUid() && message.text === pending.text) {
         clearPending(); acknowledged += 1; lastDetail = '已看到本人的弹幕回显。'; render(); scheduleQueue();
       }
-      if (settings.disabled || awaitingRoom || !validUid(message.uid) || message.uid === ownUid()) return;
-      if (settings.targets.length) {
+      consumeMessage(message);
+    }
+    function consumeMessage(message) {
+      if (awaitingRoom || !validUid(message.uid) || message.uid === ownUid()) return;
+      if (settings.targetEnabled && message.source === room) {
         if (settings.targets.some(person => person.uid === message.uid)) enqueueFollow(message, 'target');
-      } else if (effectiveRandom() && randomReady) {
+      } else if (effectiveRandom() && randomReady && canSend(message, 'random')) {
         // 一次到点只消费下一条他人弹幕；跳过或失败也不积压。
         randomReady = false; enqueueFollow(message, 'random'); armRandom();
       }
@@ -4384,7 +4844,7 @@
       baseline();
       chatObserver.observe(chat, {childList: true, subtree: true, attributes: true,
         attributeFilter: ['data-uid', 'data-danmaku', 'data-id_str', 'data-id', 'data-ts']});
-      armRandom(); render();
+      syncExternal(); armRandom(); render();
     }
 
     function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -4410,19 +4870,28 @@
         }
       }
       const random = panel.querySelector('[data-bcp-random]');
-      const disable = panel.querySelector('[data-bcp-disable]');
-      random.disabled = people.length > 0;
+      random.disabled = settings.targetEnabled;
       random.setAttribute('aria-checked', String(settings.random));
-      random.title = people.length ? '请先取消「我来同你玩」中的对象' : '每次随机等待 6～15 秒，再跟发下一条弹幕的纯文字';
-      disable.setAttribute('aria-checked', String(settings.disabled));
+      random.title = settings.targetEnabled ? '请先关闭「我来同你玩」' : '每次随机等待 6～15 秒，选取一条至少 3 个字符的合格新弹幕';
       setText(random.querySelector('.bcp-switch-word'), settings.random ? '开' : '关');
-      setText(disable.querySelector('.bcp-switch-word'), settings.disabled ? '开' : '关');
-      const mode = settings.disabled ? 'disabled' : people.length ? 'target' : settings.random ? 'random' : 'off';
+      const toggle = (selector, checked, disabled = false) => {
+        const button = panel.querySelector(selector); button.disabled = disabled;
+        button.setAttribute('aria-checked', String(checked)); setText(button.querySelector('.bcp-switch-word'), checked ? '开' : '关');
+      };
+      toggle('[data-bcp-target-toggle]', settings.targetEnabled, !settings.targetEnabled && (!people.length || settings.random || settings.externalEnabled));
+      panel.querySelector('[data-bcp-target-toggle]').title = settings.random || settings.externalEnabled ? '请先关闭路怒模式和外地车' : people.length ? '关闭后保留锁定对象' : '先在弹幕用户菜单中锁定对象';
+      toggle('[data-bcp-external-toggle]', settings.externalEnabled, settings.targetEnabled || !settings.externalRoom);
+      toggle('[data-bcp-foreign-toggle]', settings.foreignEnabled);
+      setText(panel.querySelector('[data-bcp-external-open]'), settings.externalRoom ? `直播间 ${settings.externalRoom}` : '添加直播间');
+      setText(panel.querySelector('[data-bcp-external-status]'), settings.targetEnabled ? '请先关闭「我来同你玩」后使用外地车' : !settings.externalRoom ? '选择一个其他直播间作为弹幕来源' : !settings.externalEnabled ? '当前来源：本直播间' : !settings.random ? '外地车已待命，开启路怒模式后生效' : externalStatus || '正在连接外地车直播间…');
+      panel.querySelector('[data-bcp-foreign-language]').value = settings.language;
+      setText(panel.querySelector('[data-bcp-follow-detail]'), lastDetail);
+      const mode = settings.targetEnabled ? 'target' : settings.random ? 'random' : 'off';
       toolbarButton.dataset.mode = mode;
-      panel.dataset.disabled = String(settings.disabled);
-      const summary = settings.disabled ? '当前直播间已禁用跟车' : people.length ? `跟车（${people.length}/3）：${people.map(person => person.name).join('、')}`
-        : settings.random ? (randomReady ? '路怒模式（随机车）：等待下一条弹幕' : '路怒模式（随机车）：等待 6～15 秒') : '跟车设置：暂无跟车对象';
+      const summary = settings.targetEnabled ? `跟车（${people.length}/3）：${people.map(person => person.name).join('、')}`
+        : settings.random ? `路怒模式（${settings.externalEnabled ? '外地车 ' + settings.externalRoom : '本直播间'}）：${randomReady ? '等待下一条弹幕' : '等待中'}` : `跟车已关闭 · 已锁定 ${people.length}/3 人`;
       toolbarButton.title = `${summary}\n房间 ${room} · 已提交 ${submitted} / 已回显 ${acknowledged}${lastDetail ? '\n' + lastDetail : ''}`;
+      renderWhitelist();
       renderCoverControls();
       renderStyleControls();
       if (!panel.hidden) positionPanel();
@@ -4460,6 +4929,8 @@
       }
       panel.classList.toggle('bcp-live-dark', dark);
       feedback.classList.toggle('bcp-live-dark', dark);
+      whitelistDialog?.classList.toggle('bcp-live-dark', dark);
+      externalDialog?.classList.toggle('bcp-live-dark', dark);
     }
     function mountToolbar() {
       const toolbar = document.querySelector('#control-panel-ctnr-box .control-panel-icon-row .icon-left-part');
@@ -4473,16 +4944,15 @@
         #bcp-live-toolbar-button{display:inline-flex!important;position:relative;vertical-align:middle;align-items:center;justify-content:center;flex-shrink:0;width:28px;height:30px;margin:0 0 0 8px;padding:2px;border:0;border-radius:5px;background:transparent;color:#c9ccd0;cursor:pointer;box-sizing:border-box;line-height:1;transition:background .15s,color .15s}
         #bcp-live-toolbar-button:hover,#bcp-live-toolbar-button[aria-expanded="true"]{background:#00aeec16;color:#00aeec}
         #bcp-live-toolbar-button svg{display:block;width:24px;height:24px;pointer-events:none}
-        #bcp-live-toolbar-button:focus-visible,#bcp-live-panel button:focus-visible{outline:2px solid #00aeec;outline-offset:2px}
+        #bcp-live-toolbar-button:focus-visible,#bcp-live-panel button:focus-visible,#bcp-live-whitelist-dialog button:focus-visible{outline:2px solid #00aeec;outline-offset:2px}
         #bcp-live-toolbar-button[data-mode="target"]{color:#00aeec}
         #bcp-live-toolbar-button[data-mode="random"]{color:#8d6ce8}
-        #bcp-live-toolbar-button[data-mode="disabled"]{color:#f85a7c}
         #bcp-live-toolbar-button::after{content:"";display:none;position:absolute;width:5px;height:5px;right:1px;top:1px;border-radius:50%;background:currentColor}
         #bcp-live-toolbar-button:not([data-mode="off"])::after{display:block}
-        #bcp-live-panel,#bcp-live-feedback{--bcp-bg:#fff;--bcp-fg:#61666d;--bcp-sub:#9499a0;--bcp-line:#e3e5e7;position:fixed;z-index:2147483646;box-sizing:border-box;background:var(--bcp-bg);color:var(--bcp-fg);border:1px solid var(--bcp-line);border-radius:8px;box-shadow:0 4px 20px #00000024;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-align:left}
+        #bcp-live-panel,#bcp-live-feedback,#bcp-live-whitelist-dialog{--bcp-bg:#fff;--bcp-fg:#61666d;--bcp-sub:#9499a0;--bcp-line:#e3e5e7;position:fixed;z-index:2147483646;box-sizing:border-box;background:var(--bcp-bg);color:var(--bcp-fg);border:1px solid var(--bcp-line);border-radius:8px;box-shadow:0 4px 20px #00000024;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-align:left}
         #bcp-live-panel{z-index:2147483647;padding:2px 12px;max-height:calc(100vh - 16px);overflow-y:auto;overscroll-behavior:contain}
         #bcp-live-panel[hidden],#bcp-live-feedback[hidden],#bcp-live-panel [hidden]{display:none!important}
-        #bcp-live-panel.bcp-live-dark,#bcp-live-feedback.bcp-live-dark{--bcp-bg:#24282f;--bcp-fg:#e3e5e7;--bcp-sub:#a0a5ad;--bcp-line:#3a4049}
+        #bcp-live-panel.bcp-live-dark,#bcp-live-feedback.bcp-live-dark,#bcp-live-whitelist-dialog.bcp-live-dark{--bcp-bg:#24282f;--bcp-fg:#e3e5e7;--bcp-sub:#a0a5ad;--bcp-line:#3a4049}
         #bcp-live-panel .bcp-live-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:8px 0}
         #bcp-live-panel .bcp-live-row+.bcp-live-row{border-top:1px solid var(--bcp-line)}
         #bcp-live-panel .bcp-live-label{white-space:nowrap;flex-shrink:0;font-weight:400}
@@ -4503,10 +4973,49 @@
         #bcp-live-panel .bcp-live-switch[aria-checked="true"]{color:#00aeec}
         #bcp-live-panel .bcp-live-switch[aria-checked="true"] .bcp-switch-track{background:#00aeec}
         #bcp-live-panel .bcp-live-switch[aria-checked="true"] .bcp-switch-track::after{transform:translateX(12px)}
-        #bcp-live-panel [data-bcp-disable][aria-checked="true"]{color:#f45b79}
-        #bcp-live-panel [data-bcp-disable][aria-checked="true"] .bcp-switch-track{background:#f45b79}
         #bcp-live-panel .bcp-live-switch:disabled{opacity:.42;cursor:not-allowed}
-        #bcp-live-panel[data-disabled="true"] .bcp-live-targets .bcp-live-label{color:var(--bcp-sub)}
+        #bcp-live-panel .bcp-live-note{margin:0;padding:0 0 10px;font-size:11px;color:var(--bcp-sub);overflow-wrap:anywhere}
+        #bcp-live-panel .bcp-live-note:empty{display:none}
+        #bcp-live-panel .bcp-live-note+.bcp-live-row{border-top:1px solid var(--bcp-line)}
+        #bcp-live-panel .bcp-live-option,#bcp-live-panel select{border:1px solid var(--bcp-line);border-radius:5px;padding:4px 8px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer;min-width:0;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto}
+        #bcp-live-panel select{margin-right:8px}
+        #bcp-live-panel select:focus-visible,#bcp-live-external-dialog :is(button,input):focus-visible{outline:2px solid #00aeec;outline-offset:2px}
+        #bcp-live-external-dialog{--bcp-bg:#fff;--bcp-fg:#61666d;--bcp-sub:#9499a0;--bcp-line:#e3e5e7;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;overflow:auto;box-sizing:border-box;border:1px solid var(--bcp-line);border-radius:8px;background:var(--bcp-bg);color:var(--bcp-fg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+        #bcp-live-external-dialog.bcp-live-dark{--bcp-bg:#24282f;--bcp-fg:#e3e5e7;--bcp-sub:#a0a5ad;--bcp-line:#3a4049}
+        #bcp-live-external-dialog::backdrop{background:#0a152c70}
+        #bcp-live-external-dialog header,#bcp-live-external-dialog footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--bcp-line)}
+        #bcp-live-external-dialog h2{font-size:17px;margin:0}
+        #bcp-live-external-dialog button{border:1px solid var(--bcp-line);border-radius:5px;padding:5px 9px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer}
+        #bcp-live-external-dialog button:disabled{opacity:.5;cursor:default}
+        #bcp-live-external-dialog [data-bcp-external-close]{border:0;font-size:25px;line-height:1}
+        #bcp-live-external-dialog .bcp-external-body{padding:14px 16px}
+        #bcp-live-external-dialog input{box-sizing:border-box;width:100%;margin:8px 0;border:1px solid var(--bcp-line);border-radius:5px;padding:8px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit}
+        #bcp-live-external-dialog p{margin:6px 0;font-size:12px;color:var(--bcp-sub)}
+        #bcp-live-external-dialog [data-bcp-external-error]{color:#f45b79}
+        #bcp-live-external-dialog footer{border-bottom:0;border-top:1px solid var(--bcp-line);flex-wrap:wrap;justify-content:flex-end}
+        #bcp-live-external-dialog [type="submit"]{background:#00aeec;color:#fff;border-color:#00aeec}
+        #bcp-live-panel [data-bcp-whitelist-open]{border:1px solid var(--bcp-line);border-radius:5px;padding:4px 9px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer}
+        #bcp-live-whitelist-dialog{inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;overflow:hidden;z-index:2147483647}
+        #bcp-live-whitelist-dialog[open]{display:flex;flex-direction:column}
+        #bcp-live-whitelist-dialog::backdrop{background:#0a152c70}
+        #bcp-live-whitelist-dialog header,#bcp-live-whitelist-dialog footer{display:flex;align-items:center;gap:10px;padding:14px 16px;flex-shrink:0}
+        #bcp-live-whitelist-dialog header{justify-content:space-between;border-bottom:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog h2{margin:0 0 3px;font-size:17px;line-height:1.5;color:var(--bcp-fg)}
+        #bcp-live-whitelist-dialog small,#bcp-live-whitelist-dialog footer>span{font-size:11px;color:var(--bcp-sub)}
+        #bcp-live-whitelist-dialog button{border:1px solid var(--bcp-line);border-radius:5px;padding:5px 9px;background:var(--bcp-bg);color:var(--bcp-fg);font:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0}
+        #bcp-live-whitelist-dialog button:hover,#bcp-live-panel [data-bcp-whitelist-open]:hover{background:#00aeec12}
+        #bcp-live-whitelist-dialog button:disabled{opacity:.4;cursor:default}
+        #bcp-live-whitelist-dialog [data-bcp-whitelist-close]{border:0;font-size:25px;line-height:1;padding:5px}
+        #bcp-live-whitelist-dialog .bcp-whitelist-note{margin:0;padding:12px 16px;color:var(--bcp-sub);font-size:12px}
+        #bcp-live-whitelist-dialog [data-bcp-whitelist-list]{padding:0 16px;overflow-y:auto;overscroll-behavior:contain;min-height:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-empty{margin:20px 0 28px;text-align:center;color:var(--bcp-sub)}
+        #bcp-live-whitelist-dialog .bcp-whitelist-person{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog .bcp-whitelist-person:last-child{border-bottom:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity{display:flex;flex-direction:column;gap:2px;min-width:0}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        #bcp-live-whitelist-dialog .bcp-whitelist-identity small{overflow-wrap:anywhere}
+        #bcp-live-whitelist-dialog footer{border-top:1px solid var(--bcp-line)}
+        #bcp-live-whitelist-dialog footer>span{flex:1}
         #bcp-live-panel .bcp-cover-options{border-top:1px solid var(--bcp-line);padding:12px 0;display:flex;flex-wrap:wrap;gap:9px;align-items:center}
         #bcp-live-panel .bcp-cover-colors{display:flex;gap:6px}
         #bcp-live-panel [data-bcp-cover-color]{width:26px;height:26px;padding:0;border-radius:50%;border:1px solid var(--bcp-line);background:var(--bcp-swatch);cursor:pointer;box-sizing:border-box}
@@ -4582,8 +5091,9 @@
         @media(max-width:640px){#bcp-live-style-dialog .bcp-style-body{grid-template-columns:minmax(0,1fr);gap:18px;padding:14px}#bcp-live-style-dialog .bcp-style-preview-pane{position:static}#bcp-live-style-dialog header,#bcp-live-style-dialog footer{padding:12px 14px}#bcp-live-style-dialog .bcp-style-preview-stage{min-height:130px}#bcp-live-style-dialog h2{font-size:17px}}
         @media(hover:none){#bcp-live-cover .bcp-cover-tools,#bcp-live-cover [data-bcp-cover-handle]{opacity:1}}
         #bcp-live-feedback{padding:9px 12px;font-size:12px;z-index:2147483647;pointer-events:none}
-        .danmaku-menu [data-bcp-live-follow]{display:block;width:100%;box-sizing:border-box;text-align:left;padding:11px 12px;border:0;border-top:1px solid #e3e5e7;background:transparent;color:#00aeec;font:inherit;cursor:pointer}
-        .danmaku-menu [data-bcp-live-follow]:hover{background:#00aeec12}
+        .danmaku-menu [data-bcp-live-follow],.danmaku-menu [data-bcp-live-whitelist]{display:block;width:100%;box-sizing:border-box;text-align:left;padding:11px 12px;border:0;border-top:1px solid #e3e5e7;background:transparent;color:#00aeec;font:inherit;cursor:pointer}
+        .danmaku-menu [data-bcp-live-follow]:hover,.danmaku-menu [data-bcp-live-whitelist]:hover{background:#00aeec12}
+        .danmaku-menu [data-bcp-live-whitelist]:disabled{color:#9499a0;cursor:default}
       `;
       document.head.appendChild(style);
       toolbarButton = document.createElement('button');
@@ -4598,9 +5108,14 @@
       panel = document.createElement('div'); panel.id = 'bcp-live-panel'; panel.hidden = true;
       panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', '当前直播间跟车设置');
       panel.innerHTML = `
-        <div class="bcp-live-row bcp-live-targets"><span class="bcp-live-label">我来同你玩 <small data-bcp-target-count>0/3</small></span><div class="bcp-live-people" data-bcp-people></div></div>
+        <div class="bcp-live-row"><span class="bcp-live-label">我来同你玩 <small data-bcp-target-count>0/3</small></span><button type="button" class="bcp-live-switch" data-bcp-target-toggle role="switch" aria-label="我来同你玩" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
+        <div class="bcp-live-row bcp-live-targets"><span class="bcp-live-label">锁定对象</span><div class="bcp-live-people" data-bcp-people></div></div>
+        <p class="bcp-live-note">所有跟车模式：至少 3 个字符 · 共用 5 秒发送冷却</p>
         <div class="bcp-live-row"><span class="bcp-live-label">开启路怒模式（随机车）</span><button type="button" class="bcp-live-switch" data-bcp-random role="switch" aria-label="开启路怒模式（随机车）" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
-        <div class="bcp-live-row"><span class="bcp-live-label">当前直播间禁用跟车：</span><button type="button" class="bcp-live-switch" data-bcp-disable role="switch" aria-label="当前直播间禁用跟车" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
+        <div class="bcp-live-row"><span class="bcp-live-label">外地车</span><button type="button" class="bcp-live-option" data-bcp-external-open>添加直播间</button><button type="button" class="bcp-live-switch" data-bcp-external-toggle role="switch" aria-label="外地车" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div><p class="bcp-live-note" data-bcp-external-status role="status"></p>
+        <div class="bcp-live-row"><span class="bcp-live-label">外国车</span><select data-bcp-foreign-language aria-label="外国车目标语言"><option value="en">英语</option><option value="ja">日语</option><option value="ko">韩语</option></select><button type="button" class="bcp-live-switch" data-bcp-foreign-toggle role="switch" aria-label="外国车" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div><p class="bcp-live-note">需叠加「我来同你玩」或路怒模式，单独开启不发送。选中弹幕交给 Google 翻译；翻译失败、译文不足 3 个字符或超长则跳过。</p>
+        <div class="bcp-live-row"><span class="bcp-live-label">白名单</span><button type="button" data-bcp-whitelist-open>查看白名单（0）</button></div>
+        <p class="bcp-live-note" data-bcp-follow-detail role="status"></p>
         <div class="bcp-live-row"><span class="bcp-live-label">托管</span><button type="button" class="bcp-live-switch" data-bcp-cover-toggle role="switch" aria-label="托管" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div>
         <div class="bcp-cover-options"><div class="bcp-cover-colors" aria-label="托管纯色"></div><label class="bcp-cover-upload">选择图片<input type="file" data-bcp-cover-file aria-label="选择托管图片" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp"></label><p data-bcp-cover-status></p><p data-bcp-cover-filename></p></div>
         <div class="bcp-live-row"><span class="bcp-live-label">调整画面风格</span><button type="button" class="bcp-style-preset" data-bcp-style-preset>预设样式</button><button type="button" class="bcp-live-switch" data-bcp-style-toggle role="switch" aria-label="调整画面风格" aria-checked="false"><span class="bcp-switch-track" aria-hidden="true"></span><span class="bcp-switch-word">关</span></button></div><p class="bcp-style-state" data-bcp-style-state></p>`;
@@ -4620,12 +5135,13 @@
       panel.querySelector('[data-bcp-cover-file]').addEventListener('change', event => {
         const file = event.target.files?.[0]; event.target.value = ''; void chooseCoverFile(file);
       });
-      panel.querySelector('[data-bcp-random]').addEventListener('click', () => {
-        if (settings.targets.length) return;
-        changeSettings({random: !settings.random}, settings.disabled ? '设置已保存；当前直播间仍处于禁用状态。' : '路怒模式设置已保存。');
-      });
-      panel.querySelector('[data-bcp-disable]').addEventListener('click', () => changeSettings({disabled: !settings.disabled},
-        settings.disabled ? '已解除当前直播间禁用。' : '当前直播间已禁用跟车，指定对象和随机设置仍保留。'));
+      panel.querySelector('[data-bcp-target-toggle]').addEventListener('click', toggleTarget);
+      panel.querySelector('[data-bcp-random]').addEventListener('click', toggleRandom);
+      panel.querySelector('[data-bcp-external-toggle]').addEventListener('click', toggleExternal);
+      panel.querySelector('[data-bcp-external-open]').addEventListener('click', openExternalDialog);
+      panel.querySelector('[data-bcp-foreign-toggle]').addEventListener('click', () => changeSettings({foreignEnabled: !settings.foreignEnabled}, '外国车设置已保存。'));
+      panel.querySelector('[data-bcp-foreign-language]').addEventListener('change', event => changeSettings({language: event.target.value}, '翻译语言已更新，将用于后续新弹幕。'));
+      panel.querySelector('[data-bcp-whitelist-open]').addEventListener('click', openWhitelist);
       feedback = document.createElement('div'); feedback.id = 'bcp-live-feedback'; feedback.hidden = true;
       feedback.setAttribute('role', 'status');
       document.body.append(panel, feedback); mountToolbar(); render();
@@ -4642,9 +5158,10 @@
           new MutationObserver(queueMenu).observe(menu, {attributes: true, attributeFilter: ['style', 'class']});
         }
         let button = menu.querySelector('[data-bcp-live-follow]');
-        if (!candidate || !visible(menu) || Date.now() - candidate.at > 30000) { button?.remove(); continue; }
+        let whitelistButton = menu.querySelector('[data-bcp-live-whitelist]');
+        if (!candidate || !visible(menu) || Date.now() - candidate.at > 30000) { button?.remove(); whitelistButton?.remove(); continue; }
         const menuUid = menu.querySelector('.go-space a[href]')?.getAttribute('href')?.match(/space\.bilibili\.com\/(\d+)/)?.[1];
-        if (menuUid && menuUid !== candidate.uid) { button?.remove(); continue; }
+        if (menuUid && menuUid !== candidate.uid) { button?.remove(); whitelistButton?.remove(); continue; }
         if (!button) {
           button = document.createElement('button'); button.type = 'button'; button.setAttribute('data-bcp-live-follow', '1');
           button.addEventListener('click', () => {
@@ -4655,20 +5172,28 @@
           });
           (menu.querySelector('.none-select') || menu).appendChild(button);
         }
+        if (!whitelistButton) {
+          whitelistButton = document.createElement('button'); whitelistButton.type = 'button'; whitelistButton.setAttribute('data-bcp-live-whitelist', '1');
+          whitelistButton.addEventListener('click', () => { addWhitelist(candidate); candidate = null; queueMenu(); });
+          button.after(whitelistButton);
+        }
         const selected = settings.targets.some(person => person.uid === candidate.uid);
         button.disabled = !selected && settings.targets.length >= MAX_TARGETS;
-        setText(button, selected ? '取消跟车' : settings.targets.length >= MAX_TARGETS ? '跟车已满（3/3）' : '一键跟车');
-        button.title = `指定 ${candidate.name}（UID ${candidate.uid}）${settings.disabled ? '，当前房间禁用中' : ''}`;
+        setText(button, selected ? '取消跟车' : settings.targets.length >= MAX_TARGETS ? '跟车已满（3/3）' : '锁定跟车对象');
+        button.title = `指定 ${candidate.name}（UID ${candidate.uid}）`;
+        whitelistButton.disabled = isWhitelisted(candidate.uid);
+        setText(whitelistButton, whitelistButton.disabled ? '已在白名单中' : '添加至白名单');
+        whitelistButton.title = `${candidate.name}（UID ${candidate.uid}）· 仅跳过本直播间随机跟车`;
       }
     }
     function syncPage() {
-      checkRoom(); bindChat(); mountToolbar(); syncCover(); syncStyle();
+      checkRoom(); bindChat(); mountToolbar(); syncCover(); syncStyle(); syncExternal();
       // SPA 若复用弹幕容器，只在页面明确显示新房间号后恢复，避免跟发旧房间内容。
       if (awaitingRoom) {
         for (const node of document.querySelectorAll('#control-panel-ctnr-box [data-report]')) {
           try {
             if (String(JSON.parse(node.getAttribute('data-report')).room_id) === room) {
-              baseline(); awaitingRoom = false; armRandom(); break;
+              baseline(); awaitingRoom = false; syncExternal(); armRandom(); break;
             }
           } catch (_) {}
         }
@@ -4685,7 +5210,7 @@
       }).observe(document.body, {childList: true, subtree: true});
       document.addEventListener('click', event => {
         const el = event.target instanceof Element ? event.target : event.target?.parentElement;
-        if (el?.closest('#bcp-live-panel,#bcp-live-style-dialog,#bcp-live-toolbar-button,[data-bcp-live-follow]')) return;
+        if (el?.closest('#bcp-live-panel,#bcp-live-style-dialog,#bcp-live-whitelist-dialog,#bcp-live-external-dialog,#bcp-live-toolbar-button,[data-bcp-live-follow],[data-bcp-live-whitelist]')) return;
         closePanel();
         const row = el?.closest(ROW);
         if (row && chat?.contains(row)) {
@@ -4700,11 +5225,11 @@
         if (event.key === storageKey()) acceptSettings(event.newValue);
         if (event.key === STYLE_PREFIX + room) acceptStyleSettings(event.newValue);
       });
-      window.addEventListener('pagehide', () => { pageActive = false; resetRuntime(); resetCover(); closeStyleEditor(false); restoreStyleTargets(); styleSvg?.remove(); styleSvg = styleFilters = null; closePanel(); });
-      window.addEventListener('pageshow', () => { pageActive = true; syncPage(); baseline(); armRandom(); });
+      window.addEventListener('pagehide', () => { pageActive = false; settings.targetEnabled = settings.random = false; if (document.documentElement?.getAttribute(SENDER_ATTRIBUTE) === 'live-follow') document.documentElement.removeAttribute(SENDER_ATTRIBUTE); resetRuntime(); resetCover(); closeStyleEditor(false); closeWhitelist(); closeExternalDialog(); restoreStyleTargets(); styleSvg?.remove(); styleSvg = styleFilters = null; closePanel(); });
+      window.addEventListener('pageshow', () => { pageActive = true; syncSenderLease(); syncPage(); baseline(); armRandom(); });
       window.addEventListener('resize', positionPanel);
       window.addEventListener('resize', scheduleCoverLayout);
-      document.addEventListener('fullscreenchange', () => { finishCoverGesture(); closeStyleEditor(false); syncCover(); syncStyle(); });
+      document.addEventListener('fullscreenchange', () => { finishCoverGesture(); closeStyleEditor(false); closeWhitelist(); closeExternalDialog(); syncCover(); syncStyle(); });
       document.addEventListener('scroll', positionPanel, true);
       window.addEventListener('popstate', syncPage);
       window.setInterval(syncPage, 1000);

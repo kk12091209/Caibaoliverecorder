@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {assText} from '../server/media.js';
 import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE,normalizedDanmakuStyle,DANMAKU_SPEED_STEPS,danmakuDuration,MIN_DANMAKU_AREA_HEIGHT,adjustDanmakuArea} from '../shared/danmaku-style.js';
 import {layoutDanmaku,commentX} from '../src/danmaku-layout.js';

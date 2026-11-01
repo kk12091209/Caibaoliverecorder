@@ -111,13 +111,13 @@ test('room changes cancel in-flight image selection and do not leak image or rec
 
 test('cover color and image operations do not reset the independent follow queue or touch the draft', async () => {
   const { h, images, file } = imageHarness()
-  h.api.begin({ uid: '11', name: 'A' }); h.api.processRow(h.row('11', '第一条')); h.api.processRow(h.row('11', '第二条'))
+  h.api.begin({ uid: '11', name: 'A' }); h.api.toggleTarget(); h.api.processRow(h.row('11', '第一条')); h.api.processRow(h.row('11', '第二条'))
   await h.tick()
   const before = h.inspect()
   const image = h.api.chooseCoverFile(file('cover.png')); images[0].onload(); await image
   h.api.chooseCoverColor('#2563eb')
   assert.equal(h.inspect().queued, before.queued); assert.equal(h.inspect().pending, before.pending)
-  h.api.processRow(h.row('99', '第一条', 'ack')); await h.tick(2000)
+  h.api.processRow(h.row('99', '第一条', 'ack')); await h.tick(5000)
   assert.deepEqual(h.posts.map(p => p.body.msg), ['第一条', '第二条'])
   assert.equal(h.input.value, '我正在输入的草稿'); assert.deepEqual(h.counters(), { inputWrites: 0, inputEvents: 0, clicks: 0 })
 })

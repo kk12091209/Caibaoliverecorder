@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../server/store.js';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {RenderPipeline,layoutComments,layoutCommentsAsync,commentSignature} from '../server/render-plan.js';
 import {assText} from '../server/media.js';
 import {applyMessageEdit,validateMessageEdits,messageEditsKey} from '../shared/message-edits.js';

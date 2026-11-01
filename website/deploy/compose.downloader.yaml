@@ -1,43 +1,71 @@
 name: caibao-downloader
+x-downloader: &downloader
+  image: caibao-downloader:${DOWNLOADER_BUILD:?Set an immutable build id}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.downloader
+  restart: unless-stopped
+  init: true
+  user: "1000:1000"
+  environment: &downloader-env
+    NODE_ENV: production
+    DOWNLOADER_HOST: 0.0.0.0
+    DOWNLOADER_PORT: "8790"
+    DOWNLOADER_PUBLIC_ORIGIN: https://caibao.media
+    DOWNLOADER_TRUST_PROXY: "true"
+    DOWNLOADER_TEMP_DIR: /work
+    DOWNLOADER_FILE_SERVER: "true"
+    DOWNLOADER_BUILD: ${DOWNLOADER_BUILD}
+    DOWNLOADER_COOKIE_NAME: __Host-caibao-download
+    XDG_CONFIG_HOME: /tmp/chrome-config
+    XDG_CACHE_HOME: /tmp/chrome-cache
+  read_only: true
+  tmpfs: ["/tmp:size=256m,nosuid"]
+  shm_size: 128m
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./seccomp-browser.json
+  mem_limit: 1280m
+  cpus: 1.0
+  pids_limit: 256
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
 services:
   downloader:
-    image: caibao-downloader:${DOWNLOADER_BUILD:?Set an immutable build id}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.downloader
-    restart: unless-stopped
-    init: true
-    user: "1000:1000"
-    environment:
-      NODE_ENV: production
-      DOWNLOADER_HOST: 0.0.0.0
-      DOWNLOADER_PORT: "8790"
-      DOWNLOADER_PUBLIC_ORIGIN: https://caibao.media
-      DOWNLOADER_TRUST_PROXY: "true"
-      DOWNLOADER_TEMP_DIR: /work
-      DOWNLOADER_FILE_SERVER: "true"
-      DOWNLOADER_BUILD: ${DOWNLOADER_BUILD}
-      XDG_CONFIG_HOME: /tmp/chrome-config
-      XDG_CACHE_HOME: /tmp/chrome-cache
-    volumes:
-      - /srv/caibao/download-cache:/work
+    <<: *downloader
+    volumes: ["/srv/caibao/download-cache:/work"]
     networks:
       edge:
         aliases: [caibao-downloader]
-    read_only: true
-    tmpfs: ["/tmp:size=256m,nosuid"]
-    shm_size: 128m
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-      - seccomp=./seccomp-browser.json
-    mem_limit: 1280m
-    cpus: 1.0
-    pids_limit: 256
-    stop_grace_period: 30s
-    logging:
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
+  downloader-xhs:
+    <<: *downloader
+    environment:
+      <<: *downloader-env
+      DOWNLOADER_API_BASE: /api/downloader-xhs
+      DOWNLOADER_COOKIE_NAME: __Host-caibao-download-xhs
+    volumes:
+      - /srv/caibao/download-cache-xhs:/work
+    networks:
+      edge:
+        aliases: [caibao-downloader-xhs]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8790/api/downloader-xhs/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+  downloader-xhs-v2:
+    <<: *downloader
+    environment:
+      <<: *downloader-env
+      DOWNLOADER_API_BASE: /api/downloader-xhs-v2
+      DOWNLOADER_COOKIE_NAME: __Host-caibao-download-xhs-v2
+    volumes:
+      - /srv/caibao/download-cache-xhs-v2:/work
+    networks:
+      edge:
+        aliases: [caibao-downloader-xhs-v2]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8790/api/downloader-xhs-v2/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 networks:
   edge:
     external: true

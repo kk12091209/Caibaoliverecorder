@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../server/store.js';
 import { Media } from '../server/media.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { FLV_HEADER, Ingestor } from '../server/ingest.js';
 import { minimalMp4 } from './helpers/mp4-fixture.js';
 

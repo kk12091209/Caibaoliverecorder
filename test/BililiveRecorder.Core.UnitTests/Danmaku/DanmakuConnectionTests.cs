@@ -6,6 +6,11 @@ using System.IO;
 using System.IO.Compression;
 using System.IO.Pipelines;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,13 +29,19 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
     {
         private sealed class Api : IDanmakuServerApiClient, IApiClient
         {
+            internal Exception? Failure;
+            internal int Requests;
             public Task<BilibiliApiResponse<RoomInfo>> GetRoomInfoAsync(int roomid) => throw new NotSupportedException();
             public Task<BilibiliApiResponse<RoomPlayInfo>> GetStreamUrlAsync(int roomid, int quality) => throw new NotSupportedException();
             public long GetUid() => 123;
             public string GetBuvid3() => "synthetic-device-secret";
-            public Task<BilibiliApiResponse<DanmuInfo>> GetDanmakuServerAsync(int roomid) => Task.FromResult(new BilibiliApiResponse<DanmuInfo> {
-                Code = 0, Data = new DanmuInfo { Token = "synthetic-token-secret", HostList = new[] { new DanmuInfo.HostListItem { Host = "fixture.invalid", WssPort = 443 } } }
-            });
+            public Task<BilibiliApiResponse<DanmuInfo>> GetDanmakuServerAsync(int roomid)
+            {
+                this.Requests++;
+                return this.Failure is not null ? Task.FromException<BilibiliApiResponse<DanmuInfo>>(this.Failure) : Task.FromResult(new BilibiliApiResponse<DanmuInfo> {
+                    Code = 0, Data = new DanmuInfo { Token = "synthetic-token-secret", HostList = new[] { new DanmuInfo.HostListItem { Host = "fixture.invalid", WssPort = 443 } } }
+                });
+            }
             public void Dispose() { }
         }
         private sealed class Sink : ILogEventSink
@@ -58,8 +69,9 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             internal readonly TaskCompletionSource<bool> Hello = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             internal readonly List<int> Sent = new List<int>();
             internal bool AutoAuth = true, AutoPong = true, FailPing, Disposed, StallHello;
+            internal Exception? ConnectFailure;
             internal DelayedReader? Delayed;
-            public Task<PipeReader> ConnectAsync(string host, int port, AllowedAddressFamily family, CancellationToken token) => Task.FromResult<PipeReader>(this.Delayed ?? this.Input.Reader);
+            public Task<PipeReader> ConnectAsync(string host, int port, AllowedAddressFamily family, CancellationToken token) => this.ConnectFailure is not null ? Task.FromException<PipeReader>(this.ConnectFailure) : Task.FromResult<PipeReader>(this.Delayed ?? this.Input.Reader);
             public async Task SendAsync(byte[] buffer, int offset, int count, CancellationToken token = default)
             {
                 token.ThrowIfCancellationRequested();
@@ -75,13 +87,14 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
         private sealed class Fixture : IDisposable
         {
             internal readonly Sink Sink = new Sink();
+            internal readonly Api Api = new Api();
             internal readonly Queue<Transport> Transports = new Queue<Transport>();
             internal readonly List<bool> States = new List<bool>();
             internal readonly DanmakuClient Client;
             internal long Now;
             internal Fixture(RuntimeCookie? cookie = null, int timeoutMs = 1000)
             {
-                this.Client = new DanmakuClient(new Api(), new LoggerConfiguration().WriteTo.Sink(this.Sink).CreateLogger(), cookie,
+                this.Client = new DanmakuClient(this.Api, new LoggerConfiguration().WriteTo.Sink(this.Sink).CreateLogger(), cookie,
                     (_, _) => this.Transports.Dequeue(), () => Interlocked.Read(ref this.Now),
                     authenticationTimeout: TimeSpan.FromMilliseconds(timeoutMs), heartbeatInterval: TimeSpan.FromMilliseconds(30),
                     heartbeatTimeout: TimeSpan.FromMilliseconds(90), automaticHeartbeat: false);
@@ -104,6 +117,61 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             Assert.True(ready(), "Asynchronous connection state did not arrive");
         }
         private const string Comment = "{\"cmd\":\"DANMU_MSG\",\"info\":[[0,1,25,16777215,1700000000000],\"synthetic-chat-secret\",[123,\"synthetic-user-secret\",0,0,0,0,0,\"\"],[],[],[],[],0]}";
+
+        [Fact]
+        public async Task ApiFailureKeepsSafeStageAndCodeAndCanRecoverWithoutPublishingTheBody()
+        {
+            using var f = new Fixture();
+            f.Api.Failure = new BilibiliApiResponseCodeNotZeroException(-352, "synthetic-body-secret https://example.invalid/?token=synthetic-token-secret");
+            await Assert.ThrowsAsync<BilibiliApiResponseCodeNotZeroException>(() => f.Connect());
+            Assert.Contains("event=connect-failed code=-352 stage=server-info kind=api elapsed_ms=0", f.Sink.Text);
+            Assert.DoesNotContain("synthetic-body-secret", f.Sink.Text); Assert.DoesNotContain("synthetic-token-secret", f.Sink.Text);
+            Assert.False(f.Client.Connected); Assert.Empty(f.States);
+            f.Api.Failure = null; f.Transports.Enqueue(new Transport()); await f.Connect(); Assert.True(f.Client.Connected);
+        }
+
+        [Fact]
+        public async Task SocketFailureIsDistinguishedFromTheApiAndCanRetry()
+        {
+            using var f = new Fixture();
+            f.Transports.Enqueue(new Transport { ConnectFailure = new WebSocketException("synthetic-socket-secret", new SocketException((int)SocketError.HostNotFound)) });
+            await Assert.ThrowsAsync<WebSocketException>(() => f.Connect());
+            Assert.Contains("event=connect-failed code=11001 stage=socket kind=dns elapsed_ms=0", f.Sink.Text);
+            Assert.DoesNotContain("synthetic-socket-secret", f.Sink.Text);
+            f.Transports.Enqueue(new Transport()); await f.Connect(); Assert.True(f.Client.Connected);
+        }
+
+        [Fact]
+        public void ConnectionFailureCategoriesNeverNeedExceptionMessages()
+        {
+            Assert.Equal(("http", (int?)412), DanmakuClient.DescribeConnectionFailure(new Http412Exception("private-url")));
+            Assert.Equal(("api-paused", (int?)null), DanmakuClient.DescribeConnectionFailure(new Polly.CircuitBreaker.BrokenCircuitException("private-circuit-detail")));
+            Assert.Equal(("timeout", (int?)null), DanmakuClient.DescribeConnectionFailure(new TaskCanceledException("private-timeout-detail")));
+            Assert.Equal(("tls", (int?)null), DanmakuClient.DescribeConnectionFailure(new WebSocketException("private-url", new AuthenticationException("private-cert-detail"))));
+            Assert.Equal(("invalid-response", (int?)null), DanmakuClient.DescribeConnectionFailure(new Newtonsoft.Json.JsonReaderException("private-body")));
+#if NET8_0_OR_GREATER
+            Assert.Equal(("http", (int?)403), DanmakuClient.DescribeConnectionFailure(new WebSocketException("private-url", new HttpRequestException("private-body", null, HttpStatusCode.Forbidden))));
+#endif
+        }
+
+        [Fact]
+        public async Task RepeatedApiErrorsCanKeepRequestsPausedAfterTheProviderRecoversAsync()
+        {
+            var provider = new Api { Failure = new BilibiliApiResponseCodeNotZeroException(-352, "synthetic-body-secret") };
+            var policies = new PollyPolicy();
+            using var client = new PolicyWrappedApiClient<Api>(provider, policies);
+            try
+            {
+                for (var attempt = 0; attempt < 3; attempt++)
+                    await Assert.ThrowsAsync<BilibiliApiResponseCodeNotZeroException>(() => client.GetDanmakuServerAsync(1852631778));
+                Assert.Equal(6, provider.Requests);
+                Assert.Equal(Polly.CircuitBreaker.CircuitState.Open, policies.RequestFailedCircuitBreakerPolicy.CircuitState);
+                provider.Failure = null;
+                await Assert.ThrowsAsync<Polly.CircuitBreaker.BrokenCircuitException>(() => client.GetDanmakuServerAsync(1852631778));
+                Assert.Equal(6, provider.Requests); // No new provider call until the protection period expires.
+            }
+            finally { policies.memoryCache.Dispose(); }
+        }
 
         [Fact]
         public async Task SocketAloneIsNotConnectedAndFragmentedAuthPrecedesChatWithoutLoggingPayloads()
@@ -225,6 +293,63 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
         }
 
 #if NET8_0_OR_GREATER
+        private static byte[] Compressed(byte[] bytes, bool zlib = false)
+        {
+            using var output = new MemoryStream();
+            using (Stream zip = zlib ? new ZLibStream(output, CompressionLevel.Fastest, true) : new BrotliStream(output, CompressionLevel.Fastest, true))
+                zip.Write(bytes, 0, bytes.Length);
+            return Frame(5, output.ToArray(), zlib ? 2 : 3);
+        }
+
+        [Theory]
+        [InlineData("depth")]
+        [InlineData("packets")]
+        [InlineData("bytes")]
+        [InlineData("truncated")]
+        public async Task CompressedBudgetsCloseOnlyTheInvalidConnectionAsync(string problem)
+        {
+            using var f = new Fixture(); var transport = new Transport(); f.Transports.Enqueue(transport); int count = 0;
+            f.Client.DanmakuReceived += (_, _) => Interlocked.Increment(ref count); await f.Connect();
+            var valid = Frame(5, Encoding.UTF8.GetBytes(Comment));
+            byte[] packet;
+            if (problem == "depth")
+            {
+                packet = valid;
+                for (int i = 0; i < 5; i++) packet = Compressed(packet, i % 2 == 0);
+            }
+            else
+            {
+                using var payload = new MemoryStream();
+                var item = problem == "bytes" ? Frame(4, new byte[1024 * 1024]) : Frame(4, Array.Empty<byte>());
+                int repeat = problem == "bytes" ? 33 : problem == "packets" ? 10001 : 1;
+                for (int i = 0; i < repeat; i++) payload.Write(item, 0, item.Length);
+                if (problem == "truncated") payload.WriteByte(0);
+                else payload.Write(valid, 0, valid.Length);
+                packet = Compressed(payload.ToArray());
+            }
+            await transport.Bytes(packet);
+            if (problem == "truncated") await transport.Bytes(valid);
+            await Until(() => !f.Client.Connected || Volatile.Read(ref count) > 0);
+            Assert.False(f.Client.Connected);
+            Assert.Contains("event=receive-failed", f.Sink.Text);
+            var recovered = new Transport(); f.Transports.Enqueue(recovered); await f.Connect();
+            await recovered.Bytes(Compressed(valid, true)); await Until(() => Volatile.Read(ref count) > 0);
+            Assert.True(f.Client.Connected);
+        }
+
+        [Fact]
+        public async Task CompressedBudgetResetsForEachOuterPacketAsync()
+        {
+            using var f = new Fixture(); var transport = new Transport(); f.Transports.Enqueue(transport); int count = 0;
+            f.Client.DanmakuReceived += (_, _) => Interlocked.Increment(ref count); await f.Connect();
+            using var payload = new MemoryStream(); var ignored = Frame(4, Array.Empty<byte>());
+            for (int i = 0; i < 6000; i++) payload.Write(ignored, 0, ignored.Length);
+            var valid = Frame(5, Encoding.UTF8.GetBytes(Comment)); payload.Write(valid, 0, valid.Length);
+            await transport.Bytes(Compressed(payload.ToArray()));
+            await transport.Bytes(Compressed(payload.ToArray(), true));
+            await Until(() => Volatile.Read(ref count) == 2); Assert.True(f.Client.Connected);
+        }
+
         [Fact]
         public async Task BrotliMessagesContinueThroughTheAuthenticatedConnection()
         {

@@ -7,7 +7,7 @@ import {Store} from '../server/store.js';
 import {LotteryRecorder,normalizeLottery,saveLotteryObservation,lotteryMessages,lotteryRecord,saveLotteryNote} from '../server/lottery-records.js';
 import {giftCards,giftEligible,DEFAULT_GIFT_STYLE} from '../shared/gifts.js';
 import {giftAss,giftMessages} from '../server/gifts.js';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 const stamp=1793456000000;
 const payload=(extra={})=>({id:123,room_id:1852631778,current_time:stamp/1000,time:10,lot_status:0,danmu:'一起加油',award_name:'不应作为展示名称的平台标题',award_num:2,award_per_capita:1,join_total:100,...extra});
 const winner=(uid,name)=>({uid,uname:name});

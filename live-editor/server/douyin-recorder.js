@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {DouyinResolver,DOUYIN_USER_AGENT,safeStreamUrl,safeStreamRedirect} from './douyin-room.js';
 import {DouyinFlv} from './douyin-flv.js';
 import {DouyinChat} from './douyin-chat.js';
+import {chatStatusMessage} from './douyin-chat-status.js';
 import {chatRate} from './chat-rules.js';
 
 export const xmlText=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
@@ -21,9 +22,21 @@ export class DouyinRecorder {
     const savedRooms=store.setting('douyin-rooms');
     for(const saved of Array.isArray(savedRooms)?savedRooms:[])if(saved&&typeof saved.webRid==='string'&&/^\d{1,20}$/.test(saved.webRid)&&this.entries.size<64)this.entries.set(saved.webRid,this.entry(saved));
   }
-  entry(saved){return {webRid:saved.webRid,name:String(saved.name||'抖音直播间').slice(0,100),title:String(saved.title||'').slice(0,300),autoRecord:saved.autoRecord!==false,enabled:saved.enabled!==false,streaming:false,recording:false,error:'',chatError:'',nextPoll:0,retryAt:0};}
-  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,streaming:room.streaming,recording:room.recording,recordingEnabled:room.enabled,autoRecord:room.autoRecord,autoRecordForThisSession:room.enabled,error:room.error,chatError:room.chatError,recordingProgress:room.progress?{...room.progress}:null}));}
-  save(){this.store.setting('douyin-rooms',[...this.entries.values()].map(room=>({webRid:room.webRid,name:room.name,title:room.title,autoRecord:room.autoRecord,enabled:room.enabled})));}
+  entry(saved){return {webRid:saved.webRid,name:String(saved.name||'抖音直播间').slice(0,100),title:String(saved.title||'').slice(0,300),autoRecord:saved.autoRecord!==false,enabled:saved.enabled!==false,followers:new Map(),streaming:false,recording:false,error:'',chatError:'',nextPoll:0,retryAt:0};}
+  wanted(room){return room.enabled||[...room.followers.values()].some(roomId=>roomId===room.metadata?.roomId);}
+  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,followOnly:room.followOnly===true,streaming:room.streaming,recording:room.recording,recordingEnabled:this.wanted(room),followUsers:room.followers.size,autoRecord:room.autoRecord,autoRecordForThisSession:this.wanted(room),error:room.error,chatError:room.chatError,recordingProgress:room.progress?{...room.progress}:null}));}
+  save(){this.store.setting('douyin-rooms',[...this.entries.values()].filter(room=>!room.followOnly).map(room=>({webRid:room.webRid,name:room.name,title:room.title,autoRecord:room.autoRecord,enabled:room.enabled})));}
+  async acquireFollow(uid,metadata,isCurrent=()=>true){
+    this.assertOpen();let room=this.entries.get(metadata.webRid);
+    if(!room){if(this.entries.size>=64)throw Error('抖音监控房间已达上限。');room=this.entry({...metadata,autoRecord:false,enabled:false});room.followOnly=true;this.entries.set(room.webRid,room);}
+    if(room.actualRoom&&room.actualRoom!==metadata.roomId)await this.finish(room);
+    this.assertOpen();if(!isCurrent())throw Error('跟随任务已变化。');room.metadata=metadata;room.name=metadata.name;room.title=metadata.title;room.streaming=metadata.streaming;room.followers.set(uid,metadata.roomId);room.nextPoll=this.now()+15000;this.maybeRecord(room);
+  }
+  async releaseFollow(uid,webRid){
+    const room=this.entries.get(webRid);if(!room)return;room.followers.delete(uid);
+    if(!this.wanted(room))await this.finish(room);
+    if(room.followOnly&&!room.followers.size&&!room.enabled&&this.entries.get(webRid)===room)this.entries.delete(webRid);
+  }
   start(){
     if(this.closed||this.started)return;this.started=true;
     // Only recover our namespace. Bilibili's independent writer is untouched.
@@ -37,7 +50,7 @@ export class DouyinRecorder {
   assertOpen(){if(this.closed)throw new Error('录制服务已关闭。');}
   room(key){const room=this.entries.get(String(key).replace(/^douyin:/,''));if(!room)throw new Error('直播间不存在。');return room;}
   async add(descriptor,autoRecord=true){
-    this.assertOpen();const existing=this.entries.get(descriptor.webRid);if(existing)return this.rooms.find(room=>room.webRid===descriptor.webRid);
+    this.assertOpen();const existing=this.entries.get(descriptor.webRid);if(existing){if(existing.followOnly){existing.followOnly=false;existing.autoRecord=autoRecord;existing.enabled=autoRecord;this.save();this.maybeRecord(existing);}return this.rooms.find(room=>room.webRid===descriptor.webRid);}
     if(this.entries.size>=64)throw new Error('抖音监控房间已达上限。');
     const metadata=await this.resolver.room(descriptor.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});this.assertOpen();
     // Another concurrent request may have added this same room.
@@ -55,6 +68,7 @@ export class DouyinRecorder {
           room.metadata=metadata;room.name=metadata.name;room.title=metadata.title;room.streaming=metadata.streaming;if(!room.blocked)room.error='';
           if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:metadata.cookie,userUniqueId:metadata.userUniqueId});
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);
+          await this.onRoomMetadata?.(room,metadata);
           if(!metadata.streaming||room.actualRoom&&room.actualRoom!==metadata.roomId){await this.finish(room);}
           this.maybeRecord(room);
         }catch(error){if(!this.closed){this.store.diagnostics?.record(`抖音开播检查 ${room.webRid}`,error,{level:'警告'});room.error='抖音连接失败，正在重试。';room.nextPoll=this.now()+15000;}}
@@ -63,7 +77,7 @@ export class DouyinRecorder {
     })().finally(()=>{this.polling=null;});return this.polling;
   }
   maybeRecord(room){
-    if(this.closed||this.paused||!this.started||room.active||room.blocked||!room.enabled||!room.streaming||this.now()<room.retryAt)return;
+    if(this.closed||this.paused||!this.started||room.active||room.blocked||!this.wanted(room)||!room.streaming||this.now()<room.retryAt)return;
     if(!room.metadata?.stream){this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：未提供 H.264/AAC 画质，未开始录制`,{level:'警告'});room.error='该直播暂未提供可剪辑的 H.264/AAC 画质。';return;}
     room.active=this.capture(room).catch(error=>{this.store.diagnostics?.record('抖音录制',error,{level:'错误'});if(!this.closed)room.error='录像写入失败，请检查磁盘后重试。';room.blocked=true;}).finally(()=>{room.active=null;room.recording=false;room.nextPoll=0;});
   }
@@ -88,7 +102,7 @@ export class DouyinRecorder {
       await fs.mkdir(directory,{recursive:true});const file=path.join(directory,wall.replace(/[^\d]/g,'')+'-'+randomUUID()+'.flv');
       flv=await fs.open(file,'wx');
       session=room.session&&this.store.session(room.session);
-      if(!session){session=this.store.createSession({room:0,title:metadata.title||metadata.name,created:wall});room.session=session.id;this.store.setting('douyin-session:'+session.id,{platform:'douyin',webRid:room.webRid,roomId:metadata.roomId});}
+      if(!session){session=this.store.createSession({room:0,title:metadata.title||metadata.name,created:wall});room.session=session.id;this.store.setting('douyin-session:'+session.id,{platform:'douyin',webRid:room.webRid,roomId:metadata.roomId,hostName:metadata.name});}
       room.actualRoom=metadata.roomId;
       const start=Math.max(0,session.duration,(Date.parse(wall)-Date.parse(session.created))/1000);
       source=this.store.addSource(session.id,file,start,wall);this.store.run('INSERT INTO source_storage(source,eligible) VALUES(?,1)',source.id);
@@ -97,11 +111,16 @@ export class DouyinRecorder {
       room.sourceId=source.id;
       xml=await fs.open(source.xml,'wx');
       await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="douyin" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
-      this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
+      this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.followCaptured?.(room);this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
       normalizer=new DouyinFlv();room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
       const chatCredentials=room.metadata||metadata;
       try{this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
-        {write:batch=>writeAll(xml,chatXml(batch)),status:status=>{room.chatError=status==='connected'?'':status==='write-failed'?'弹幕保存失败。':'弹幕连接重试中。';}});}catch{room.chatError='弹幕暂时无法连接。';}
+        {write:batch=>writeAll(xml,chatXml(batch)),status:(status,detail)=>{
+          if(['connected','first-frame','first-comment','first-gift','first-write'].includes(status))room.chatError='';
+          else if(status==='write-failed')room.chatError='弹幕保存失败。';
+          else if(status==='retry')room.chatError='弹幕连接重试中。';
+          const event=chatStatusMessage(room.webRid,status,detail);if(event)this.store.diagnostics?.record('抖音弹幕',event.message,{level:event.level});
+        }});}catch{room.chatError='弹幕暂时无法连接。';this.store.diagnostics?.record('抖音弹幕',`房间 ${room.webRid}：弹幕采集未能启动。`,{level:'警告'});}
       for await(const chunk of response.body){
         lastData=this.now();if(signal.aborted)break;
         const frames=normalizer.feed(chunk),started=this.now();let written=0;
@@ -132,19 +151,19 @@ export class DouyinRecorder {
         // An unsupported/empty/failed source has no index work left to wait for.
         // Preserve its originals and expose the error; it remains deletable.
         this.store.run('UPDATE sources SET closed=MAX(closed,?),error=? WHERE id=?',recordError?2:1,recordError?.message||'',source.id);
-        this.store.run("UPDATE sessions SET status=?,error=? WHERE id=?",recordError?'finishing':room.enabled&&!this.closed?'waiting':'finishing',recordError?.message||'',session.id);
+        this.store.run("UPDATE sessions SET status=?,error=? WHERE id=?",recordError?'finishing':this.wanted(room)&&!this.closed?'waiting':'finishing',recordError?.message||'',session.id);
       }
       room.recording=false;room.abort=null;room.sourceId=null;room.progress=null;room.retryAt=this.now()+3000;
     }
   }
-  async startRoom(key){this.assertOpen();const room=this.room(key);room.enabled=true;room.blocked=false;room.error='';room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
-  async setAuto(key,enabled){this.assertOpen();const room=this.room(key);room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;await this.finish(room);}this.save();await this.poll();}
+  async startRoom(key){this.assertOpen();const room=this.room(key);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
+  async setAuto(key,enabled){this.assertOpen();const room=this.room(key);room.followOnly=false;room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;if(!this.wanted(room))await this.finish(room);}this.save();await this.poll();}
   async finish(room){
     room.abort?.abort();await room.active;
     if(room.session){this.store.run("UPDATE sessions SET status='finishing' WHERE id=? AND status IN ('recording','waiting')",room.session);room.session=null;room.actualRoom=null;}
     if(!room.autoRecord)room.enabled=false;
   }
-  async stopRoom(key){this.assertOpen();const room=this.room(key);room.enabled=false;this.save();await this.finish(room);}
+  async stopRoom(key){this.assertOpen();const room=this.room(key);room.enabled=false;this.save();if(!this.wanted(room))await this.finish(room);}
   async removeRoom(key,confirmed){if(confirmed!==true)throw new Error('请先确认是否移除这个监控房间。');await this.stopRoom(key);this.entries.delete(this.room(key).webRid);this.save();}
   async stopForExit(){this.paused=true;clearTimeout(this.timer);await Promise.all([...this.entries.values()].map(room=>this.finish(room)));}
   async pauseIdle(){if([...this.entries.values()].some(room=>room.active||room.recording))return false;this.paused=true;clearTimeout(this.timer);await this.polling;return ![...this.entries.values()].some(room=>room.active||room.recording);}

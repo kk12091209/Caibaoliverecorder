@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {DEFAULT_RECORDING_STYLE} from '../shared/recording-style.js';
 
 test('global camera settings persist atomically, invalidate preparation only on changes and leave timestamp independent',async t=>{

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'node:events';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { alive } from '../server/service-runtime.js';
 import { availableLocalPort,findOwnedCore,stopOwnedCore,browserAccessiblePort,listenLocal } from '../server/local-endpoint.js';
 

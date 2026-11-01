@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { Input, BlobSource, ALL_FORMATS, EncodedPacketSink } from 'mediabunny'
 import { unzipSync } from 'fflate'
-import { extractRecordingTrack, zipRecordings } from '../../src/features/teleprompter/model/recording-export.ts'
+import { extractRecordingTrack, zipRecordings, exportOutputLimit, EXPORT_MEMORY_BUDGET } from '../../src/features/teleprompter/model/recording-export.ts'
 
 async function inspect(blob) {
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS })
@@ -42,4 +42,19 @@ test('cancelled exports and malformed input never produce a misleading empty dow
   await assert.rejects(extractRecordingTrack(new Blob(['broken']), 'video', controller.signal), { name: 'AbortError' })
   await assert.rejects(zipRecordings([{ name: 'a', blob: new Blob(['a']) }], controller.signal), { name: 'AbortError' })
   await assert.rejects(extractRecordingTrack(new Blob(['not media']), 'audio'))
+})
+
+test('the shared export budget accounts for retained files and preserves the original after refusal and retry', async () => {
+  const original = new Blob([await readFile(new URL('../fixtures/recording-test.mp4', import.meta.url))])
+  const bytes = await original.arrayBuffer()
+  assert.throws(() => exportOutputLimit(128 * 1024 * 1024), /预算/)
+  assert.throws(() => exportOutputLimit(1, Number.NaN), /无效/)
+  const retained = EXPORT_MEMORY_BUDGET - 16 * 1024 * 1024 - original.size * 2 - 3
+  assert.equal(exportOutputLimit(original.size, retained), 1)
+  await assert.rejects(extractRecordingTrack(original, 'video', undefined, retained), /预算/)
+  await assert.rejects(zipRecordings([{ name: 'source.mp4', blob: original }], undefined, retained), /预算/)
+  assert.deepEqual(await original.arrayBuffer(), bytes)
+  const recovered = await extractRecordingTrack(original, 'video')
+  assert.ok(recovered.blob.size > 0)
+  assert.deepEqual(await inspect(recovered.blob), (await inspect(original)).filter(track => track.kind === 'video'))
 })

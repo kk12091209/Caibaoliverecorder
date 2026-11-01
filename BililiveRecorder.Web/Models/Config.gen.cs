@@ -169,11 +169,8 @@ namespace BililiveRecorder.Web.Models.Rest
         public Optional<bool> OptionalFlvProcessorDisableSplitOnH264AnnexB { get; set; }
         public Optional<bool> OptionalFlvWriteMetadata { get; set; }
         public Optional<string?> OptionalTitleFilterPatterns { get; set; }
-        public Optional<string?> OptionalWebHookUrls { get; set; }
-        public Optional<string?> OptionalWebHookUrlsV2 { get; set; }
         public Optional<bool> OptionalWpfShowTitleAndArea { get; set; }
         public Optional<bool> OptionalWpfNotifyStreamStart { get; set; }
-        public Optional<string?> OptionalCookie { get; set; }
         public Optional<string?> OptionalLiveApiHost { get; set; }
         public Optional<uint> OptionalTimingCheckInterval { get; set; }
         public Optional<uint> OptionalTimingApiTimeout { get; set; }
@@ -238,11 +235,8 @@ namespace BililiveRecorder.Web.Models.Graphql
             this.Field(x => x.OptionalFlvProcessorDisableSplitOnH264AnnexB, type: typeof(HierarchicalOptionalType<bool>));
             this.Field(x => x.OptionalFlvWriteMetadata, type: typeof(HierarchicalOptionalType<bool>));
             this.Field(x => x.OptionalTitleFilterPatterns, type: typeof(HierarchicalOptionalType<string>));
-            this.Field(x => x.OptionalWebHookUrls, type: typeof(HierarchicalOptionalType<string>));
-            this.Field(x => x.OptionalWebHookUrlsV2, type: typeof(HierarchicalOptionalType<string>));
             this.Field(x => x.OptionalWpfShowTitleAndArea, type: typeof(HierarchicalOptionalType<bool>));
             this.Field(x => x.OptionalWpfNotifyStreamStart, type: typeof(HierarchicalOptionalType<bool>));
-            this.Field(x => x.OptionalCookie, type: typeof(HierarchicalOptionalType<string>));
             this.Field(x => x.OptionalLiveApiHost, type: typeof(HierarchicalOptionalType<string>));
             this.Field(x => x.OptionalTimingCheckInterval, type: typeof(HierarchicalOptionalType<uint>));
             this.Field(x => x.OptionalTimingApiTimeout, type: typeof(HierarchicalOptionalType<uint>));
@@ -281,11 +275,8 @@ namespace BililiveRecorder.Web.Models.Graphql
             this.Field(x => x.FlvProcessorDisableSplitOnH264AnnexB);
             this.Field(x => x.FlvWriteMetadata);
             this.Field(x => x.TitleFilterPatterns);
-            this.Field(x => x.WebHookUrls);
-            this.Field(x => x.WebHookUrlsV2);
             this.Field(x => x.WpfShowTitleAndArea);
             this.Field(x => x.WpfNotifyStreamStart);
-            this.Field(x => x.Cookie);
             this.Field(x => x.LiveApiHost);
             this.Field(x => x.TimingCheckInterval);
             this.Field(x => x.TimingApiTimeout);

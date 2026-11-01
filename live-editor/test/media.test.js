@@ -9,7 +9,7 @@ import { Store, validateRanges } from '../server/store.js';
 import { Ingestor, sourceStream, seekBase } from '../server/ingest.js';
 import { Media, assText } from '../server/media.js';
 import { Recorder, roomNumber } from '../server/recorder.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { outputSpan, clipFile } from '../server/output-names.js';
 
 const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';

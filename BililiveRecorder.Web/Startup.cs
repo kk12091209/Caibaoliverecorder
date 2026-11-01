@@ -65,14 +65,9 @@ namespace BililiveRecorder.Web
                 .AddAutoMapper(c => c.AddProfile<DataMappingProfile>())
                 .AddCors(o => o.AddDefaultPolicy(policy =>
                 {
-                    policy
-                    .SetIsOriginAllowed(origin => true)
-                    .AllowAnyMethod()
-                    .AllowAnyHeader()
-                    .AllowCredentials()
-                    .WithExposedHeaders("Content-Length")
-                    .SetPreflightMaxAge(TimeSpan.FromMinutes(5))
-                    ;
+                    // No cross-origin browser access. Remote clients use the same
+                    // authenticated origin; native clients do not require CORS.
+                    policy.WithMethods("GET", "POST").WithHeaders("Content-Type", "Authorization");
                 }));
 
             services
@@ -140,6 +135,7 @@ namespace BililiveRecorder.Web
             }
 
             app
+                .UseMiddleware<SameOriginMiddleware>()
                 .UseCors()
                 .UseMiddleware<BasicAuthMiddleware>()
                 .UseWebSockets();
@@ -234,7 +230,7 @@ namespace BililiveRecorder.Web
                 {
                     var sharedRecordingFiles = new SharedOptions
                     {
-                        FileProvider = new PhysicalFileProvider(app.ApplicationServices.GetRequiredService<IRecorder>().Config.Global.WorkDirectory!),
+                        FileProvider = new RecordingFileProvider(app.ApplicationServices.GetRequiredService<IRecorder>().Config.Global.WorkDirectory!),
                         RequestPath = "/file",
                         RedirectToAppendTrailingSlash = true,
                     };

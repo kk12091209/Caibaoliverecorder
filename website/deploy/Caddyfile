@@ -8,7 +8,10 @@
 }
 
 caibao.media {
-    encode zstd gzip
+    # A pending attachment needs its headers before media bytes are available.
+    # encode otherwise delays that flush while waiting to inspect the body.
+    @compressible not path /api/downloader/jobs/*/stream /api/downloader/jobs/*/download /api/downloader/jobs/*/files/* /api/downloader-xhs/jobs/*/stream /api/downloader-xhs/jobs/*/download /api/downloader-xhs/jobs/*/files/* /api/downloader-xhs-v2/jobs/*/stream /api/downloader-xhs-v2/jobs/*/download /api/downloader-xhs-v2/jobs/*/files/*
+    encode @compressible zstd gzip
     header {
         Alt-Svc clear
         X-Content-Type-Options nosniff
@@ -24,6 +27,30 @@ caibao.media {
     handle @retiredParcel {
         header Cache-Control "no-store"
         respond "此功能已下线。" 410
+    }
+    handle /api/downloader-xhs-v2/* {
+        request_body {
+            max_size 24KB
+        }
+        reverse_proxy caibao-downloader-xhs-v2:8790 {
+            flush_interval -1
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 20m
+            }
+        }
+    }
+    handle /api/downloader-xhs/* {
+        request_body {
+            max_size 24KB
+        }
+        reverse_proxy caibao-downloader-xhs:8790 {
+            flush_interval -1
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 20m
+            }
+        }
     }
     handle /api/downloader/* {
         request_body {
@@ -47,25 +74,15 @@ caibao.media {
                     }
                 }
             }
-            # Authenticate first, then let Caddy handle file bytes and resume ranges.
+            # The API owns a read lease until transfer ends. Serving bytes in a
+            # separate file_server would hide active readers from cache cleanup.
             handle @downloadFile {
-                route {
-                    forward_auth caibao-downloader:8790 {
-                        uri /api/downloader/authorize-file
-                        copy_headers X-Caibao-File X-Caibao-Type X-Caibao-Disposition
-                        transport http {
-                            dial_timeout 5s
-                            response_header_timeout 20m
-                        }
+                reverse_proxy caibao-downloader:8790 {
+                    flush_interval -1
+                    transport http {
+                        dial_timeout 5s
+                        response_header_timeout 20m
                     }
-                    root * /srv/caibao/download-cache
-                    rewrite * {http.request.header.X-Caibao-File}
-                    header {
-                        Content-Type {http.request.header.X-Caibao-Type}
-                        Content-Disposition {http.request.header.X-Caibao-Disposition}
-                        Cache-Control "private, no-store"
-                    }
-                    file_server
                 }
             }
             handle {

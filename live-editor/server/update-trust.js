@@ -8,7 +8,7 @@ MCowBQYDK2VwAyEAZJ8PF5OHwO+1SzOBBrpeyfSXwK4J5/3jPj+m4r3BRVU=
 
 // The private key stays on the release machine, never in the app or web server.
 export function readSignedManifest(envelope, publicKey = UPDATE_PUBLIC_KEY) {
-  const invalid = () => { throw new Error('菜包更新清单签名无效。'); };
+  const invalid = () => { throw Object.assign(new Error('菜包更新清单签名无效。'),{updateError:true,trustFailure:true}); };
   if (!envelope || envelope.schema !== 1 || envelope.keyId !== UPDATE_KEY_ID || typeof envelope.data !== 'string' || envelope.data.length > 90000 || typeof envelope.signature !== 'string') invalid();
   const bytes = Buffer.from(envelope.data, 'base64');
   const signature = Buffer.from(envelope.signature, 'base64');

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { outputSpan, reserveClip, reserveFull, clipFile, archiveFile, exportedJobFile } from '../server/output-names.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('时间段以北京时间和素材时钟命名，切片使用内容日期而非导出日期',()=>{
   const session={created:'2026-09-28T13:30:00Z',duration:600};

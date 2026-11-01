@@ -14,6 +14,20 @@ test('native Mac repair validates the official source and preserves data on corr
     await fs.writeFile(source, String.raw`
 import Foundation
 import Darwin
+import CryptoKit
+
+enum FixtureSignature {
+    static let key = Curve25519.Signing.PrivateKey()
+    static func envelope(_ asset: [String: Any]) throws -> Data {
+        let manifest: [String: Any] = ["schema": 1, "version": "0.2.0", "platforms": ["darwin-arm64": ["name": asset["name"]!, "size": asset["size"]!, "sha256": String((asset["digest"] as? String ?? "").dropFirst(7))]]]
+        let bytes = try JSONSerialization.data(withJSONObject: manifest)
+        return try JSONSerialization.data(withJSONObject: ["schema": 1, "keyId": "caibao-2026-01", "data": bytes.base64EncodedString(), "signature": key.signature(for: bytes).base64EncodedString()])
+    }
+    static func asset(_ bytes: Data) -> [String: Any] {
+        ["name": "caibao-update.json", "state": "uploaded", "size": bytes.count, "digest": "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), "browser_download_url": "https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/caibao-update.json"]
+    }
+}
+
 @main struct Checks {
     @MainActor static func main() async throws {
         let fm = FileManager.default, root = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -25,7 +39,8 @@ import Darwin
         let name = "Caibo-0.2.0-macos-arm64.dmg", url = "https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/" + name
         let package = Data("corrupt package".utf8)
         let asset: [String: Any] = ["name": name, "state": "uploaded", "size": package.count, "digest": "sha256:" + String(repeating: "0", count: 64), "browser_download_url": url]
-        let release: [String: Any] = ["tag_name": "v0.2.0", "draft": false, "prerelease": false, "assets": [asset]]
+        let manifestBytes = try FixtureSignature.envelope(asset)
+        let release: [String: Any] = ["tag_name": "v0.2.0", "draft": false, "prerelease": false, "assets": [asset, FixtureSignature.asset(manifestBytes)]]
         _ = try RepairTrust.asset(release, version: "0.2.0"); print("PASS current version is repairable without a version bump")
         for address in ["http://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/x", "https://github.com/other/project/releases/download/v0.2.0/x", "https://github.com.evil.test/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/x", "https://user:password@github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/x", "https://api.github.com/repos/other/project/releases/tags/v0.2.0", "https://release-assets.githubusercontent.com:8443/x"] {
             guard !RepairTrust.allowed(URL(string: address)!) else { throw problem("Untrusted repair source accepted") }
@@ -46,13 +61,13 @@ import Darwin
         guard try RepairTrust.digest(file) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" else { throw problem("Streaming digest incorrect") }
         print("PASS streaming SHA256")
         var downloaded: [URL] = [], logs: [String] = []
-        let repair = ComponentRepair(target: target, data: data, version: "0.2.0", helperExecutable: URL(fileURLWithPath: CommandLine.arguments[0]), downloader: { address, destination, _, _ in
+        let repair = ComponentRepair(target: target, data: data, version: "0.2.0", helperExecutable: URL(fileURLWithPath: CommandLine.arguments[0]), trustKey: FixtureSignature.key.publicKey.rawRepresentation, downloader: { address, destination, _, _ in
             downloaded.append(address)
-            try (address.host == "api.github.com" ? JSONSerialization.data(withJSONObject: release) : package).write(to: destination)
+            try (address.host == "api.github.com" ? JSONSerialization.data(withJSONObject: release) : address.path.hasSuffix(".json") ? manifestBytes : package).write(to: destination)
         }, progress: { _ in }, log: { logs.append($0) })
         var stageError = ""
         rejected = false; do { _ = try await repair.stage() } catch { stageError = error.localizedDescription; rejected = error.localizedDescription.contains("校验失败") }
-        guard rejected, downloaded.count == 2, try Data(contentsOf: original) == Data("preserve user recording".utf8), fm.fileExists(atPath: target.path), (try fm.contentsOfDirectory(atPath: data.appendingPathComponent("repairs").path)).isEmpty else { throw problem("Corrupt repair state: error=\(stageError), downloads=\(downloaded.count)") }
+        guard rejected, downloaded.count == 3, try Data(contentsOf: original) == Data("preserve user recording".utf8), fm.fileExists(atPath: target.path), (try fm.contentsOfDirectory(atPath: data.appendingPathComponent("repairs").path)).isEmpty else { throw problem("Corrupt repair state: error=\(stageError), downloads=\(downloaded.count)") }
         print("PASS corrupt package is rejected before mounting; installation and data preserved")
         let offline = ComponentRepair(target: target, data: data, version: "0.2.0", downloader: { _, _, _, _ in throw problem("offline fixture") }, progress: { _ in }, log: { _ in })
         rejected = false; do { _ = try await offline.stage() } catch { rejected = true }

@@ -6,7 +6,7 @@ import os from 'node:os';
 import { Store } from '../server/store.js';
 import { DanmakuFonts, fontMetadata, MAX_FONT_BYTES } from '../server/danmaku-font.js';
 import { assText } from '../server/media.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 function font(family='Test Font',advance=1000){
   const name=Buffer.from(family,'utf16le').swap16(),table=Buffer.alloc(18+name.length);table.writeUInt16BE(1,2);table.writeUInt16BE(18,4);table.writeUInt16BE(3,6);table.writeUInt16BE(1,8);table.writeUInt16BE(0x409,10);table.writeUInt16BE(1,12);table.writeUInt16BE(name.length,14);name.copy(table,18);
   const head=Buffer.alloc(54),hhea=Buffer.alloc(36);head.writeUInt16BE(1000,18);hhea.writeUInt16BE(advance,10);

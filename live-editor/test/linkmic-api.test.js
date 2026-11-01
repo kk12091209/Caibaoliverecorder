@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('cached avatar endpoint is offline, source scoped and unavailable after material deletion',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-avatar-api-'));

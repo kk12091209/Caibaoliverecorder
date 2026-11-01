@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('live preparation settings are opt-in and validate the complete request before changing either switch',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'live-settings-api-'));

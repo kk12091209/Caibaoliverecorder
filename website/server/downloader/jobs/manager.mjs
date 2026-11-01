@@ -20,18 +20,29 @@ import { newId } from '../platforms/resolver.mjs'
 import { saveRemote } from '../infrastructure/network.mjs'
 import { MediaImages } from '../media/images.mjs'
 import { waitFor, WorkPool, StageTimings } from '../infrastructure/cache.mjs'
+import {
+  PUBLIC_DOWNLOAD_BYTES,
+  PUBLIC_STORAGE_BYTES,
+  MIN_FREE_DISK_BYTES,
+  sizeLimitError,
+  diskSpaceError,
+} from '../infrastructure/limits.mjs'
 import { mediaTool as tool } from '../media/tools.mjs'
 import { muxRemoteMp4 } from '../media/streaming.mjs'
 import { reusableMp4 } from '../media/mp4-reuse.mjs'
 
+const filenameSegments = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 export function fileStem(input) {
-  return (
-    String(input)
-      .normalize('NFC')
-      .replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_')
-      .replace(/[. ]+$/g, '')
-      .slice(0, 90) || '作品'
-  )
+  const clean = String(input)
+    .toWellFormed()
+    .normalize('NFC')
+    .replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_')
+  let name = ''
+  for (const { segment } of filenameSegments.segment(clean)) {
+    if (name.length + segment.length > 90) break
+    name += segment
+  }
+  return name.replace(/[. ]+$/g, '') || '作品'
 }
 function videoName(result, asset) {
   return `${fileStem(result.title)}${asset.type === 'livePhoto' ? `_${String(asset.index).padStart(3, '0')}_实况` : result.assets.length > 1 ? `_P${asset.index}_${fileStem(asset.title)}` : ''}.mp4`
@@ -115,11 +126,17 @@ export class DownloadJobs {
       saveMedia = saveRemote,
       publicMode = false,
       fileServer = false,
+      apiBase = '/api/downloader',
       tempDir = tmpdir(),
-      maxFileBytes = publicMode ? 1024 ** 3 : 8 * 1024 ** 3,
-      maxJobBytes = publicMode ? 1024 ** 3 : Infinity,
-      maxStorageBytes = publicMode ? 8 * 1024 ** 3 : Infinity,
+      maxFileBytes = publicMode ? PUBLIC_DOWNLOAD_BYTES : 8 * 1024 ** 3,
+      maxJobBytes = publicMode ? PUBLIC_DOWNLOAD_BYTES : Infinity,
+      maxStorageBytes = publicMode ? PUBLIC_STORAGE_BYTES : Infinity,
       keepMs = publicMode ? 3600000 : 12 * 3600000,
+      diskSpace = statfs,
+      diskCheckMs = 1000,
+      now = Date.now,
+      muxOptions = {},
+      logFailure = (event) => console.error('downloader task failed', JSON.stringify(event)),
     } = {},
   ) {
     this.resolver = resolver
@@ -141,6 +158,7 @@ export class DownloadJobs {
     this.closed = false
     this.tempDir = path.resolve(tempDir)
     this.fileServer = fileServer
+    this.apiBase = apiBase
     this.root = mkdtemp(path.join(this.tempDir, 'caibao-downloader-')).then(async (root) => {
       if (fileServer) await chmod(root, 0o711)
       return root
@@ -150,6 +168,25 @@ export class DownloadJobs {
     this.maxJobBytes = maxJobBytes
     this.maxStorageBytes = maxStorageBytes
     this.keepMs = keepMs
+    this.diskSpace = diskSpace
+    this.diskCheckMs = diskCheckMs
+    this.now = now
+    this.muxOptions = muxOptions
+    this.logFailure = logFailure
+  }
+  touch(job) {
+    job.lastAccess = this.now()
+  }
+  retain(job) {
+    job.readers = (job.readers || 0) + 1
+    this.touch(job)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      job.readers--
+      this.touch(job)
+    }
   }
   storageUsage() {
     let bytes = 0
@@ -163,24 +200,34 @@ export class DownloadJobs {
     await this.prune()
     if (this.storageUsage() >= this.maxStorageBytes)
       throw new Error('临时下载空间正在使用中，请稍后重试。')
-    if (this.publicMode) {
-      const disk = await statfs(await this.root)
-      if (disk.bavail * disk.bsize < 5 * 1024 ** 3)
-        throw new Error('服务器临时空间不足，请稍后重试。')
-    }
+    await this.ensureDiskCapacity()
+  }
+  async ensureDiskCapacity() {
+    if (!this.publicMode) return
+    const disk = await this.diskSpace(await this.root)
+    if (disk.bavail * disk.bsize < MIN_FREE_DISK_BYTES) throw diskSpaceError()
   }
   async prune() {
-    const now = Date.now()
+    const now = this.now()
     for (const [id, job] of this.jobs)
-      if (!['running', 'queued'].includes(job.status) && now - job.created > this.keepMs) {
+      if (
+        !['running', 'queued'].includes(job.status) &&
+        !job.readers &&
+        now - Math.max(job.finishedAt || job.created, job.lastAccess || 0) > this.keepMs
+      ) {
         this.jobs.delete(id)
         await rm(path.join(await this.root, id), { recursive: true, force: true })
       }
   }
   create(session, indices, delivery = 'file') {
     if (this.closed || this.draining) throw new Error('下载服务正在停止，请稍后重试。')
-    if (!['file', 'stream', 'album', 'preview'].includes(delivery))
+    if (!['file', 'stream', 'album', 'preview', 'parts'].includes(delivery))
       throw new Error('不支持的保存方式。')
+    if (
+      delivery === 'parts' &&
+      (session.result.platform !== 'bilibili' || session.result.kind !== 'video')
+    )
+      throw new Error('仅 B 站视频支持分别下载分 P。')
     if (
       !Array.isArray(indices) ||
       !indices.length ||
@@ -200,7 +247,7 @@ export class DownloadJobs {
           (delivery === 'preview' && unique.length === 1 && !job.album) ||
           (delivery === 'stream' && job.delivery === 'preview') ||
           (!job.album && delivery !== 'album' && session.result.platform !== 'bilibili')) &&
-        Date.now() - job.created < Math.min(this.keepMs, 600000),
+        this.now() - job.created < Math.min(this.keepMs, 600000),
     )
     if (ready) {
       // A preview already preparing a standard file can also serve a native
@@ -226,8 +273,7 @@ export class DownloadJobs {
       throw new Error('已有两个下载任务正在处理，请稍后再添加。')
     const id = newId()
     const streamMode =
-      delivery === 'stream' &&
-      unique.length === 1 &&
+      (delivery === 'parts' || (delivery === 'stream' && unique.length === 1)) &&
       session.result.platform === 'bilibili' &&
       session.result.kind === 'video'
     const asset = session.result.assets.find((a) => a.index === unique[0])
@@ -243,7 +289,7 @@ export class DownloadJobs {
             : null
     const job = {
       id,
-      created: Date.now(),
+      created: this.now(),
       reuseKey,
       delivery,
       timings: new StageTimings(),
@@ -252,6 +298,29 @@ export class DownloadJobs {
       streamMode,
       attachment,
       album: delivery === 'album',
+      parts:
+        delivery === 'parts'
+          ? unique.map((index) => {
+              let ready, publishStream
+              const finished = new Promise((resolve) => {
+                ready = resolve
+              })
+              const streamReady = new Promise((resolve) => {
+                publishStream = resolve
+              })
+              return {
+                index,
+                name: videoName(
+                  session.result,
+                  session.result.assets.find((a) => a.index === index),
+                ),
+                finished,
+                ready,
+                streamReady,
+                publishStream,
+              }
+            })
+          : null,
       status: 'queued',
       phase: '等待下载',
       current: 0,
@@ -259,6 +328,10 @@ export class DownloadJobs {
       total: 0,
       files: [],
       error: '',
+      readers: 0,
+      lastAccess: this.now(),
+      recovering: new Set(),
+      retries: 0,
       controller: new AbortController(),
     }
     job.finished = new Promise((resolve) => {
@@ -288,7 +361,25 @@ export class DownloadJobs {
       // Reused completed jobs must go straight to the immutable file. A fetch
       // followed through /stream's redirect is not a valid navigation response
       // for Chrome's download worker, and also adds an unnecessary round trip.
-      downloadUrl: `/api/downloader/jobs/${job.id}/${job.attachment && job.status !== 'done' ? 'stream' : 'download'}`,
+      downloadUrl: job.parts
+        ? ''
+        : `${this.apiBase}/jobs/${job.id}/${job.attachment && job.status !== 'done' ? 'stream' : 'download'}`,
+      ...(job.parts
+        ? {
+            downloads: job.parts.map(({ index, name, stream }) => {
+              const file = job.files.find((file) => file.index === index)
+              return {
+                index,
+                name,
+                url: file
+                  ? `${this.apiBase}/jobs/${job.id}/files/${file.id}?download=1`
+                  : `${this.apiBase}/jobs/${job.id}/stream?part=${index}`,
+                ready: !!file,
+                streaming: !!stream?.bytes,
+              }
+            }),
+          }
+        : {}),
       streaming: !!job.stream?.bytes,
       status: job.status,
       phase: job.phase,
@@ -297,17 +388,20 @@ export class DownloadJobs {
       bytes: job.bytes,
       total: job.total,
       error: job.error,
+      recovering: job.recovering.size > 0,
+      retries: job.retries,
+      outputBytes: job.outputBytes || 0,
       timings: job.timings.snapshot(),
       files: files.map(({ path: _path, ...file }) => ({
         ...file,
-        url: `/api/downloader/jobs/${job.id}/files/${file.id}?download=1`,
-        previewUrl: `/api/downloader/jobs/${job.id}/files/${file.id}`,
+        url: `${this.apiBase}/jobs/${job.id}/files/${file.id}?download=1`,
+        previewUrl: `${this.apiBase}/jobs/${job.id}/files/${file.id}`,
       })),
       archive: job.archive
         ? {
             name: job.archive.name,
             bytes: job.archive.bytes,
-            url: `/api/downloader/jobs/${job.id}/files/${job.archive.id}?download=1`,
+            url: `${this.apiBase}/jobs/${job.id}/files/${job.archive.id}?download=1`,
           }
         : null,
     }
@@ -317,6 +411,20 @@ export class DownloadJobs {
   }
   waitStream(job, signal) {
     return waitFor(Promise.race([job.streamReady, job.finished]), signal)
+  }
+  async waitPart(job, index, signal) {
+    const part = job.parts?.find((part) => part.index === index)
+    if (!part) throw Object.assign(new Error('分 P 不存在。'), { status: 404 })
+    await waitFor(Promise.race([part.finished, job.finished]), signal)
+    const file = job.files.find((file) => file.index === index)
+    if (!file) throw Object.assign(new Error(job.error || '下载已取消。'), { status: 409 })
+    return file
+  }
+  async waitPartStream(job, index, signal) {
+    const part = job.parts?.find((part) => part.index === index)
+    if (!part) throw Object.assign(new Error('分 P 不存在。'), { status: 404 })
+    await waitFor(Promise.race([part.streamReady, part.finished, job.finished]), signal)
+    return part
   }
   cancel(id) {
     const job = this.jobs.get(id)
@@ -339,6 +447,7 @@ export class DownloadJobs {
           job.phase = job.controller.signal.aborted ? '已取消' : '下载失败'
         })
         .finally(() => {
+          job.finishedAt = this.now()
           job.timings.finish()
           job.finish()
           this.pending.delete(pending)
@@ -354,7 +463,9 @@ export class DownloadJobs {
       signal = AbortSignal.any([job.controller.signal, operation.signal]),
       dir = path.join(await this.root, job.id)
     signal.throwIfAborted()
+    await this.ensureCapacity()
     await mkdir(dir)
+    let capacityFailure, capacityCheck, capacityTimer
     const stage = (name, pool, work) =>
       job.timings.run(name, pool, work, { signal, owner: job.session.owner })
     const run = (command, args) =>
@@ -367,9 +478,9 @@ export class DownloadJobs {
       job.total =
         result.kind === 'images' ? 0 : [...progress.values()].reduce((n, p) => n + p.total, 0)
       if (job.bytes > this.maxJobBytes || job.outputBytes > this.maxJobBytes)
-        throw new Error('当前在线测试版每次下载最多支持 1 GB，请减少本次选中内容。')
+        throw sizeLimitError(this.maxJobBytes)
       if (this.storageUsage() > this.maxStorageBytes)
-        throw new Error('临时下载空间已满，请稍后重试。')
+        throw new Error('服务器临时下载空间正在使用中，请稍后重试。')
     }
     const download = (urls, target, referer) =>
       stage('download', this.network, () =>
@@ -415,7 +526,10 @@ export class DownloadJobs {
         name = videoName(result, asset)
         target = path.join(dir, `${index}.mp4`)
         type = 'video/mp4'
-        if (result.platform === 'douyin') {
+        if (
+          (result.platform === 'douyin' || result.platform === 'xiaohongshu') &&
+          !asset.audioUrls?.length
+        ) {
           job.phase = '正在下载无水印视频'
           const raw = path.join(dir, `${index}.source`)
           await download(asset.urls, raw, result.url)
@@ -451,27 +565,48 @@ export class DownloadJobs {
             await rm(raw)
           }
         } else {
-          const sources = await stage('resolve', this.metadata, () =>
-            this.resolver.bilibiliStreams(result, asset, signal),
-          )
+          const sources =
+            result.platform === 'xiaohongshu'
+              ? {
+                  video: asset.urls,
+                  audio: asset.audioUrls,
+                  quality: asset.quality,
+                  referer: result.url,
+                }
+              : await stage('resolve', this.metadata, () =>
+                  this.resolver.bilibiliStreams(result, asset, signal),
+                )
           quality = sources.quality
           if (sources.video && job.streamMode) {
             job.phase = `正在边合并边下载 · ${quality}`
-            job.stream = { path: target, name, type, bytes: 0 }
+            const part = job.parts?.find((part) => part.index === index)
+            const stream = { path: target, name, type, bytes: 0, status: 'running' }
+            if (part) part.stream = stream
+            else job.stream = stream
             await stage('stream', this.streams, () =>
               stage('download', this.network, async () =>
                 muxRemoteMp4(sources, target, {
+                  ...this.muxOptions,
                   command: await tool('ffmpeg'),
                   signal,
+                  owner: job.session.owner,
                   maxBytes: Math.min(this.maxFileBytes, this.maxJobBytes),
-                  onProgress,
+                  onProgress: (key) => onProgress(`${index}:${key}`),
+                  onRecovery: (key, state) => {
+                    const id = `${index}:${key}:${state.start}`
+                    if (state.retrying) {
+                      job.recovering.add(id)
+                      job.retries++
+                    } else job.recovering.delete(id)
+                  },
                   onOutput: (bytes) => {
-                    job.stream.bytes = bytes
-                    job.outputBytes = bytes
+                    job.outputBytes += bytes - stream.bytes
+                    stream.bytes = bytes
                     if (this.storageUsage() > this.maxStorageBytes)
-                      throw new Error('临时下载空间已满，请稍后重试。')
+                      throw new Error('服务器临时下载空间正在使用中，请稍后重试。')
                     job.timings.ready()
-                    job.publishStream()
+                    if (part) part.publishStream()
+                    else job.publishStream()
                   },
                 }),
               ),
@@ -578,11 +713,9 @@ export class DownloadJobs {
           }
         }
         metadata ||= await stage('probe', this.media, () => probe(target, signal))
-        job.outputBytes = job.streamMode
-          ? (await stat(target)).size
-          : job.outputBytes + (await stat(target)).size
-        if (job.outputBytes > this.maxJobBytes)
-          throw new Error('当前在线测试版每次下载最多支持 1 GB，请减少本次选中内容。')
+        const activeStream = job.parts?.find((part) => part.index === index)?.stream || job.stream
+        if (!activeStream) job.outputBytes += (await stat(target)).size
+        if (job.outputBytes > this.maxJobBytes) throw sizeLimitError(this.maxJobBytes)
       }
       signal.throwIfAborted()
       const info = await stat(target)
@@ -596,10 +729,30 @@ export class DownloadJobs {
         quality,
         ...metadata,
       })
+      const part = job.parts?.find((part) => part.index === index)
+      if (part?.stream) part.stream.status = 'done'
+      else if (job.stream) job.stream.status = 'done'
+      part?.ready()
       job.current++
       job.timings.ready()
     }
     try {
+      if (this.publicMode) {
+        // The disk can fill after admission. Stop this producer with a clear
+        // capacity error, and drain it before removing its incomplete files.
+        capacityTimer = setInterval(() => {
+          if (capacityCheck || capacityFailure) return
+          capacityCheck = this.ensureDiskCapacity()
+            .catch((error) => {
+              capacityFailure = error
+              operation.abort(error)
+            })
+            .finally(() => {
+              capacityCheck = null
+            })
+        }, this.diskCheckMs)
+        capacityTimer.unref?.()
+      }
       job.status = 'running'
       job.phase = '正在获取最高可用画质'
       let next = 0
@@ -620,7 +773,7 @@ export class DownloadJobs {
         throw error
       }
       job.files.sort((a, b) => a.index - b.index)
-      if (job.files.length > 1 && !job.album) {
+      if (job.files.length > 1 && !job.album && !job.parts) {
         job.phase = '正在打包所选文件'
         const target = path.join(dir, 'selected.zip')
         await stage('archive', this.media, () => archive(job.files, target, signal))
@@ -631,16 +784,29 @@ export class DownloadJobs {
           type: 'application/zip',
           bytes: (await stat(target)).size,
         }
+        if (job.archive.bytes > this.maxJobBytes) throw sizeLimitError(this.maxJobBytes, '打包文件')
       }
+      signal.throwIfAborted()
       job.status = 'done'
+      job.finishedAt = this.now()
       job.phase = '下载准备完成'
       job.total = job.bytes
     } catch (error) {
       const cancelled = job.controller.signal.aborted
       job.status = cancelled ? 'cancelled' : 'failed'
+      job.finishedAt = this.now()
       job.phase = cancelled ? '已取消' : '下载失败'
-      job.error = cancelled ? '' : error.message
-      if (job.album && !cancelled && job.files.length) {
+      job.error = cancelled ? '' : (capacityFailure || error).message
+      if (!cancelled)
+        this.logFailure({
+          job: job.id,
+          stage: error.stage || 'source',
+          code: error.code || 'DOWNLOAD_FAILED',
+          host: error.sourceHost,
+          offset: error.sourceOffset,
+          bytes: job.bytes,
+        })
+      if ((job.album || job.parts) && !cancelled && job.files.length) {
         const complete = new Set(job.files.map((file) => path.basename(file.path)))
         await Promise.all(
           (await readdir(dir))
@@ -652,6 +818,9 @@ export class DownloadJobs {
         job.files = []
       }
       job.archive = null
+    } finally {
+      clearInterval(capacityTimer)
+      await capacityCheck
     }
   }
   async close() {

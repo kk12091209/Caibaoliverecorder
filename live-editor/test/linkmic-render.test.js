@@ -13,6 +13,31 @@ import { normalizeAvatar } from '../server/linkmic-avatars.js';
 import { createHash } from 'node:crypto';
 
 const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';
+test('Douyin main picture and local anchor use bottom-left names through switches, clean, danmaku and prepared dual exports',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-focus-render-')),file=path.join(root,'source.flv');
+  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=black:size=640x360:rate=30','-t','3','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-g','30','-bf','0','-f','flv',file]);
+  const store=new Store(path.join(root,'data')),session=store.createSession({status:'finished'}),source=store.addSource(session.id,file,0,undefined,true);
+  const ingest=new Ingestor(store);for(let i=0;i<4;i++)await ingest.tick();
+  const media=new Media(store,{ffmpeg,ffprobe,exportAcceleration:'software',renderBlockSeconds:1});
+  t.after(async()=>{media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
+  const events=[{source:source.id,time:.3,end:1.2,participants:[{x:0,y:0,w:1,h:1,id:'101',name:'LOCAL HOST',owner:true,labelAlign:'left'}]},
+    {source:source.id,time:1.2,end:2.2,participants:[{x:0,y:0,w:1,h:1,id:'103',name:'MAIN GUEST',main:true,labelAlign:'left'},
+      {x:.8,y:0,w:.2,h:.3,id:'101',name:'LOCAL HOST',owner:true,labelAlign:'left'}]}];
+  const pixels=(output,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',output,'-frames:v','1','-pix_fmt','gray','-f','rawvideo','pipe:1'],{maxBuffer:1024*1024});
+  const count=(bytes,l,t,r,b)=>{let n=0;for(let y=t;y<b;y++)for(let x=l;x<r;x++)if(bytes[y*640+x]>64)n++;return n;};
+  const check=output=>{
+    for(const time of [.6,1.6]){const p=pixels(output,time);assert.ok(count(p,0,330,180,360)>20,'actual main picture name is bottom-left');assert.equal(count(p,450,330,640,360),0,'old bottom-right name is absent');}
+    assert.ok(count(pixels(output,1.6),510,80,640,108)>10,'local anchor stays identified inside its own small picture');
+    assert.equal(count(pixels(output,2.6),0,0,640,360),0,'all labels clear after linkmic ends');
+  };
+  for(const mode of ['clean','danmaku'])check(await media.exportJob({id:'focus-'+mode,session:session.id,scope:'full',ranges:[{start:0,end:3}],excluded:[],mode,linkmicEvents:events}));
+  const job={id:'focus-prepared',session:session.id,scope:'clips',ranges:[{start:0,end:3}],excluded:[],mode:'dual',linkmicEvents:events,outputRoot:path.join(root,'exports')};
+  job.output=await media.reserveOutput(job,store.session(session.id),store.sources(session.id));
+  const plan=await media.renderer.describe(session.id,job,softwareEncoder()),block=plan.blocks[0];
+  const changed=await media.renderer.spec({...plan,linkmicEvents:events.map(e=>({...e,participants:e.participants.map(p=>({...p,labelAlign:'right'}))}))},block);
+  assert.notEqual((await media.renderer.spec(plan,block)).assHash,changed.assHash,'alignment changes invalidate prepared cache');
+  const output=await media.renderer.exportJob(job,softwareEncoder());check(output);check(clipFile(output,'danmaku'));
+});
 test('names are burned into clean, danmaku, dual and prepared output at the right time and source rectangle',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-linkmic-render-')),file=path.join(root,'source.flv');
   execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=black:size=640x360:rate=30','-t','4','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-g','60','-bf','0','-f','flv',file]);

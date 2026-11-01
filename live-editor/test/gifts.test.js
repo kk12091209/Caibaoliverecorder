@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../server/store.js';
 import {Ingestor} from '../server/ingest.js';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {giftFromXml,saveGift,giftMessages,giftSegments,giftAss,safeGiftIcon} from '../server/gifts.js';
 import {DEFAULT_GIFT_STYLE,validateGiftStyle,giftCards,giftPrice} from '../shared/gifts.js';
 import {GiftIntake} from '../server/gift-intake.js';

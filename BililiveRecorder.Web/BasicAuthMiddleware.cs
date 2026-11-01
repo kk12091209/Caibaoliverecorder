@@ -26,8 +26,8 @@ namespace BililiveRecorder.Web
         {
             if (context.RequestServices.GetService<BasicAuthCredential>() is not { } credential)
             {
-                // 没有启用身份验证
-                return this.next(context);
+                // An HTTP listener without credentials must never expose recorder data.
+                return this.ResponseWith401Async(context);
             }
 
             string? headerValue = context.Request.Headers["Authorization"];

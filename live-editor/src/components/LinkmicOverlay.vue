@@ -12,7 +12,7 @@ const geometry=computed(()=>{
   return labelsAt(events.value,time.value).map(person=>labelGeometry(person,size.value.width,size.value.height,player.videoWidth,player.videoHeight)).filter(g=>g?.text);
 });
 const styleFor=g=>({left:g.left+'px',top:g.top+'px',width:(g.right-g.left)+'px',height:(g.bottom-g.top)+'px'});
-const textStyle=g=>({right:(g.right-g.x)+'px',bottom:(g.bottom-g.y)+'px',fontSize:g.size+'px',maxWidth:g.maxWidth+'px'});
+const textStyle=g=>({...(g.align==='left'?{left:(g.x-g.left)+'px'}:{right:(g.right-g.x)+'px'}),bottom:(g.bottom-g.y)+'px',fontSize:g.size+'px',maxWidth:g.maxWidth+'px'});
 const avatarStyle=g=>({left:(g.avatarX-g.left)+'px',top:(g.avatarY-g.top)+'px',width:g.avatarSize+'px',height:g.avatarSize+'px'});
 function update(){
   const current=player?.currentTime||0;

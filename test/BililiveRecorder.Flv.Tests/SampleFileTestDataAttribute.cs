@@ -14,7 +14,7 @@ namespace BililiveRecorder.Flv.Tests
         {
             this.BasePath = basePath;
             this.Patterns = patterns;
-            this.FullPath = Path.GetFullPath(Path.Combine(AttributeReader.GetProjectDirectory(), basePath));
+            this.FullPath = TestDataPaths.Resolve(basePath);
         }
 
         public string BasePath { get; }

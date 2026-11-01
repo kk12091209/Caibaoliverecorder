@@ -70,7 +70,10 @@ export function BrowserPluginsPage() {
               <PluginMark />
               <div>
                 <p className="plugin-meta">
-                  用户脚本 <span>v{plugin.version} · 本站调整版</span>
+                  用户脚本{' '}
+                  <span>
+                    v{plugin.version} · {plugin.edition}
+                  </span>
                 </p>
                 <h3>{plugin.name}</h3>
                 <p className="plugin-summary">{plugin.summary}</p>
@@ -87,12 +90,12 @@ export function BrowserPluginsPage() {
                 了解插件 <ArrowRightIcon />
               </Link>
               <a
-                href={plugin.homepage}
+                href={plugin.install || plugin.homepage}
                 target="_blank"
                 rel="noreferrer"
                 className="plugin-text-link"
               >
-                插件主页 <ArrowTopRightIcon />
+                {plugin.install ? '安装用户脚本' : '插件主页'} <ArrowTopRightIcon />
               </a>
               <Link to={`${pluginPath(plugin)}#source`} className="plugin-source-link">
                 <CodeIcon /> 查看源码
@@ -137,7 +140,10 @@ export function BrowserPluginPage() {
       <header className="shell plugin-detail-intro">
         <PluginMark />
         <p className="plugin-meta">
-          用户脚本 <span>v{plugin.version} · 本站调整版</span>
+          用户脚本{' '}
+          <span>
+            v{plugin.version} · {plugin.edition}
+          </span>
         </p>
         <h1>{plugin.name}</h1>
         <p className="plugin-tagline">{plugin.summary}</p>
@@ -147,8 +153,13 @@ export function BrowserPluginPage() {
           ))}
         </div>
         <div className="plugin-primary-actions">
-          <a className="btn btn-primary" href={plugin.homepage} target="_blank" rel="noreferrer">
-            前往插件主页 <ArrowTopRightIcon />
+          <a
+            className="btn btn-primary"
+            href={plugin.install || plugin.homepage}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {plugin.install ? '安装用户脚本' : '前往插件主页'} <ArrowTopRightIcon />
           </a>
           <button type="button" className="btn" onClick={() => setSourceOpen(true)}>
             <CodeIcon /> 查看源码
@@ -168,27 +179,15 @@ export function BrowserPluginPage() {
         <div>
           <p className="plugin-eyebrow">GET STARTED</p>
           <h2>选择适合你的方式</h2>
-          <p className="plugin-summary">
-            可在插件主页查看作者发布的版本；本站源码是这次调整后的 v{plugin.version}
-            ，可直接复制到脚本管理器。
-          </p>
+          <p className="plugin-summary">{plugin.setupSummary}</p>
         </div>
         <ol>
-          <li>
-            <strong>已有脚本管理器</strong>
-            <p>
-              点击「查看源码」并复制完整代码，在 Tampermonkey
-              等脚本管理器中新建脚本，替换编辑器内容并保存。
-            </p>
-          </li>
-          <li>
-            <strong>回到 B 站使用</strong>
-            <p>
-              刷新支持的 B
-              站页面。直播间里点击弹幕用户的菜单，选择「一键跟车」；工具栏中可查看三位对象，点击各自的
-              × 取消。
-            </p>
-          </li>
+          {plugin.steps.map((step) => (
+            <li key={step.title}>
+              <strong>{step.title}</strong>
+              <p>{step.body}</p>
+            </li>
+          ))}
         </ol>
       </section>
       {sourceOpen && <PluginSource plugin={plugin} close={closeSource} />}

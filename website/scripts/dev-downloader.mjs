@@ -2,6 +2,7 @@ import { createServer } from 'vite'
 import { createDownloaderApi } from '../server/downloader/api.mjs'
 
 const api = createDownloaderApi()
+const xhs = createDownloaderApi({ apiBase: '/api/downloader-xhs-v2' })
 const server = await createServer({
   server: {
     host: '127.0.0.1',
@@ -13,6 +14,7 @@ const server = await createServer({
       name: 'caibao-local-downloader',
       configureServer(vite) {
         vite.middlewares.use(api.handler)
+        vite.middlewares.use(xhs.handler)
       },
     },
   ],
@@ -25,6 +27,7 @@ const close = async () => {
   closing = true
   await server.close()
   await api.close()
+  await xhs.close()
   process.exit(0)
 }
 process.on('SIGINT', close)

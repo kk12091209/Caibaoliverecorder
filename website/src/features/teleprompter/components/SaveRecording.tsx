@@ -122,7 +122,12 @@ export function SaveRecording({
         const { extractRecordingTrack } = await import('../model/recording-export-client')
         for (const kind of choice === 'both' ? (['video', 'audio'] as const) : [choice]) {
           setPhase(kind === 'video' ? '正在生成无声视频…' : '正在生成音频…')
-          const file = await extractRecordingTrack(result.blob, kind, abort.signal)
+          const file = await extractRecordingTrack(
+            result.blob,
+            kind,
+            abort.signal,
+            next.reduce((total, item) => total + item.blob.size, 0),
+          )
           next.push({
             ...file,
             name: recordingSaveName(name, file.extension, kind === 'video' ? '-无声视频' : '-音频'),
@@ -147,7 +152,7 @@ export function SaveRecording({
     setError('')
     try {
       const { zipRecordings } = await import('../model/recording-export-client')
-      const blob = await zipRecordings(files, abort.signal)
+      const blob = await zipRecordings(files, abort.signal, result.blob.size)
       if (mounted.current && !abort.signal.aborted)
         setZip({
           blob,

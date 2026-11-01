@@ -21,8 +21,8 @@ async function fixture(t, platform = 'win32-x64') {
   const store = new Store(root), calls = [], modes = {};
   const payloads = new Map(['win32-x64', 'darwin-arm64'].map(id => [packageName('0.2.3', id), Buffer.from(`verified ${id} package`)]));
   const manifest = { schema: 1, version: '0.2.3', revision: 1, notes: ['双渠道更新'], platforms: Object.fromEntries([...payloads].map(([name, bytes], index) => [['win32-x64', 'darwin-arm64'][index], { name, size: bytes.length, sha256: digest(bytes) }])) };
-  const manifestBytes = Buffer.from(JSON.stringify(manifest));
-  const assets = new Map([['update-manifest.json', manifestBytes], ...payloads]);
+  const manifestBytes = Buffer.from(JSON.stringify(signed(manifest)));
+  const assets = new Map([['caibao-update.json', manifestBytes], ...payloads]);
   const release = { tag_name: 'v0.2.3', draft: false, prerelease: false, assets: [...assets].map(([name, bytes]) => ({ name, size: bytes.length, state: 'uploaded', digest: `sha256:${digest(bytes)}`, browser_download_url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/v0.2.3/${name}` })) };
   const stall = signal => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
   const fetcher = async (url, { signal } = {}) => {
@@ -43,7 +43,7 @@ async function fixture(t, platform = 'win32-x64') {
     const name = new URL(url).pathname.split('/').at(-1);
     if (url.includes('.myqcloud.com/')) return new Response(modes.download === 'corrupt' ? Buffer.alloc(payloads.get(name).length) : payloads.get(name));
     if (url.startsWith('https://api.github.com/')) return modes.github === 'limited' ? new Response(null, { status: 429, headers: { 'retry-after': '3600' } }) : modes.github === 'offline' ? new Response(null, { status: 503 }) : Response.json(release);
-    if (url.startsWith('https://github.com/')) return new Response(modes.github === 'corrupt' && name !== 'update-manifest.json' ? Buffer.alloc(payloads.get(name).length) : assets.get(name));
+    if (url.startsWith('https://github.com/')) return new Response(modes.github === 'corrupt' && name !== 'caibao-update.json' ? Buffer.alloc(payloads.get(name).length) : assets.get(name));
     throw new Error('Unexpected request: ' + url);
   };
   let now = 200000;
@@ -65,8 +65,8 @@ test('两端优先使用签名自有源，下载通过固定 COS 跳转，不联
     assert.equal(f.updates.snapshot().candidate.fallbackUrl, undefined);
   }
 });
-test('自有源断网、超时或签名损坏时自动通过 GitHub 检查更新', async t => {
-  for (const mode of ['offline', 'timeout', 'tampered']) {
+test('自有源断网或超时时通过有同等签名校验的 GitHub 检查更新', async t => {
+  for (const mode of ['offline', 'timeout']) {
     const f = await fixture(t); f.modes.check = mode; await download(f);
     assert.equal(f.updates.status, 'ready');
     assert.ok(f.calls[1].startsWith('https://api.github.com/'));
@@ -124,3 +124,5 @@ test('菜包宇宙链接在 Windows、Mac 桌面桥和浏览器中打开固定�
     else { assert.equal(messages[0].action, 'openExternal'); assert.equal(messages[0].url, 'https://www.caibao.media/'); assert.equal(opened.length, 0); }
   }
 });
+
+test('主源签名损坏不能触发备用源降级',async t=>{const f=await fixture(t);f.modes.check='tampered';await f.updates.check();assert.equal(f.updates.status,'error');assert.equal(f.updates.candidate,null);assert.equal(f.calls.length,1);});

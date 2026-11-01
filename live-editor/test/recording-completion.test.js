@@ -8,7 +8,7 @@ import { Store } from '../server/store.js';
 import { Media } from '../server/media.js';
 import { BackgroundPreparation } from '../server/background-preparation.js';
 import { Ingestor } from '../server/ingest.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { directories } from '../server/directories.js';
 import { RenderCache } from '../server/render-cache.js';
 import { TemporaryWorkspaces } from '../server/temp-workspaces.js';

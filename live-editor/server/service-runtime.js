@@ -1,3 +1,4 @@
+import {protectDataDirectory} from './local-access.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -22,7 +23,7 @@ const readJson=async file=>{try{return JSON.parse(await fs.readFile(file,'utf8')
 // Acquire before opening Store, whose constructor performs recovery writes.
 export class ServiceRuntime {
   static async acquire(root,appRoot,{managed=false,now=Date.now,isAlive=alive,startupGraceMs=30000,clientTimeoutMs=10000}={}){
-    await fs.mkdir(root,{recursive:true});root=await fs.realpath(root);
+    await fs.mkdir(root,{recursive:true});root=await fs.realpath(root);await protectDataDirectory(root);
     const runtime=new ServiceRuntime(root,{managed,now,isAlive,startupGraceMs,clientTimeoutMs});
     runtime.build=await serviceBuild(appRoot);
     let guard;
@@ -58,7 +59,7 @@ export class ServiceRuntime {
   }
   constructor(root,{managed,now,isAlive,startupGraceMs,clientTimeoutMs}){
     Object.assign(this,{root,managed,now,isAlive,startupGraceMs,clientTimeoutMs});
-    this.started=now();this.instance=randomBytes(16).toString('hex');this.token=randomBytes(32).toString('hex');
+    this.started=now();this.instance=randomBytes(16).toString('hex');this.token=randomBytes(32).toString('hex');this.uiToken=randomBytes(32).toString('hex');
     this.file=path.join(root,'desktop-service.json');this.lockFile=path.join(root,'desktop-service.lock.sqlite');
     this.startupFile=path.join(root,'desktop-startup-state.json');
     this.clients=new Map();this.pending='';this.closed=false;this.stopping=false;
@@ -73,7 +74,7 @@ export class ServiceRuntime {
   }
   async publish(port){
     this.origin='http://127.0.0.1:'+port;
-    await atomicJson(this.file,{protocol:SERVICE_PROTOCOL,instance:this.instance,token:this.token,pid:process.pid,origin:this.origin,dataPath:this.root,build:this.build});
+    await atomicJson(this.file,{protocol:SERVICE_PROTOCOL,instance:this.instance,token:this.token,uiToken:this.uiToken,pid:process.pid,origin:this.origin,dataPath:this.root,build:this.build});
     // Recovery may take time on a slow disk. Give the desktop its full grace
     // period only after the backend can actually accept a heartbeat.
     this.started=this.now();

@@ -11,7 +11,7 @@ import {
   ReloadIcon,
 } from '@radix-ui/react-icons'
 import { Mark } from '../../shared/ui/Mark'
-import { mediaDuration } from './lib/media-downloader'
+import { formatBytes, mediaDuration } from './lib/media-downloader'
 import { useMediaDownloader } from './useMediaDownloader'
 import { MediaImage } from './MediaImage'
 import { AlbumSaveDialog } from './AlbumSaveDialog'
@@ -40,13 +40,14 @@ export function MediaDownloaderPage() {
     setMultiple,
     preview,
     setPreview,
-    player,
     setSaveMode,
     album,
     setAlbum,
     motionPlayer,
     saveMode,
     notice,
+    partsJob,
+    transferJobs,
     activeResolve,
     dialog,
     selectAll,
@@ -79,7 +80,7 @@ export function MediaDownloaderPage() {
       <main className="md-main">
         <div className="md-heading">
           <h1>菜包下载助手</h1>
-          <p>保存抖音与 B 站的视频、图片和实况</p>
+          <p>保存抖音、B 站与小红书的视频、图片和实况</p>
         </div>
         <form
           className="md-form"
@@ -129,7 +130,7 @@ export function MediaDownloaderPage() {
               取消解析
             </button>
           ) : (
-            <span>抖音 · 哔哩哔哩</span>
+            <span>抖音 · 哔哩哔哩 · 小红书</span>
           )}
         </div>
         <div className="md-samples">
@@ -156,7 +157,7 @@ export function MediaDownloaderPage() {
             <p>
               识别图片、实况、视频与分 P，检查可下载的源文件。
               <br />
-              部分抖音作品需要加载网页，请稍候。
+              部分抖音或小红书作品需要加载网页，请稍候。
             </p>
           </div>
         )}
@@ -174,13 +175,21 @@ export function MediaDownloaderPage() {
                 />
               ) : (
                 <span className="md-platform-icon">
-                  {result.platform === 'bilibili' ? 'B' : '抖'}
+                  {{ bilibili: 'B', douyin: '抖', xiaohongshu: '红' }[result.platform]}
                 </span>
               )}
               <div className="md-result-title">
                 <p>
                   {result.author}
-                  <span> · {result.platform === 'douyin' ? '抖音' : '哔哩哔哩'}</span>
+                  <span>
+                    {' '}
+                    ·{' '}
+                    {
+                      { douyin: '抖音', bilibili: '哔哩哔哩', xiaohongshu: '小红书' }[
+                        result.platform
+                      ]
+                    }
+                  </span>
                 </p>
                 <h2>{result.title}</h2>
                 <p>
@@ -224,7 +233,7 @@ export function MediaDownloaderPage() {
                         ? '实况保存为 MP4，普通图片保存为 JPG / PNG；多选打包为 ZIP。'
                         : '图片保存为 JPG / PNG，多张图片打包为 ZIP。'
                       : result.platform === 'bilibili'
-                        ? '单个 B 站视频支持边合并边下载；多个分 P 完成后打包。'
+                        ? '每个分 P 分别保存为 MP4，多选也无需解压。'
                         : '视频保存为 MP4。'}
                 </small>
               </fieldset>
@@ -334,35 +343,14 @@ export function MediaDownloaderPage() {
               </>
             ) : (
               <div className="md-video-layout">
-                <div className="md-video-preview">
-                  {player ? (
-                    <video
-                      src={player.url}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      aria-label="视频预览"
-                    />
-                  ) : (
-                    <>
-                      <MediaImage
-                        key={result.cover}
-                        src={result.directCover}
-                        fallback={result.cover}
-                        alt="视频封面"
-                        decoding="async"
-                      />
-                      <button
-                        className="md-preview-button"
-                        disabled={pending || !selected.size}
-                        onClick={() => void download([[...selected][0]], 'preview')}
-                      >
-                        <PlayIcon /> 预览
-                        {count > 1 ? ` P${[...selected][0] || 1}` : '视频'}
-                      </button>
-                    </>
-                  )}
-                  <p>{player ? player.name : '预览会先准备完整视频，完成后可直接保存。'}</p>
+                <div className="md-video-cover">
+                  <MediaImage
+                    key={result.cover}
+                    src={result.directCover}
+                    fallback={result.cover}
+                    alt="视频封面"
+                    decoding="async"
+                  />
                 </div>
                 <div className="md-parts">
                   <div className="md-parts-heading">
@@ -423,6 +411,42 @@ export function MediaDownloaderPage() {
                           : '下载视频'}
                   </button>
                   <p className="md-quality-note">统一保存为 MP4。{result.notice}</p>
+                  {result.platform === 'bilibili' && count > 1 && saveMode === 'file' && (
+                    <p className="md-quality-note">
+                      多选分 P 会分别下载为 MP4，每个分 P 可边处理边下载。
+                    </p>
+                  )}
+                  {partsJob?.downloads && (
+                    <div className="md-part-downloads" aria-label="分 P 下载文件">
+                      {partsJob.downloads.map((part) => (
+                        <div key={part.index}>
+                          <span>
+                            <strong>P{part.index}</strong>
+                            <small>
+                              {part.ready
+                                ? '文件已就绪'
+                                : partsJob.status === 'failed'
+                                  ? '准备失败'
+                                  : partsJob.status === 'cancelled'
+                                    ? '已取消'
+                                    : part.streaming
+                                      ? '正在边合并边传输'
+                                      : '等待处理'}
+                            </small>
+                          </span>
+                          {['failed', 'cancelled'].includes(partsJob.status) && !part.ready ? (
+                            <button disabled={pending} onClick={() => void download([part.index])}>
+                              重试 P{part.index}
+                            </button>
+                          ) : (
+                            <a href={part.url} download={part.name}>
+                              单独下载 P{part.index}
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {saveMode === 'album' &&
                     result.platform === 'bilibili' &&
                     result.assets.some(
@@ -440,6 +464,32 @@ export function MediaDownloaderPage() {
               <p className="md-download-notice" role="status">
                 {notice}
               </p>
+            )}
+            {transferJobs.length > 0 && (
+              <div className="md-transfer-status" aria-label="下载任务状态" aria-live="polite">
+                {transferJobs.map((job) => (
+                  <div key={job.id}>
+                    <strong>
+                      {job.monitoringError ||
+                        (job.status === 'done'
+                          ? '文件已就绪，请在浏览器中查看下载进度。'
+                          : job.status === 'failed'
+                            ? `下载中断：${job.error}`
+                            : job.status === 'cancelled'
+                              ? '任务已取消'
+                              : job.recovering
+                                ? '连接波动，正在自动重试…'
+                                : job.phase)}
+                    </strong>
+                    <span>
+                      服务器已获取 {formatBytes(job.bytes)}
+                      {!!job.outputBytes && ` · 已生成文件 ${formatBytes(job.outputBytes)}`}
+                      {job.count > 1 && ` · 已准备 ${job.current}/${job.count} 个文件`}
+                      {!!job.retries && ` · 自动重试 ${job.retries} 次`}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
             {result.kind === 'images' && (
               <p className="md-result-note">
@@ -533,7 +583,7 @@ export function MediaDownloaderPage() {
                       <button
                         className="md-live-play"
                         disabled={pending}
-                        onClick={() => void download([image.index], 'preview')}
+                        onClick={() => void download([image.index], 'motion')}
                       >
                         <PlayIcon />
                         {pending ? '正在准备…' : '播放实况'}

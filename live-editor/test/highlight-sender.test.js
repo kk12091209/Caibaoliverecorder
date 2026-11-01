@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../server/store.js';
 import {Ingestor} from '../server/ingest.js';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {chatXml} from '../server/douyin-recorder.js';
 import {ChatIntake} from '../server/chat-intake.js';
 import {senderFilterFor,validateSenderFilter} from '../shared/sender-filter.js';

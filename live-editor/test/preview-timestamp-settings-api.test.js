@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {TIMESTAMP_STYLES,DEFAULT_TIMESTAMP_STYLE,TIMESTAMP_STYLE_SETTING,validateTimestampStyle,normalizedTimestampStyle,TIMESTAMP_POSITIONS,DEFAULT_TIMESTAMP_POSITION,TIMESTAMP_POSITION_SETTING,validateTimestampPosition,normalizedTimestampPosition} from '../shared/timestamp-style.js';
 
 test('timestamp styles accept only known choices and safely normalize older settings',()=>{

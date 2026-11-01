@@ -190,6 +190,7 @@ enum RecordingPowerStatus {
     }
     func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
         config.userContentController.add(self, name: "caibo")
         // Let the page report liveness. Waiting for evaluateJavaScript on a
         // hung engine can retain the old view even after it is replaced.
@@ -258,6 +259,7 @@ enum RecordingPowerStatus {
             guard let origin = backend.origin else { return }
             var request = URLRequest(url: origin.appendingPathComponent("api/folders/open"))
             request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(backend.endpoint?.token, forHTTPHeaderField: "X-Caibo-Instance")
             request.httpBody = Data("{\"kind\":\"exports\"}".utf8)
             do { let (_,response) = try await URLSession.shared.data(for: request); if (response as? HTTPURLResponse)?.statusCode != 200 { throw problem("无法打开导出文件夹，请在设置中检查保存路径。") } } catch { showError(error) }
         }
@@ -359,6 +361,14 @@ enum RecordingPowerStatus {
             let log = try FileHandle(forWritingTo: file); defer { try? log.close() }
             try log.seekToEnd(); try log.write(contentsOf: Data(text.utf8))
         } catch { /* A diagnostic failure must never prevent startup. */ }
+    }
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let space = challenge.protectionSpace
+        guard let endpoint = backend.endpoint, let uiToken = endpoint.uiToken, let origin = URL(string: endpoint.origin),
+              space.authenticationMethod == NSURLAuthenticationMethodHTTPBasic,
+              space.host == origin.host, space.port == origin.port, space.protocol == origin.scheme,
+              challenge.previousFailureCount == 0 else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+        completionHandler(.useCredential, URLCredential(user: "caibao", password: uiToken, persistence: .forSession))
     }
     func loadPage(_ origin: URL) {
         pageGeneration += 1; pageLoading = true; pageReady = false; pageFailed = false; pageReadySince = nil

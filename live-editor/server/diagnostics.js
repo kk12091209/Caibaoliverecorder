@@ -150,11 +150,18 @@ export class DailyDiagnostics{
     const decoder=new StringDecoder('utf8');let line='';
     const lifecycle={connecting:'正在连接弹幕服务器',authenticated:'弹幕认证通过','first-comment':'已收到首条普通弹幕',disconnected:'弹幕连接已断开','remote-closed':'弹幕服务器关闭连接，等待重连','credentials-changed':'登录态已变更，重新认证','connect-failed':'弹幕连接失败，等待重连','authentication-rejected':'弹幕认证被拒绝，等待重连','authentication-invalid':'弹幕认证回应无效，等待重连','authentication-timeout':'弹幕认证等待超时，等待重连','heartbeat-timeout':'弹幕心跳回应超时，等待重连','send-failed':'弹幕发送心跳失败，等待重连','receive-failed':'弹幕接收异常，等待重连','message-invalid':'忽略格式异常的弹幕'};
     const info=new Set(['connecting','authenticated','first-comment','disconnected','credentials-changed']);
+    const stages={'server-info':'请求弹幕地址',socket:'连接弹幕线路',authentication:'弹幕认证',heartbeat:'首次心跳'};
+    const kinds={api:'平台接口返回错误',http:'HTTP 请求被拒绝','api-paused':'接口保护正在等待恢复',dns:'域名解析失败',socket:'网络连接失败',timeout:'请求超时',tls:'安全连接失败',websocket:'WebSocket 连接失败',network:'网络请求失败','invalid-response':'平台回应格式异常',unknown:'未分类连接错误'};
     const emit=()=>{
       const event=/\[DanmakuLifecycle\] room=(\d{1,10}) event=([a-z-]+)(?: code=(-?\d{1,10}))?(?:\s|$)/.exec(line);
       // Retain only known state fields. The rest of a core line may contain
       // protocol payloads; do not promote arbitrary informational output.
-      if(event&&Object.hasOwn(lifecycle,event[2]))this.record('B站弹幕',`房间 ${event[1]}：${lifecycle[event[2]]}${event[3]===undefined?'':`（代码 ${event[3]}）`}`,{level:info.has(event[2])?'信息':'警告'});
+      if(event&&Object.hasOwn(lifecycle,event[2])){
+        const detail=/\bstage=([a-z-]+) kind=([a-z-]+) elapsed_ms=(\d{1,10})(?:\s|$)/.exec(line);
+        const known=event[2]==='connect-failed'&&detail&&Object.hasOwn(stages,detail[1])&&Object.hasOwn(kinds,detail[2]);
+        const context=known?`；阶段：${stages[detail[1]]}；原因：${kinds[detail[2]]}；本次耗时 ${(Number(detail[3])/1000).toFixed(1)} 秒`:'';
+        this.record('B站弹幕',`房间 ${event[1]}：${lifecycle[event[2]]}${event[3]===undefined?'':`（代码 ${event[3]}）`}${context}`,{level:info.has(event[2])?'信息':'警告'});
+      }
       else if(/\b(?:warn|error|fatal|exception|WRN|ERR|FTL)\b|失败|异常|错误/i.test(line))this.record(component,line,{level:'警告'});
       line='';
     };

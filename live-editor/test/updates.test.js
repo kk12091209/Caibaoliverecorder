@@ -3,25 +3,28 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
+import { generateKeyPairSync,sign,createHash } from 'node:crypto';
 import { Store } from '../server/store.js';
 import { Updates, newerRelease, validateUpdate, githubFetch, UPDATE_REPOSITORY, packageName } from '../server/updates.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import packageInfo from '../package.json' with {type:'json'};
+import {UPDATE_KEY_ID} from '../server/update-trust.js';
+const keys=generateKeyPairSync('ed25519');
+const signed=value=>{const bytes=Buffer.from(JSON.stringify(value));return {schema:1,keyId:UPDATE_KEY_ID,data:bytes.toString('base64'),signature:sign(null,bytes,keys.privateKey).toString('base64')};};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const current={version:'0.1.6',revision:2};
 function publication(platform='win32-x64',revision=3,version='0.1.6'){
   const bytes=Buffer.from('verified update package\n'),tag_name='v'+version,name=packageName(version,platform);
   const manifest={schema:1,version,revision,notes:['修复测试问题'],platforms:{[platform]:{name,size:bytes.length,sha256:sha(bytes)}}};
-  const manifestBytes=Buffer.from(JSON.stringify(manifest));
+  const manifestBytes=Buffer.from(JSON.stringify(signed(manifest)));
   const asset=(name,bytes)=>({name,size:bytes.length,state:'uploaded',digest:'sha256:'+sha(bytes),browser_download_url:`https://github.com/${UPDATE_REPOSITORY}/releases/download/${tag_name}/${name}`});
-  const release={tag_name,draft:false,prerelease:false,assets:[asset('update-manifest.json',manifestBytes),asset(name,bytes)]};
+  const release={tag_name,draft:false,prerelease:false,assets:[asset('caibao-update.json',manifestBytes),asset(name,bytes)]};
   return {bytes,manifest,manifestBytes,release,name};
 }
 async function fixture(t,options={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-updates-')),store=new Store(root),published=publication(options.platform),calls=[];
-  const fetcher=async(url,init)=>{calls.push(url);if(url.includes('api.github.com'))return Response.json(published.release);if(url.endsWith('update-manifest.json'))return new Response(published.manifestBytes);return new Response(published.bytes);};
-  const updates=new Updates(store,{current,platform:'win32-x64',fetcher,mirror:false,...options});
+  const fetcher=async(url,init)=>{calls.push(url);if(url.includes('api.github.com'))return Response.json(published.release);if(url.endsWith('caibao-update.json'))return new Response(published.manifestBytes);return new Response(published.bytes);};
+  const updates=new Updates(store,{current,platform:'win32-x64',fetcher,mirrorPublicKey:keys.publicKey,mirror:false,...options});
   t.after(async()=>{await updates.close();store.close();await fs.rm(root,{recursive:true,force:true});});
   return {root,store,updates,published,calls,fetcher};
 }
@@ -45,7 +48,7 @@ test('next-version reminder preference survives restart and elapsed days, withou
   await f.updates.check();assert.equal(f.updates.ignoreVersion('0.2.8').ignored,true);
   assert.equal(f.updates.snapshot().enabled,true);assert.equal(f.updates.snapshot().deferred,false);
   now+=30*86400000;assert.equal(f.updates.snapshot().ignored,true);await f.updates.close();
-  const store=new Store(f.root),restarted=new Updates(store,{current,platform:'win32-x64',mirror:false,fetcher:f.fetcher,now:()=>now});
+  const store=new Store(f.root),restarted=new Updates(store,{current,platform:'win32-x64',mirrorPublicKey:keys.publicKey,mirror:false,fetcher:f.fetcher,now:()=>now});
   try {
   await restarted.check();assert.equal(restarted.snapshot().ignored,true);
   restarted.download('0.2.8');await restarted.downloadTask;assert.equal(restarted.status,'ready');
@@ -168,7 +171,7 @@ test('服务器限流期间不重复请求，重启后保留等待时间，到�
   const limited=await f.updates.check();assert.equal(limited.retryAt,now+120000);assert.equal(limited.status,'error');assert.equal(limited.checkedAt,0);
   for(let i=0;i<10;i++)await f.updates.check();assert.equal(calls,1);
   await f.updates.close();
-  const restarted=new Updates(f.store,{current,mirror:false,platform:'win32-x64',now:()=>now,fetcher:f.fetcher});t.after(()=>restarted.close());
+  const restarted=new Updates(f.store,{current,mirrorPublicKey:keys.publicKey,mirror:false,platform:'win32-x64',now:()=>now,fetcher:f.fetcher});t.after(()=>restarted.close());
   assert.equal((await restarted.check()).retryAt,limited.retryAt);assert.equal(f.calls.length,0);
   now=limited.retryAt;const recovered=await restarted.check();assert.equal(f.calls.length,2);assert.equal(recovered.status,'available');assert.equal(recovered.retryAt,0);assert.equal(recovered.error,'');
 });
@@ -228,7 +231,7 @@ test('拒绝更新缓存符号链接，保留链接外的文件',async t=>{
 });
 test('重启后可复用已校验安装包；清理更新缓存保留其他数据',async t=>{
   const f=await fixture(t);await downloaded(f);await f.updates.close();
-  const next=new Updates(f.store,{current,mirror:false,platform:'win32-x64',fetcher:f.fetcher});t.after(()=>next.close());
+  const next=new Updates(f.store,{current,mirrorPublicKey:keys.publicKey,mirror:false,platform:'win32-x64',fetcher:f.fetcher});t.after(()=>next.close());
   await next.check();assert.equal(next.status,'ready');await fs.writeFile(path.join(f.root,'user-video.flv'),'keep');
   await next.clearCache();assert.equal(next.snapshot().hasCache,false);assert.equal(await fs.readFile(path.join(f.root,'user-video.flv'),'utf8'),'keep');
 });
@@ -238,7 +241,7 @@ test('已安装相同修订不提醒，历史下载缓存仍可手动清理',asy
 test('安装路径仅通过授权桌面通道提供；Web 更新接口不接受路径或任意 URL',async t=>{
   const next=packageInfo.version.split('.').map(Number);next[2]++;
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',1,next.join('.'));
-  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{mirror:false,platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('update-manifest.json')?p.manifestBytes:p.bytes)}});
+  const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{mirrorPublicKey:keys.publicKey,mirror:false,platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('caibao-update.json')?p.manifestBytes:p.bytes)}});
   app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
   const post=(route,body={},headers={})=>fetch(app.runtime.origin+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   assert.equal((await post('/internal/desktop',{action:'prepareUpdate'})).status,403);

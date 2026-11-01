@@ -1,5 +1,19 @@
 import Foundation
+import CryptoKit
 import Darwin
+
+
+enum FixtureSignature {
+    static let key = Curve25519.Signing.PrivateKey()
+    static func envelope(_ asset: [String: Any]) throws -> Data {
+        let manifest: [String: Any] = ["schema": 1, "version": "0.2.0", "platforms": ["darwin-arm64": ["name": asset["name"]!, "size": asset["size"]!, "sha256": String((asset["digest"] as? String ?? "").dropFirst(7))]]]
+        let bytes = try JSONSerialization.data(withJSONObject: manifest)
+        return try JSONSerialization.data(withJSONObject: ["schema": 1, "keyId": "caibao-2026-01", "data": bytes.base64EncodedString(), "signature": key.signature(for: bytes).base64EncodedString()])
+    }
+    static func asset(_ bytes: Data) -> [String: Any] {
+        ["name": "caibao-update.json", "state": "uploaded", "size": bytes.count, "digest": "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), "browser_download_url": "https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.2.0/caibao-update.json"]
+    }
+}
 
 @main struct Checks {
     @MainActor static func main() async throws {
@@ -20,8 +34,9 @@ import Darwin
             var linked: URL?
             if mode == "linked-cache" { let destination = base.appendingPathComponent("external"); try fm.createDirectory(at: destination, withIntermediateDirectories: false); try fm.createSymbolicLink(at: data.appendingPathComponent("repairs"), withDestinationURL: destination); linked = destination }
             defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path); try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: data.path) }
+            var manifestBytes = Data()
             var downloads = 0, progress: [String] = []
-            let repair = ComponentRepair(target: target, data: data, version: "0.2.0", helperExecutable: URL(fileURLWithPath: CommandLine.arguments[0]), downloader: { address, destination, _, _ in
+            let repair = ComponentRepair(target: target, data: data, version: "0.2.0", helperExecutable: URL(fileURLWithPath: CommandLine.arguments[0]), trustKey: FixtureSignature.key.publicKey.rawRepresentation, downloader: { address, destination, _, _ in
                 downloads += 1
                 if mode == "offline" { throw URLError(.notConnectedToInternet) }
                 if mode == "timeout" { throw URLError(.timedOut) }
@@ -34,8 +49,9 @@ import Darwin
                     if mode == "draft" { metadata["draft"] = true }
                     if mode == "missing-digest" { entry.removeValue(forKey: "digest") }
                     if mode == "bad-hash" { entry["digest"] = "sha256:" + String(repeating: "0", count: 64) }
-                    metadata["assets"] = [entry]; try JSONSerialization.data(withJSONObject: metadata).write(to: destination)
-                } else {
+                    manifestBytes = try FixtureSignature.envelope(entry)
+                    metadata["assets"] = [entry, FixtureSignature.asset(manifestBytes)]; try JSONSerialization.data(withJSONObject: metadata).write(to: destination)
+                } else if address.path.hasSuffix(".json") { try manifestBytes.write(to: destination) } else {
                     if mode == "partial-package" { try package.prefix(4).write(to: destination) }
                     else if mode == "oversized-package" { try (package + Data([1])).write(to: destination) }
                     else { try package.write(to: destination) }
@@ -47,7 +63,7 @@ import Darwin
             let repairs = data.appendingPathComponent("repairs")
             if let linked { guard try fm.contentsOfDirectory(atPath: linked.path).isEmpty else { throw problem("Wrote through linked cache") } }
             else if fm.fileExists(atPath: repairs.path) { guard try fm.contentsOfDirectory(atPath: repairs.path).isEmpty else { throw problem("Partial repair cache leaked: " + mode) } }
-            guard try fm.contentsOfDirectory(atPath: parent.path) == ["Caibo.app"], downloads <= 2 else { throw problem("Partial application or repeated download leaked") }
+            guard try fm.contentsOfDirectory(atPath: parent.path) == ["Caibo.app"], downloads <= 3 else { throw problem("Partial application or repeated download leaked") }
             if ["read-only-install", "read-only-data", "linked-cache"].contains(mode) { guard downloads == 0 else { throw problem("Unsafe write location allowed a download") } }
             else { guard !progress.isEmpty else { throw problem("Repair gave no phase feedback") } }
             print("PASS " + mode + " fails cleanly and preserves application, data and cache boundaries")

@@ -452,7 +452,7 @@ test('仅移除记录也保护运行中/待保存任务，互斥删除；已结�
 });
 
 test('HTTP 删除预览只读，POST 必须明确确认，成功后文件和任务消失，活动任务仍受保护', async () => {
-  const { createApp } = await import('../server/index.js');
+  const {createApp,fetch} = await import('./helpers/authenticated-app.js');
   const appRoot = path.join(root, 'http');
   const app = await createApp({automaticClean:false,preparation:false, port: await availablePort(), data: path.join(appRoot, 'data'), projectRoot: appRoot, noRecorder: true, compact: false, ffmpeg: 'not-launched', ffprobe: 'not-launched' });
   app.ingestor.stop();

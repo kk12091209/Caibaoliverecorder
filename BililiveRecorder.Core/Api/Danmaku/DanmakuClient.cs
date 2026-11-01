@@ -5,6 +5,10 @@ using System.IO;
 using System.IO.Compression;
 using System.IO.Pipelines;
 using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +16,7 @@ using System.Timers;
 using BililiveRecorder.Core.Config;
 using Nerdbank.Streams;
 using Newtonsoft.Json;
+using Polly.CircuitBreaker;
 using Serilog;
 using Timer = System.Timers.Timer;
 
@@ -48,6 +53,9 @@ namespace BililiveRecorder.Core.Api.Danmaku
             internal long LastHeartbeat, LastPing;
             internal string? Failure;
             internal int? AuthenticationCode;
+            internal long StartedAt;
+            internal string Stage = "server-info", FailureKind = "unknown";
+            internal int? FailureCode;
             private int stopped;
             internal Session(int roomId, int credentialVersion, CancellationToken cancellationToken)
             {
@@ -116,8 +124,35 @@ namespace BililiveRecorder.Core.Api.Danmaku
         private void Lifecycle(Session session, string state, bool warning = false, int? code = null)
         {
             var level = warning ? Serilog.Events.LogEventLevel.Warning : Serilog.Events.LogEventLevel.Information;
+            if (state == "connect-failed")
+            {
+                // Fixed categories and numeric codes only: exception messages can
+                // contain signed URLs, API bodies, cookies or protocol tokens.
+                var elapsed = Math.Max(0, this.now() - session.StartedAt);
+                if (session.FailureCode.HasValue) this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l} code={Code} stage={Stage:l} kind={Kind:l} elapsed_ms={Elapsed}", session.RoomId, state, session.FailureCode.Value, session.Stage, session.FailureKind, elapsed);
+                else this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l} stage={Stage:l} kind={Kind:l} elapsed_ms={Elapsed}", session.RoomId, state, session.Stage, session.FailureKind, elapsed);
+                return;
+            }
             if (code.HasValue) this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l} code={Code}", session.RoomId, state, code.Value);
             else this.logger.Write(level, "[DanmakuLifecycle] room={RoomId} event={State:l}", session.RoomId, state);
+        }
+
+        internal static (string Kind, int? Code) DescribeConnectionFailure(Exception error)
+        {
+            if (error is BrokenCircuitException) return ("api-paused", null);
+            for (Exception? current = error, previous = null; current is not null && current != previous; previous = current, current = current.InnerException)
+            {
+                if (current is BilibiliApiResponseCodeNotZeroException api) return ("api", api.Code);
+                if (current is Http412Exception) return ("http", 412);
+#if NET8_0_OR_GREATER
+                if (current is HttpRequestException http && http.StatusCode.HasValue) return ("http", (int)http.StatusCode.Value);
+#endif
+                if (current is SocketException socket) return (socket.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain ? "dns" : socket.SocketErrorCode == SocketError.TimedOut ? "timeout" : "socket", (int)socket.SocketErrorCode);
+                if (current is AuthenticationException) return ("tls", null);
+                if (current is OperationCanceledException || current is TimeoutException) return ("timeout", null);
+                if (current is JsonException) return ("invalid-response", null);
+            }
+            return error is WebSocketException ? ("websocket", null) : error is HttpRequestException ? ("network", null) : ("unknown", null);
         }
 
         private void RuntimeCookie_Changed(object? sender, EventArgs e)
@@ -174,15 +209,18 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 if (this.disposedValue) throw new ObjectDisposedException(nameof(DanmakuClient));
                 if (this.current is not null) return;
                 session = new Session(roomId, Volatile.Read(ref this.credentialVersion), cancellationToken);
+                session.StartedAt = this.now();
                 this.current = session;
                 this.Lifecycle(session, "connecting");
                 var serverInfo = await this.apiClient.GetDanmakuServerAsync(roomId).ConfigureAwait(false);
                 session.Token.ThrowIfCancellationRequested();
                 if (serverInfo.Data is null) throw new IOException("未获得弹幕服务器信息。");
                 var server = serverInfo.Data.SelectDanmakuServer(transportMode);
+                session.Stage = "socket";
                 session.Transport = this.transportFactory(server.TransportMode, bindAddress);
                 session.Reader = await session.Transport.ConnectAsync(server.Host, server.Port, allowedAddressFamily, session.Token).ConfigureAwait(false);
                 session.Token.ThrowIfCancellationRequested();
+                session.Stage = "authentication";
                 using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(session.Token))
                 {
                     deadline.CancelAfter(this.authenticationTimeout);
@@ -200,12 +238,18 @@ namespace BililiveRecorder.Core.Api.Danmaku
                     }
                     session.Token.ThrowIfCancellationRequested();
                 }
+                session.Stage = "heartbeat";
                 await this.SendHeartbeatAsync(session).ConfigureAwait(false);
                 if (this.automaticHeartbeat) this.timer.Start();
             }
-            catch
+            catch (Exception error)
             {
-                if (session is not null) this.Detach(session, session.Failure ?? (session.Token.IsCancellationRequested ? "disconnected" : "connect-failed"), !session.Token.IsCancellationRequested);
+                if (session is not null)
+                {
+                    var detail = DescribeConnectionFailure(error);
+                    session.FailureKind = detail.Kind; session.FailureCode = detail.Code;
+                    this.Detach(session, session.Failure ?? (session.Token.IsCancellationRequested ? "disconnected" : "connect-failed"), !session.Token.IsCancellationRequested);
+                }
                 throw;
             }
             finally { this.semaphoreSlim.Release(); }
@@ -388,7 +432,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
                 {
                     var result = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
                     var buffer = result.Buffer;
-                    while (TryParseCommand(ref buffer, callback)) { }
+                    while (TryParseCommand(ref buffer, callback, cancellationToken)) { }
                     reader.AdvanceTo(buffer.Start, buffer.End);
                     if (result.IsCompleted)
                     {
@@ -400,8 +444,21 @@ namespace BililiveRecorder.Core.Api.Danmaku
             finally { await reader.CompleteAsync().ConfigureAwait(false); }
         }
 
-        private static bool TryParseCommand(ref ReadOnlySequence<byte> buffer, Action<int, string> callback)
+        private sealed class PacketBudget
         {
+            private long expandedLeft = 32 * 1024 * 1024;
+            private int packetsLeft = 10000;
+            internal void Packet() { if (--packetsLeft < 0) throw new InvalidDataException("弹幕批量数据包数量超出限制。"); }
+            internal void Expanded(long bytes)
+            {
+                if (bytes < 0 || bytes > expandedLeft) throw new InvalidDataException("弹幕解压累计数据超出限制。");
+                expandedLeft -= bytes;
+            }
+        }
+
+        private static bool TryParseCommand(ref ReadOnlySequence<byte> buffer, Action<int, string> callback, CancellationToken cancellationToken, PacketBudget? budget = null, int depth = 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (buffer.Length < 4)
                 return false;
 
@@ -439,13 +496,17 @@ namespace BililiveRecorder.Core.Api.Danmaku
             }
 
             if (header.HeaderLength < 16 || header.HeaderLength > length) throw new InvalidDataException("弹幕数据包头无效。");
+            budget ??= new PacketBudget();
+            budget.Packet();
+            if (header.Action == 5 && (header.Version == 2 || header.Version == 3) && depth >= 4)
+                throw new InvalidDataException("弹幕压缩嵌套层数超出限制。");
             var bodySlice = buffer.Slice(header.HeaderLength, length - header.HeaderLength);
             buffer = buffer.Slice(length);
 
             if (header.Version == 2 && header.Action == 5)
             {
                 using var deflate = new DeflateStream(bodySlice.Slice(2, bodySlice.End).AsStream(), CompressionMode.Decompress, leaveOpen: false);
-                ParseCommandCompressedBody(deflate, callback);
+                ParseCommandCompressedBody(deflate, callback, cancellationToken, budget, depth + 1);
             }
             else if (header.Version == 3 && header.Action == 5)
             {
@@ -454,7 +515,7 @@ namespace BililiveRecorder.Core.Api.Danmaku
 #else
                 using var brotli = new BrotliSharpLib.BrotliStream(bodySlice.AsStream(), CompressionMode.Decompress, leaveOpen: false);
 #endif
-                ParseCommandCompressedBody(brotli, callback);
+                ParseCommandCompressedBody(brotli, callback, cancellationToken, budget, depth + 1);
             }
             else
                 ParseCommandNormalBody(ref bodySlice, header.Action, callback);
@@ -462,25 +523,33 @@ namespace BililiveRecorder.Core.Api.Danmaku
             return true;
         }
 
-        private static void ParseCommandCompressedBody(Stream decompressed, Action<int, string> callback)
+        private static void ParseCommandCompressedBody(Stream decompressed, Action<int, string> callback, CancellationToken cancellationToken, PacketBudget budget, int depth)
         {
             var reader = PipeReader.Create(decompressed);
-            while (true)
+            long retained = 0;
+            try
             {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 #pragma warning disable VSTHRD002 // Avoid problematic synchronous waits
-                // 全内存内运行同步返回，所以不会有问题
-                var result = reader.ReadAsync().Result;
+                    // All compressed input is already in memory. Limit newly
+                    // expanded bytes, including bytes retained for partial frames.
+                    var result = reader.ReadAsync(cancellationToken).Result;
 #pragma warning restore VSTHRD002 // Avoid problematic synchronous waits
-                var inner_buffer = result.Buffer;
-
-                while (TryParseCommand(ref inner_buffer, callback)) { }
-
-                reader.AdvanceTo(inner_buffer.Start, inner_buffer.End);
-
-                if (result.IsCompleted)
-                    break;
+                    var inner_buffer = result.Buffer;
+                    budget.Expanded(inner_buffer.Length - retained);
+                    while (TryParseCommand(ref inner_buffer, callback, cancellationToken, budget, depth)) { }
+                    retained = inner_buffer.Length;
+                    reader.AdvanceTo(inner_buffer.Start, inner_buffer.End);
+                    if (result.IsCompleted)
+                    {
+                        if (!inner_buffer.IsEmpty) throw new InvalidDataException("压缩弹幕中存在未完成的数据包。");
+                        break;
+                    }
+                }
             }
-            reader.Complete();
+            finally { reader.Complete(); }
         }
 
         private static void ParseCommandNormalBody(ref ReadOnlySequence<byte> buffer, int action, Action<int, string> callback)

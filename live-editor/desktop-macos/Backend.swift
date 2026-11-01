@@ -6,6 +6,7 @@ struct Endpoint: Decodable {
     let `protocol`: Int
     let instance: String
     let token: String
+    var uiToken: String?
     let pid: Int32
     let origin: String
     let dataPath: String
@@ -115,6 +116,7 @@ struct StartupPaused: LocalizedError {
               let url = URLComponents(string: value.origin), url.scheme == "http", url.host == "127.0.0.1",
               let port = url.port, port > 0, port < 65536, url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil, ["", "/"].contains(url.path),
+              (value.uiToken == nil || value.uiToken?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil),
               value.token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
               value.instance.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else { return false }
         endpoint = value; return true

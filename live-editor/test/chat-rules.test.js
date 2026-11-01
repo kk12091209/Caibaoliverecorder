@@ -9,7 +9,7 @@ import { chatRate, isLongChat, validateChatRate, CHAT_RATE_SETTING, RepeatWindow
 import { Media, assText } from '../server/media.js';
 import { DANMAKU_FONT_SIZE } from '../src/danmaku-layout.js';
 import { RENDER_VERSION } from '../server/render-plan.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import { Ingestor } from '../server/ingest.js';
 import { setImmediate as yieldTurn } from 'node:timers/promises';
 

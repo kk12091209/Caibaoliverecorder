@@ -153,8 +153,8 @@ export const works: Work[] = [
     highlights: [
       {
         index: '01',
-        title: '开播就录',
-        body: '添加 B 站或抖音直播间，等待开播后自动录制。支持同时监控多个房间。',
+        title: '跟着主播录',
+        body: '粘贴 B 站直播间、抖音直播间或抖音名片即可监控主播；抖音支持自动跟随本人直播与连麦，确认退出连麦后结束该段。发现依赖平台信息与轮询，素材标明实际房间。',
       },
       {
         index: '02',
@@ -298,10 +298,10 @@ export const works: Work[] = [
     nameEn: 'Caibao Downloader',
     tagline: '把视频和图片，按需留在手边。',
     summary:
-      '粘贴抖音或 B 站的作品链接，预览视频和图片。图文可以逐张查看、多选打包，B 站分 P 可以列出后勾选下载。',
+      '粘贴抖音、B 站或小红书的作品链接，查看作品信息和图片。图文可以逐张查看、多选打包，B 站分 P 勾选后分别下载为 MP4。',
     appPath: '/tools/downloader',
     useTitle: '选好内容，再保存。',
-    useSummary: '粘贴分享链接，预览内容后选择要下载的图片或分 P。',
+    useSummary: '粘贴分享链接，选择要下载的图片或分 P。',
     status: 'released',
     version: '在线使用',
     releasedAt: '2026.10.21',
@@ -310,12 +310,12 @@ export const works: Work[] = [
     platforms: [],
     downloads: [],
     updates: [],
-    showcase: { description: '保存抖音与 B 站的视频、图文和分 P。', meta: '网页 / 在线使用' },
+    showcase: { description: '保存抖音、B 站与小红书的视频和图片。', meta: '网页 / 在线使用' },
     highlights: [
       {
         index: '01',
         title: '分享链接，直接识别',
-        body: '支持抖音和 B 站的短链接、完整链接，也可以粘贴整段分享文字。',
+        body: '支持抖音、B 站和小红书的短链接、完整链接，也可以粘贴整段分享文字。小红书请保留完整分享内容，避免删除链接里的签名参数。',
       },
       {
         index: '02',
@@ -331,18 +331,18 @@ export const works: Work[] = [
     steps: [
       { title: '粘贴链接', body: '把作品分享链接或分享文字放入输入框，点击解析链接。' },
       {
-        title: '预览和选择',
-        body: '查看作品信息，预览图片或视频，勾选想要保存的图片或分 P。',
+        title: '查看和选择',
+        body: '查看作品信息和图片，勾选想要保存的图片或分 P。',
       },
       {
         title: '保存文件',
-        body: '视频保存为 MP4，图片保存为 JPG / PNG。多选内容可以打包为 ZIP。',
+        body: '视频保存为 MP4，多个分 P 分别下载；图片保存为 JPG / PNG，多张图片可以打包为 ZIP。',
       },
     ],
     notes: [
       {
         title: '画质和水印',
-        body: '抖音使用平台可提供的无水印视频和图片源。图片保留原始分辨率，普通图片转为高质量 JPG，带透明背景的图片转为 PNG；视频以 MP4 封装，不放大转码。B 站免登录优先获取 1080P，并比较实际可下载的全部档位，自动选择最高可用画质。',
+        body: '抖音和小红书使用平台可提供的无水印视频和图片源；作者嵌入素材的水印会保留。图片保留原始分辨率，普通图片转为高质量 JPG，带透明背景的图片转为 PNG；视频以 MP4 封装，不放大转码。B 站免登录优先获取 1080P，并比较实际可下载的全部档位，自动选择最高可用画质。',
       },
       {
         title: '临时文件',
@@ -350,7 +350,7 @@ export const works: Work[] = [
       },
       {
         title: '单次下载额度',
-        body: '每次下载最多 1 GB，每位访客最多同时处理两个任务。图文可多选；内容较大时可以分批保存。',
+        body: '单个文件及每次下载合计最多 4 GB，每位访客最多同时处理两个任务。服务器空间不足时会提示稍后重试；内容较大时可以分批保存。',
       },
     ],
   },
@@ -367,7 +367,7 @@ export const works: Work[] = [
     category: '浏览器工具',
     license: '',
     showcase: {
-      description: '从评论防护开始，收集顺手的浏览器小工具。',
+      description: '从评论防护到直播同传，收集顺手的浏览器小工具。',
       meta: '用户脚本 / 源码可复制',
       image: {
         src: browserPluginsImage,

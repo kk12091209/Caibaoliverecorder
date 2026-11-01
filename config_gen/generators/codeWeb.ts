@@ -2,6 +2,7 @@ import { ConfigEntry, ConfigEntryType } from "../types"
 import { trimEnd } from "../utils";
 
 export default function (data: ConfigEntry[]): string {
+    const secrets = new Set(["Cookie", "WebHookUrls", "WebHookUrlsV2"]);
     let result = `using BililiveRecorder.Core.Config;
 using BililiveRecorder.Core.Config.V3;
 using GraphQL.Types;
@@ -9,6 +10,7 @@ using HierarchicalPropertyDefault;
 #nullable enable
 `;
     function write_query_graphType_property(r: ConfigEntry) {
+        if (secrets.has(r.id)) return;
         if (r.configType == "roomOnly") {
             result += `this.Field(x => x.${r.id});\n`;
         } else {
@@ -17,6 +19,7 @@ using HierarchicalPropertyDefault;
     }
 
     function write_rest_dto_property(r: ConfigEntry) {
+        if (secrets.has(r.id)) return;
         if (r.configType == "roomOnly") {
             result += `public ${r.type} ${r.id} { get; set; }\n`;
         } else {
@@ -129,6 +132,7 @@ using HierarchicalPropertyDefault;
 
         data.filter(r => r.configType != "roomOnly")
             .forEach(r => {
+                if (secrets.has(r.id)) return;
                 result += `this.Field(x => x.${r.id});\n`;
             });
 

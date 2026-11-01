@@ -16,7 +16,7 @@ namespace BililiveRecorder.Flv.Tests
             Verifier.DerivePathInfo((string sourceFile, string projectDirectory, Type type, MethodInfo method) =>
             {
                 if (type != typeof(TestData))
-                    projectDirectory = Path.Combine(projectDirectory, "..", "data", "flv");
+                    projectDirectory = TestDataPaths.Resolve("../data/flv");
 
                 return Expectations.Initialize(sourceFile, projectDirectory, type, method);
             });

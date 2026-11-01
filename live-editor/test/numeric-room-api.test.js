@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 const absent=()=>Object.assign(new Error('not found'),{code:'ROOM_NOT_FOUND'});
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'numeric-room-api-')),biliCalls=[],biliRooms=[];

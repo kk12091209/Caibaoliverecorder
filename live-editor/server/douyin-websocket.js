@@ -1,5 +1,6 @@
 import https from 'node:https';
 import {createHash,randomBytes} from 'node:crypto';
+import {douyinChatError} from './douyin-chat-status.js';
 
 export const MAX_WS_BYTES=8*1024*1024;
 // RFC 6455 framing, without compression extensions. Douyin compresses the
@@ -59,19 +60,19 @@ export function openDouyinSocket(url,{headers={},signal,onMessage,onClose=()=>{}
     const request=https.request(url.href.replace(/^wss:/,'https:'),{method:'GET',headers:{...headers,Connection:'Upgrade',Upgrade:'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':key}});
     const finish=error=>{if(ended)return;ended=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);socket?.destroy();request.destroy();if(!settled){settled=true;reject(error||new Error('弹幕连接已关闭。'));}else onClose(error);};
     const abort=()=>finish(signal?.reason instanceof Error?signal.reason:new Error('弹幕连接已停止。'));
-    const timer=setTimeout(()=>finish(new Error('弹幕连接超时。')),15000);
+    const timer=setTimeout(()=>finish(douyinChatError('timeout')),15000);
     if(signal?.aborted){abort();return;}signal?.addEventListener('abort',abort,{once:true});
     request.on('error',finish);
-    request.on('response',response=>{response.destroy();finish(new Error(`弹幕连接失败：${response.statusCode}`));});
+    request.on('response',response=>{response.destroy();finish(douyinChatError('http','upgrade',response.statusCode));});
     request.on('upgrade',(response,stream,head)=>{
       socket=stream;
-      if(response.statusCode!==101||response.headers['sec-websocket-accept']!==expected||response.headers['sec-websocket-extensions']){finish(new Error('弹幕握手校验失败。'));return;}
-      const send=(data,opcode=2)=>{if(ended||!socket.writable)return false;if(socket.writableLength>65536){finish(new Error('弹幕连接发送受阻。'));return false;}return socket.write(clientFrame(data,opcode));};
-      const parser=new WebSocketFrames({message:onMessage,ping:data=>send(data,10),close:code=>finish(new Error(`弹幕连接被关闭：${code}`))});
-      socket.on('data',data=>{try{parser.feed(data);}catch(error){finish(error);}});
-      socket.on('error',finish);socket.on('end',()=>finish());socket.on('close',()=>finish());
-      clearTimeout(timer);settled=true;resolve({send,close:()=>finish(),get closed(){return ended;}});
-      if(head.length){try{parser.feed(head);}catch(error){finish(error);}}
+      if(response.statusCode!==101||response.headers['sec-websocket-accept']!==expected||response.headers['sec-websocket-extensions']){finish(douyinChatError('handshake','upgrade'));return;}
+      const send=(data,opcode=2)=>{if(ended||!socket.writable)return false;if(socket.writableLength>65536){finish(douyinChatError('backpressure','send'));return false;}return socket.write(clientFrame(data,opcode));};
+      const parser=new WebSocketFrames({message:onMessage,ping:data=>send(data,10),close:code=>finish(douyinChatError('close','receive',code))});
+      socket.on('data',data=>{try{parser.feed(data);}catch{finish(douyinChatError('protocol','decode'));}});
+      socket.on('error',finish);socket.on('end',()=>finish(douyinChatError('close','receive')));socket.on('close',()=>finish(douyinChatError('close','receive')));
+      clearTimeout(timer);settled=true;resolve({send,close:error=>finish(error),get closed(){return ended;}});
+      if(head.length){try{parser.feed(head);}catch{finish(douyinChatError('protocol','decode'));}}
     });
     request.end();
   });

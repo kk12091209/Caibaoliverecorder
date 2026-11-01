@@ -57,7 +57,7 @@ namespace BililiveRecorder.Core.Config
         {
             try
             {
-                logger.Debug("Config json: {Json}", json);
+                logger.Debug("Parsing config, {CharacterCount} characters", json.Length);
 
                 var configBase = JsonConvert.DeserializeObject<ConfigBase>(json);
                 switch (configBase)
@@ -97,7 +97,7 @@ namespace BililiveRecorder.Core.Config
             }
             catch (Exception ex)
             {
-                logger.Error(ex, "解析设置时出错");
+                logger.Error("解析设置时出错：{ErrorType}", ex.GetType().Name);
                 return null;
             }
         }

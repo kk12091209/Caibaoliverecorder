@@ -19,7 +19,7 @@ test('only platform hosts without credentials, IP literals or custom ports are a
   assert.equal(shareUrl('https://b23.tv/FQ9fWMm这个是分享链接').pathname,'/FQ9fWMm');
   assert.throws(()=>shareUrl('https://v26-web.douyinvod.com/media'));
   assert.equal(approvedUrl('https://v3-dy-o.zjcdn.com/media').hostname,'v3-dy-o.zjcdn.com');
-  assert.throws(()=>approvedUrl('https://other.zjcdn.com/media'));
+  assert.throws(()=>approvedUrl('https://other.akamaized.net/media'));
   assert.throws(()=>approvedUrl('https://v3-dy-o.zjcdn.com.evil.example/media'));
 });
 test('hydrated items must match the requested work and not a recommendation',()=>{
@@ -37,6 +37,16 @@ test('watermarked-only image sources are rejected and video playback requests re
   const u=new URL(value.assets[0].urls[0]);assert.equal(u.pathname,'/aweme/v1/play/');assert.equal(u.searchParams.has('logo_name'),false);assert.equal(u.searchParams.get('ratio'),'1080p');
 });
 test('download filenames cannot introduce paths or control characters',()=>{assert.equal(fileStem('../a/b\\c\n?.jpg'),'.._a_b_c__.jpg');assert.equal(fileStem(''), '作品');});
+test('download title truncation preserves complete emoji and remains safe for attachment encoding',()=>{
+  for(const title of ['a'.repeat(89)+'😀结尾','a'.repeat(85)+'👨‍👩‍👧‍👦结尾','中文'.repeat(60),'孤立\ud800代理项','a'.repeat(89)+'.尾部']) {
+    const stem=fileStem(title);
+    assert.ok(stem.length<=90);assert.ok(stem.isWellFormed());assert.doesNotThrow(()=>encodeURIComponent(stem+'.jpg'));
+    assert.equal(/[. ]$/.test(stem),false);
+  }
+  assert.equal(fileStem('a'.repeat(89)+'😀'),'a'.repeat(89));
+  assert.equal(fileStem('a'.repeat(85)+'👨‍👩‍👧‍👦'),'a'.repeat(85));
+  assert.equal(fileStem('e\u0301'),'é');
+});
 test('Bilibili selects highest actual resolution before format IDs and prefers a compatible codec at equal quality',()=>{
   const sources=[{id:125,width:1920,height:1080,codecs:'hev1',baseUrl:'https://a.bilivideo.com/hdr'},{id:120,width:3840,height:2160,codecs:'hev1',baseUrl:'https://a.bilivideo.com/4k'},{id:120,width:3840,height:2160,codecs:'avc1',baseUrl:'https://a.bilivideo.com/4k-avc'}];
   assert.deepEqual(rankBilibiliVideo(sources).map(v=>v.baseUrl),['https://a.bilivideo.com/4k-avc','https://a.bilivideo.com/4k','https://a.bilivideo.com/hdr']);

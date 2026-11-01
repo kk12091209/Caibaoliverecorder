@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('settings expose a fixed log directory; desktop events require authentication and are saved before exit',async t=>{
   // ServiceRuntime canonicalizes its root. macOS /var aliases and Windows

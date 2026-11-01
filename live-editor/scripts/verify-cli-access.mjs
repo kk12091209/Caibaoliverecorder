@@ -1,0 +1,30 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import net from 'node:net';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+const root=await fs.mkdtemp('/private/tmp/caibao-cli-access-'),dotnet=process.env.DOTNET_EXE||'dotnet',dll=path.resolve('BililiveRecorder.Cli/bin/Debug/net8.0/BililiveRecorder.Cli.dll');
+const sentinel='SYNTHETIC_KEY_DO_NOT_LOG_10923',out=process.env.VERIFY_OUTPUT||'/private/tmp/caibao-upgrade-local-20261101/cli-access';await fs.mkdir(out,{recursive:true});
+const launch=args=>{const child=spawn(dotnet,[dll,...args],{env:{...process.env,BILILIVERECORDER_LOG_FILE_PATH:path.join(root,'logs','core.txt')},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);return {child,get output(){return output}}};
+let running;try{
+ await fs.writeFile(path.join(root,'config.json'),'{"version":3,"global":{"Cookie":"'+sentinel+'"},"broken":'+sentinel+'}');
+ const malformed=launch(['run',root,'--http-basic-pass',sentinel,'--loglevel','Debug','--logfilelevel','Verbose']);await once(malformed.child,'exit');assert.ok(!malformed.output.includes(sentinel));
+ await fs.writeFile(path.join(root,'config.json'),JSON.stringify({version:3,global:{},rooms:[]}));await fs.writeFile(path.join(root,'test.flv'),Buffer.alloc(32,1));
+ const portServer=net.createServer();await new Promise(r=>portServer.listen(0,'127.0.0.1',r));const port=portServer.address().port;await new Promise(r=>portServer.close(r));const origin='http://127.0.0.1:'+port;
+ running=launch(['run',root,'--http-bind',origin,'--http-basic-user','tester','--http-basic-pass',sentinel,'--logfilelevel','Verbose']);
+ let available=false;for(let i=0;i<100;i++){try{if((await fetch(origin+'/api/config/global')).status===401){available=true;break}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(available,'CLI did not start');
+ const headers={Authorization:'Basic '+Buffer.from('tester:'+sentinel).toString('base64'),'Content-Type':'application/json'};
+ assert.equal((await fetch(origin+'/api/config/global',{headers:{...headers,Origin:'https://foreign.example'}})).status,403);
+ const changed=await fetch(origin+'/api/config/global',{method:'POST',headers,body:JSON.stringify({optionalCookie:{hasValue:true,value:sentinel},optionalWebHookUrlsV2:{hasValue:true,value:'https://test.example.com/?token='+sentinel}})});assert.equal(changed.status,200);assert.ok(!(await changed.text()).includes(sentinel));
+ const saved=await fs.readFile(path.join(root,'config.json'),'utf8');assert.ok(saved.includes(sentinel),'control secret was not persisted');
+ const config=await (await fetch(origin+'/api/config/global',{headers})).text();assert.ok(!config.includes(sentinel));assert.ok(!config.toLowerCase().includes('optionalcookie'));
+ for(const file of ['config.json','config.backup.json'])assert.equal((await fetch(origin+'/file/'+file,{headers})).status,404);
+ const media=await fetch(origin+'/file/test.flv',{headers:{...headers,Range:'bytes=0-1'}});assert.equal(media.status,206);assert.equal((await media.arrayBuffer()).byteLength,2);
+ const listing=await (await fetch(origin+'/api/file?path=/',{headers})).text();assert.ok(!listing.includes('config.json'));assert.ok(listing.includes('test.flv'));
+ const schemaResponse=await fetch(origin+'/graphql',{method:'POST',headers,body:JSON.stringify({query:'{ __schema { types { name fields { name } } } }'})});assert.equal(schemaResponse.status,200);const schema=await schemaResponse.json();const outputs=schema.data.__schema.types.filter(type=>['GlobalConfigType','DefaultConfigType'].includes(type.name));assert.equal(outputs.length,2,'GraphQL output types: '+schema.data.__schema.types.map(type=>type.name).filter(name=>/config/i.test(name)).join(','));for(const output of outputs)assert.ok(output.fields.every(field=>!/cookie|webhookurls/i.test(field.name)));
+ const logs=await (await fetch(origin+'/api/log/fetch',{headers})).text();assert.ok(!logs.includes(sentinel));
+ running.child.kill('SIGINT');await once(running.child,'exit');assert.ok(!running.output.includes(sentinel));
+ const logsOnDisk=[];for(const file of await fs.readdir(path.join(root,'logs')))logsOnDisk.push(await fs.readFile(path.join(root,'logs',file),'utf8'));assert.ok(!logsOnDisk.join('\n').includes(sentinel));
+ await fs.writeFile(path.join(out,'results.json'),JSON.stringify({malformedConfigRedacted:true,startupArgumentsRedacted:true,credentialWritePreserved:true,configAndBackupsHidden:true,graphqlSecretsHidden:true,foreignOriginRejected:true,recordingRange:true,logsRedacted:true},null,2));console.log('CLI process: arguments, malformed config, authenticated config, file copies, ranges and logs passed');
+}finally{if(running&&running.child.exitCode===null)running.child.kill('SIGTERM');await fs.rm(root,{recursive:true,force:true})}

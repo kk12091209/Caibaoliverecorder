@@ -1,3 +1,4 @@
+import {requireLocalAccess} from './local-access.js';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
@@ -74,7 +75,7 @@ async function createManagedApp(options,runtime) {
   store.giftIcons=new GiftIcons(store,{ffmpeg});
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
-  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,bilibiliResolver:options.bilibiliResolver});
+  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
   const lotteries=new LotteryRecorder(store,options.lotteryOptions);
   const credentialChecks={bilibili:'unknown'};
   const credentialSnapshot=()=>({...credentials.snapshot(),checks:{...credentialChecks},bilibiliCore:{...recorder.credentialStatus}});
@@ -118,7 +119,7 @@ async function createManagedApp(options,runtime) {
     const processing=media.hasForegroundWork({includeInteractive:false})||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
     const preparing=!!preparation.active||!!store.get("SELECT session FROM preparation_jobs WHERE paused=0 AND status IN ('queued','preparing') LIMIT 1");
     const organising=ingestor.busy||storage.busy||deletingSessions.size>0||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1");
-    const monitoring=recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
+    const monitoring=[...recorder.following.targets.values()].some(target=>target.enabled)||recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
     const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy||!!recorder.douyin.polling;
     const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
     return {updateBusy:store.recovery.recovering||recording||processing||organising||!!preparation.active||media.fonts.changing||!!recorder.starting, busy:busy||store.recovery.recovering,background:busy||monitoring||store.recovery.recovering,requiresExitConfirmation:recording||exporting,reason:store.recovery.recovering?'任务恢复':recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
@@ -132,7 +133,7 @@ async function createManagedApp(options,runtime) {
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},updates:updates.snapshot(),sessions:store.sessions(),rooms:recorder.rooms,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,...settingsSnapshot()};}
+  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},updates:updates.snapshot(),sessions:recorder.materialOrigins(store.sessions()),rooms:recorder.rooms,anchors:recorder.anchors,following:recorder.following.snapshot,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,...settingsSnapshot()};}
   function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
   async function body(req,maxBytes=8*1024*1024){
     if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
@@ -160,6 +161,7 @@ async function createManagedApp(options,runtime) {
       // Record only the operation name, never query strings or request bodies.
       if(req.method==='POST'&&p.startsWith('/api/'))res.once('finish',()=>{const parts=p.split('/');diagnostics.record('操作结果',`${parts[2]} / ${parts.length>4?parts.at(-1):''}；HTTP ${res.statusCode}`,{level:res.statusCode>=400?'警告':'信息'});});
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
+      if(p!=='/internal/desktop'&&p!=='/internal/recorder-event'&&!requireLocalAccess(req,res,runtime))return;
       if(p==='/internal/desktop'){
         if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);
         if(req.method==='POST'){
@@ -230,6 +232,12 @@ async function createManagedApp(options,runtime) {
         if(url.searchParams.get('token')!==recorder.webhookSecret)return json(res,{error:'无效事件来源。'},403);
         await recorder.event(await body(req));return json(res,{ok:true});
       }
+      if(p==='/api/follow-users'&&req.method==='POST')return json(res,await recorder.following.add((await body(req)).url));
+      if(p==='/api/anchors'&&req.method==='POST')return json(res,await recorder.addAnchor(await body(req)));
+      const anchorAction=p.match(/^\/api\/anchors\/((?:bilibili:|douyin:|douyin-user:)\d{1,20})\/(start|stop|remove)$/);
+      if(anchorAction&&req.method==='POST'){await recorder.anchorAction(anchorAction[1],anchorAction[2],await body(req));return json(res,{anchors:recorder.anchors});}
+      const followAction=p.match(/^\/api\/follow-users\/(\d{1,20})\/(enable|remove)$/);
+      if(followAction&&req.method==='POST'){const input=await body(req);if(followAction[2]==='enable')await recorder.following.enable(followAction[1],input.enabled);else await recorder.following.remove(followAction[1],input.confirmed);return json(res,{following:recorder.following.snapshot});}
       if(p==='/api/rooms'&&req.method==='POST'){
         const input=await body(req),result=await recorder.addRoom(input);diagnostics.record('用户操作',`添加监控；平台 ${result?.platform||'bilibili'}；房间 ${result?.roomId||result?.webRid||'见房间状态'}；自动录制=${input.autoRecord!==false}`);return json(res,result);
       }

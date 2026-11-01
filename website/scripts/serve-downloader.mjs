@@ -18,6 +18,8 @@ const api = createDownloaderApi({
   publicOrigins: [publicOrigin],
   galleryMode: 'images',
   trustProxy: process.env.DOWNLOADER_TRUST_PROXY === 'true',
+  cookieName: process.env.DOWNLOADER_COOKIE_NAME,
+  apiBase: process.env.DOWNLOADER_API_BASE,
   jobOptions: {
     ...(tempDir ? { tempDir } : {}),
     fileServer: process.env.DOWNLOADER_FILE_SERVER === 'true',

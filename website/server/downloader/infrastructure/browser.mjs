@@ -1,8 +1,11 @@
+import { createBrowserEgress } from './browser-egress.mjs'
 import { chromium } from 'playwright-core'
 import { access } from 'node:fs/promises'
-import { DESKTOP_UA } from './network.mjs'
+import { DESKTOP_UA, approvedUrl } from './network.mjs'
 import { findDouyinItem, douyinScriptItem } from '../platforms/douyin.mjs'
 import { needsGalleryHydration } from '../platforms/resolver.mjs'
+import { xiaohongshuId, xiaohongshuNote, xhsHosts } from '../platforms/xiaohongshu.mjs'
+import { setTimeout as delay } from 'node:timers/promises'
 
 let browserPromise
 async function executable() {
@@ -30,25 +33,38 @@ async function executable() {
       /* Try the next installed browser. */
     }
   }
-  throw new Error('这条抖音作品需要浏览器解析，请安装 Chrome 后重试。')
+  throw new Error('这条作品需要浏览器解析，请安装 Chrome 后重试。')
 }
 async function browser() {
   if (!browserPromise)
-    browserPromise = executable()
-      .then((executablePath) =>
-        chromium.launch({ executablePath, headless: true, chromiumSandbox: true }),
-      )
-      .then((instance) => {
-        const launched = browserPromise
+    browserPromise = (async () => {
+      const executablePath = await executable(),
+        egress = await createBrowserEgress()
+      try {
+        const instance = await chromium.launch({
+          executablePath,
+          headless: true,
+          chromiumSandbox: true,
+          proxy: egress.proxy,
+          args: [
+            '--proxy-bypass-list=<-loopback>',
+            '--disable-quic',
+            '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+          ],
+        })
         instance.once('disconnected', () => {
-          if (browserPromise === launched) browserPromise = null
+          browserPromise = null
+          void egress.close()
         })
         return instance
-      })
-      .catch((error) => {
-        browserPromise = null
+      } catch (error) {
+        await egress.close()
         throw error
-      })
+      }
+    })().catch((error) => {
+      browserPromise = null
+      throw error
+    })
   return browserPromise
 }
 export async function browserResolve(
@@ -61,6 +77,7 @@ export async function browserResolve(
   const instance = await getBrowser()
   signal?.throwIfAborted()
   const context = await instance.newContext({
+    serviceWorkers: 'block',
     userAgent: DESKTOP_UA,
     locale: 'zh-CN',
     viewport: { width: 1280, height: 900 },
@@ -95,11 +112,17 @@ export async function browserResolve(
     }
   })
   try {
-    await page.route('**/*', (route) =>
-      ['font', 'media', 'image'].includes(route.request().resourceType())
-        ? route.abort()
-        : route.continue(),
-    )
+    await page.route('**/*', (route) => {
+      try {
+        const url = approvedUrl(route.request().url())
+        return url.protocol !== 'https:' ||
+          ['font', 'media', 'image'].includes(route.request().resourceType())
+          ? route.abort()
+          : route.continue()
+      } catch {
+        return route.abort()
+      }
+    })
     // A validated detail response may arrive before DOMContentLoaded. Let it
     // finish the request immediately; hydration is only the competing fallback.
     navigation = (async () => {
@@ -139,5 +162,102 @@ export async function closeBrowser() {
   if (browserPromise) {
     await (await browserPromise).close()
     browserPromise = null
+  }
+}
+
+export async function browserResolveXiaohongshu(
+  input,
+  signal,
+  { getBrowser = browser, timeout = 25000 } = {},
+) {
+  const url = approvedUrl(input)
+  const id = xiaohongshuId(url)
+  if (!xhsHosts.has(url.hostname) || !id) throw new Error('请使用小红书单篇笔记的分享链接。')
+  signal?.throwIfAborted()
+  const instance = await getBrowser()
+  signal?.throwIfAborted()
+  // A fresh, disposable context. Never open a user's profile or import cookies.
+  const context = await instance.newContext({
+    serviceWorkers: 'block',
+    userAgent: DESKTOP_UA,
+    locale: 'zh-CN',
+    viewport: { width: 1280, height: 900 },
+  })
+  const abort = () => {
+    void context.close().catch(() => {})
+  }
+  signal?.addEventListener('abort', abort, { once: true })
+  let timer
+  const expired = new AbortController()
+  timer = setTimeout(() => {
+    expired.abort()
+    abort()
+  }, timeout)
+  const active = signal ? AbortSignal.any([signal, expired.signal]) : expired.signal
+  let pageText = ''
+  try {
+    active.throwIfAborted()
+    const page = await context.newPage()
+    await page.route('**/*', (route) => {
+      const request = route.request()
+      try {
+        if (approvedUrl(request.url()).protocol !== 'https:') return route.abort()
+        return ['font', 'media', 'image'].includes(request.resourceType())
+          ? route.abort()
+          : route.continue()
+      } catch {
+        return route.abort()
+      }
+    })
+    // Initialize only this disposable anonymous visitor before opening a
+    // signed note. A fresh note navigation can otherwise land on /login and
+    // stay there even after the site's guest initialization has completed.
+    await page
+      .goto('https://www.xiaohongshu.com/', {
+        waitUntil: 'domcontentloaded',
+        timeout: Math.min(timeout, 7000),
+      })
+      .catch(() => {})
+    const visitorUntil = Date.now() + 3000
+    while (Date.now() < visitorUntil && !active.aborted) {
+      const guestReady = (await context.cookies('https://www.xiaohongshu.com/')).some(
+        (item) => item.name === 'a1',
+      )
+      if (guestReady) break
+      await delay(200, undefined, { signal: active })
+    }
+    await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout }).catch(() => {
+      // The share page may navigate itself again after initializing a visitor.
+      // Inspect the resulting document before classifying the initial page.
+    })
+    do {
+      active.throwIfAborted()
+      const scripts = await page
+        .locator('script')
+        .allTextContents()
+        .catch(() => [])
+      const found = xiaohongshuNote(scripts.map((text) => `<script>${text}</script>`).join(''), id)
+      if (found) return found
+      pageText = await page
+        .locator('body')
+        .innerText({ timeout: 1000 })
+        .catch(() => '')
+      await delay(200, undefined, { signal: active })
+    } while (!active.aborted)
+    throw new Error('小红书要求登录或验证，当前无法匿名解析这条笔记，请稍后重试。')
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (expired.signal.aborted)
+      throw new Error(
+        /登录后|登录小红书|验证码|安全验证/.test(pageText)
+          ? '小红书要求登录或验证，当前无法匿名解析这条笔记，请稍后重试。'
+          : '小红书网页解析超时，请稍后重试。',
+      )
+    if (/小红书要求/.test(error.message)) throw error
+    throw new Error('小红书网页暂时未返回笔记内容，请稍后重试。')
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+    await context.close().catch(() => {})
   }
 }

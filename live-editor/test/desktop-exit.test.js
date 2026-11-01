@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {DesktopExit} from '../server/desktop-exit.js';
 import {Media} from '../server/media.js';
 import {saveRetryFixture} from './helpers/save-retry-fixture.js';

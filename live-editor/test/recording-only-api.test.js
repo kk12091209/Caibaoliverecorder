@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 async function application(t) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-recording-only-'));

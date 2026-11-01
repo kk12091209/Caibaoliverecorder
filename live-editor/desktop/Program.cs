@@ -161,6 +161,11 @@ internal sealed class MainWindow : Form
             web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             web.CoreWebView2.Settings.IsZoomControlEnabled = false;
+            web.CoreWebView2.BasicAuthenticationRequested += (_, e) => {
+                if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var requested) && requested.GetLeftPart(UriPartial.Authority) == backend.Origin) {
+                    e.Response.UserName = "caibao"; e.Response.Password = backend.UiToken;
+                } else e.Cancel = true;
+            };
             web.CoreWebView2.NavigationStarting += (_, e) => { if (!IsLocal(e.Uri)) e.Cancel = true; };
             web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; if (IsExternalPage(e.Uri)) OpenExternalPage(e.Uri); };
             web.CoreWebView2.WebMessageReceived += OnWebMessage;

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {DeletionControl,DELETION_FAILED} from '../server/deletion-control.js';
 import {deletionWork} from '../server/deletion-work.js';
 

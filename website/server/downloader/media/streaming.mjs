@@ -5,13 +5,26 @@ import { Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { openRemote } from '../infrastructure/network.mjs'
+import { sizeLimitError } from '../infrastructure/limits.mjs'
+import { mediaSource } from './source.mjs'
 
 // FFmpeg only sees pipes. All remote redirects and DNS still pass through the
 // downloader's allowlist and pinned-address validation, never FFmpeg's network stack.
 export async function muxRemoteMp4(
   sources,
   target,
-  { command, signal, maxBytes, onProgress, onOutput, openSource = openRemote, idleMs = 120000 },
+  {
+    command,
+    signal,
+    maxBytes,
+    onProgress,
+    onOutput,
+    openSource = openRemote,
+    idleMs = 120000,
+    owner,
+    onRecovery,
+    sourceOptions = {},
+  },
 ) {
   const abort = new AbortController(),
     combined = AbortSignal.any([signal, abort.signal])
@@ -38,38 +51,20 @@ export async function muxRemoteMp4(
   combined.addEventListener('abort', stop, { once: true })
   const tasks = []
   try {
-    for (const urls of [sources.video, sources.audio]) {
-      let last
-      for (const url of urls) {
-        combined.throwIfAborted()
-        try {
-          const response = await openSource(url, {
-            signal: combined,
-            headers: { Referer: sources.referer },
-            timeout: 60000,
-          })
-          const total = Number(response.headers['content-length']) || 0
-          if (
-            response.status !== 200 ||
-            /text\/|application\/(?:json|xml)/i.test(response.headers['content-type'] || '')
-          ) {
-            response.stream.destroy()
-            throw new Error('视频源暂时不可用。')
-          }
-          if (total > maxBytes) {
-            response.stream.destroy()
-            throw new Error('视频源超过本次下载大小限制。')
-          }
-          response.stream.on('error', () => {})
-          responses.push({ ...response, total })
-          last = null
-          break
-        } catch (error) {
-          last = error
-          if (combined.aborted) throw error
-        }
-      }
-      if (last || responses.length === 0) throw last || new Error('没有可用的视频源。')
+    touch()
+    for (const [index, urls] of [sources.video, sources.audio].entries()) {
+      responses.push(
+        await mediaSource(urls, {
+          ...sourceOptions,
+          signal: combined,
+          referer: sources.referer,
+          maxBytes,
+          onActivity: touch,
+          open: openSource,
+          owner,
+          onRecovery: (state) => onRecovery?.(String(index), state),
+        }),
+      )
     }
     if (responses.length !== 2) throw new Error('没有完整的视频音画源。')
     child = spawn(
@@ -105,7 +100,10 @@ export async function muxRemoteMp4(
       ],
       { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'], windowsHide: true },
     )
-    child.stderr.resume()
+    let stderr = ''
+    child.stderr.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-4096)
+    })
     tasks.push(
       new Promise((resolve, reject) => {
         let failure
@@ -118,8 +116,15 @@ export async function muxRemoteMp4(
             : code === 0
               ? resolve()
               : reject(
-                  new Error(
-                    stalled ? '视频处理长时间没有进展，请重试。' : '视频传输中断，请重试下载。',
+                  Object.assign(
+                    new Error(
+                      stalled ? '视频处理长时间没有进展，请重试。' : '视频传输中断，请重试下载。',
+                    ),
+                    {
+                      code: stalled ? 'MUX_IDLE' : 'MUX_FAILED',
+                      stage: 'mux',
+                      diagnostics: stderr,
+                    },
                   ),
                 ),
         )
@@ -134,7 +139,7 @@ export async function muxRemoteMp4(
           try {
             bytes += chunk.length
             if (bytes > maxBytes || (response.total && bytes > response.total))
-              throw new Error('视频源超过本次下载大小限制。')
+              throw sizeLimitError(maxBytes, '视频源')
             onProgress(String(index))(bytes, response.total)
             touch()
             callback(null, chunk)
@@ -155,8 +160,7 @@ export async function muxRemoteMp4(
     // Publish only bytes acknowledged by the file writer, so readers never see holes.
     const sink = new Writable({
       write(chunk, _encoding, callback) {
-        if (written + chunk.length > maxBytes)
-          return callback(new Error('视频超过本次下载大小限制。'))
+        if (written + chunk.length > maxBytes) return callback(sizeLimitError(maxBytes, '视频'))
         output.write(chunk, (error) => {
           if (error) return callback(error)
           try {
@@ -175,7 +179,13 @@ export async function muxRemoteMp4(
     })
     output.on('error', (error) => sink.destroy(error))
     tasks.push(pipeline(child.stdout, sink, { signal: combined }))
-    await Promise.all(tasks)
+    try {
+      await Promise.all(tasks)
+    } catch (error) {
+      if (stalled)
+        throw Object.assign(new Error('视频处理长时间没有进展，请重试。'), { code: 'MUX_IDLE' })
+      throw error
+    }
     if (!written) throw new Error('视频源没有返回有效内容。')
   } finally {
     abort.abort()
@@ -191,21 +201,23 @@ export async function muxRemoteMp4(
 
 // A bounded disk tail lets slow browsers apply backpressure without keeping an
 // entire movie in Node memory. Failed/cancelled jobs terminate the response.
-export async function* growingFile(job, signal) {
-  const file = await open(job.stream.path, 'r')
+export async function* growingFile(job, signal, { stream = job.stream } = {}) {
+  const file = await open(stream.path, 'r')
   let position = 0
   try {
     for (;;) {
       signal.throwIfAborted()
-      if (['failed', 'cancelled'].includes(job.status)) throw new Error(job.error || '下载已取消。')
-      const available = job.stream.bytes - position
+      const complete = stream.status === 'done' || (!stream.status && job.status === 'done')
+      if (!complete && ['failed', 'cancelled'].includes(job.status))
+        throw new Error(job.error || '下载已取消。')
+      const available = stream.bytes - position
       if (available > 0) {
         const buffer = Buffer.allocUnsafe(Math.min(256 * 1024, available))
         const { bytesRead } = await file.read(buffer, 0, buffer.length, position)
         if (!bytesRead) throw new Error('视频临时文件不完整。')
         position += bytesRead
         yield buffer.subarray(0, bytesRead)
-      } else if (job.status === 'done') return
+      } else if (complete) return
       else await delay(100, undefined, { signal })
     }
   } finally {

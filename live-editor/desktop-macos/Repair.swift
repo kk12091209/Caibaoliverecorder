@@ -23,6 +23,28 @@ enum RepairTrust {
               let digest = item["digest"] as? String, digest.range(of: "^sha256:[a-f0-9]{64}$", options: .regularExpression) != nil else { throw problem("官方修复包尚未准备完整或缺少校验信息。") }
         return (url, number.int64Value, String(digest.dropFirst(7)))
     }
+    static let signingKey = Data(base64Encoded: "ZJ8PF5OHwO+1SzOBBrpeyfSXwK4J5/3jPj+m4r3BRVU=")!
+    static func manifestAsset(_ release: [String: Any], version: String) throws -> (URL, Int64, String) {
+        let name = "caibao-update.json"
+        guard let assets = release["assets"] as? [[String: Any]], assets.filter({ $0["name"] as? String == name }).count == 1,
+              let item = assets.first(where: { $0["name"] as? String == name }), item["state"] as? String == "uploaded",
+              let size = item["size"] as? NSNumber, size.doubleValue == Double(size.int64Value), size.int64Value > 0, size.int64Value <= 131072,
+              let digest = item["digest"] as? String, digest.range(of: "^sha256:[a-f0-9]{64}$", options: .regularExpression) != nil,
+              let address = item["browser_download_url"] as? String, address == "https://github.com/\(repository)/releases/download/v\(version)/\(name)", let url = URL(string: address)
+        else { throw problem("修复包缺少签名清单，请等待官方补齐后重试。") }
+        return (url, size.int64Value, String(digest.dropFirst(7)))
+    }
+    static func verifyManifest(_ bytes: Data, version: String, size: Int64, hash: String, publicKey: Data = signingKey) throws {
+        guard bytes.count <= 131072, let envelope = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              envelope["schema"] as? Int == 1, envelope["keyId"] as? String == "caibao-2026-01",
+              let encoded = envelope["data"] as? String, let content = Data(base64Encoded: encoded), content.count <= 65536, content.base64EncodedString() == encoded,
+              let signatureText = envelope["signature"] as? String, let signature = Data(base64Encoded: signatureText), signature.count == 64, signature.base64EncodedString() == signatureText,
+              try Curve25519.Signing.PublicKey(rawRepresentation: publicKey).isValidSignature(signature, for: content),
+              let manifest = try JSONSerialization.jsonObject(with: content) as? [String: Any], manifest["schema"] as? Int == 1, manifest["version"] as? String == version,
+              let platforms = manifest["platforms"] as? [String: Any], let item = platforms["darwin-arm64"] as? [String: Any],
+              item["name"] as? String == "Caibo-\(version)-macos-arm64.dmg", let length = item["size"] as? NSNumber, length.doubleValue == Double(size), item["sha256"] as? String == hash
+        else { throw problem("修复清单签名或内容校验失败，原应用和数据已保留。") }
+    }
     static func digest(_ file: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: file); defer { try? handle.close() }
         var hash = SHA256()
@@ -54,8 +76,10 @@ final class RepairTransfer: NSObject, URLSessionTaskDelegate, URLSessionDownload
     let log: (String) -> Void
     let downloader: ((URL, URL, Int64, Int64?) async throws -> Void)?
     let helperExecutable: URL?
-    init(target: URL, data: URL, version: String, helperExecutable: URL? = nil, downloader: ((URL, URL, Int64, Int64?) async throws -> Void)? = nil, progress: @escaping (String) -> Void, log: @escaping (String) -> Void) {
+    let trustKey: Data
+    init(target: URL, data: URL, version: String, helperExecutable: URL? = nil, trustKey: Data = RepairTrust.signingKey, downloader: ((URL, URL, Int64, Int64?) async throws -> Void)? = nil, progress: @escaping (String) -> Void, log: @escaping (String) -> Void) {
         self.target = target; self.data = data; self.version = version; self.progress = progress; self.log = log
+        self.trustKey = trustKey
         self.helperExecutable = helperExecutable; self.downloader = downloader
     }
     func transfer(_ url: URL, to destination: URL, limit: Int64, expected: Int64? = nil) async throws {
@@ -123,6 +147,11 @@ final class RepairTransfer: NSObject, URLSessionTaskDelegate, URLSessionDownload
         try await transfer(URL(string: "https://api.github.com/repos/\(RepairTrust.repository)/releases/tags/v\(version)")!, to: metadata, limit: 1024 * 1024)
         let release = try JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any] ?? [:]
         let (url, size, hash) = try RepairTrust.asset(release, version: version)
+        let (manifestURL, manifestSize, manifestHash) = try RepairTrust.manifestAsset(release, version: version)
+        let manifestFile = root.appendingPathComponent("signed-update.json")
+        try await transfer(manifestURL, to: manifestFile, limit: 131072, expected: manifestSize)
+        guard try RepairTrust.digest(manifestFile) == manifestHash else { throw problem("修复清单校验失败。") }
+        try RepairTrust.verifyManifest(Data(contentsOf: manifestFile), version: version, size: size, hash: hash, publicKey: trustKey)
         let package = root.appendingPathComponent("repair.dmg")
         try await transfer(url, to: package, limit: size, expected: size)
         try Task.checkCancellation(); progress("正在校验修复包")

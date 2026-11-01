@@ -4,7 +4,11 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import path from 'node:path'
 import { PlatformResolver, newId } from './platforms/resolver.mjs'
-import { browserResolve, closeBrowser } from './infrastructure/browser.mjs'
+import {
+  browserResolve,
+  browserResolveXiaohongshu,
+  closeBrowser,
+} from './infrastructure/browser.mjs'
 import { DownloadJobs } from './jobs/manager.mjs'
 import { approvedUrl } from './infrastructure/network.mjs'
 import { DownloadAccess } from './http/access.mjs'
@@ -35,6 +39,17 @@ function disposition(name, download) {
   const extension = /\.(zip|mp4|jpg|jpeg|png)$/i.exec(name)?.[0] || '.jpg'
   return `${download ? 'attachment' : 'inline'}; filename="download${extension}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()]/g, escape)}`
 }
+function beginAttachment(res, { name, type }) {
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Disposition': disposition(name, true),
+    'Cache-Control': 'private, no-store, no-transform',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Accel-Buffering': 'no',
+    Incremental: '?1',
+  })
+  res.flushHeaders()
+}
 function directImage(source) {
   if (!source) return ''
   try {
@@ -49,13 +64,39 @@ export function createDownloaderApi({
   resolver: providedResolver,
   publicOrigins = [],
   trustProxy = false,
+  cookieName,
+  apiBase = '/api/downloader',
   galleryMode = 'complete',
   jobOptions = {},
+  accessOptions = {},
 } = {}) {
-  const access = new DownloadAccess({ publicOrigins, trustProxy })
+  if (!/^\/api\/[a-z0-9-]+$/.test(apiBase)) throw new Error('下载接口路径无效。')
+  const access = new DownloadAccess({
+    ...accessOptions,
+    publicOrigins,
+    trustProxy,
+    cookieName,
+    retained: (owner) =>
+      [...jobs.jobs.values()].some(
+        (job) =>
+          job.session.owner === owner &&
+          (job.readers > 0 || ['running', 'queued'].includes(job.status)),
+      ),
+  })
   const images = new MediaImages(),
-    resolver = providedResolver || new PlatformResolver({ browserResolve, galleryMode }),
-    jobs = new DownloadJobs(resolver, { images, publicMode: access.publicMode, ...jobOptions }),
+    resolver =
+      providedResolver ||
+      new PlatformResolver({
+        browserResolve,
+        browserResolveXhs: browserResolveXiaohongshu,
+        galleryMode,
+      }),
+    jobs = new DownloadJobs(resolver, {
+      images,
+      publicMode: access.publicMode,
+      ...jobOptions,
+      apiBase,
+    }),
     sessions = new Map()
   let resolving = 0
   const cleanup = setInterval(() => {
@@ -71,19 +112,28 @@ export function createDownloaderApi({
     return {
       ...rest,
       sessionId: id,
-      cover: cover ? `/api/downloader/media/${id}/cover` : '',
+      cover: cover ? `${apiBase}/media/${id}/cover` : '',
       directCover: directImage(cover),
-      avatar: avatar ? `/api/downloader/media/${id}/avatar` : '',
+      avatar: avatar ? `${apiBase}/media/${id}/avatar` : '',
       directAvatar: directImage(avatar),
-      assets: assets.map(({ urls: _urls, photoUrls: _photos, thumbnail, cid: _cid, ...asset }) => ({
-        ...asset,
-        thumbnail: `/api/downloader/media/${id}/${asset.index}`,
-        preview: `/api/downloader/media/${id}/${asset.index}?size=full`,
-        directThumbnail: directImage(thumbnail),
-        directPreview: directImage(
-          asset.type === 'image' ? _urls?.[0] || thumbnail : _photos?.[0] || thumbnail,
-        ),
-      })),
+      assets: assets.map(
+        ({
+          urls: _urls,
+          audioUrls: _audio,
+          photoUrls: _photos,
+          thumbnail,
+          cid: _cid,
+          ...asset
+        }) => ({
+          ...asset,
+          thumbnail: `${apiBase}/media/${id}/${asset.index}`,
+          preview: `${apiBase}/media/${id}/${asset.index}?size=full`,
+          directThumbnail: directImage(thumbnail),
+          directPreview: directImage(
+            asset.type === 'image' ? _urls?.[0] || thumbnail : _photos?.[0] || thumbnail,
+          ),
+        }),
+      ),
     }
   }
   async function downloadFile(url, visitor, signal) {
@@ -95,10 +145,16 @@ export function createDownloaderApi({
     const job = jobs.jobs.get(parts[3])
     if (!job || job.session.owner !== visitor.id)
       throw Object.assign(new Error('下载已过期，请重新解析。'), { status: 404 })
+    if (parts[4] === 'download' && job.parts)
+      throw Object.assign(new Error('请选择单个分 P 下载。'), { status: 400 })
     if (parts[4] === 'download') await jobs.wait(job, signal)
     if (
       job.status !== 'done' &&
-      !(parts[4] === 'files' && job.album && ['running', 'failed'].includes(job.status))
+      !(
+        parts[4] === 'files' &&
+        (job.album || job.parts) &&
+        ['running', 'failed'].includes(job.status)
+      )
     )
       throw Object.assign(new Error(job.error || '文件尚未准备完成或已取消。'), {
         status: 409,
@@ -114,19 +170,26 @@ export function createDownloaderApi({
     }
   }
   const handler = async (req, res, next) => {
-    if (!req.url?.startsWith('/api/downloader')) return next()
-    const url = new URL(req.url, 'http://localhost'),
+    if (req.url !== apiBase && !req.url?.startsWith(apiBase + '/')) return next()
+    const url = new URL('/api/downloader' + req.url.slice(apiBase.length), 'http://localhost'),
       parts = url.pathname.split('/').filter(Boolean)
     const controller = new AbortController()
+    let releaseRead,
+      releaseVisitor,
+      activeRequest = false
     req.on('aborted', () => controller.abort())
     res.on('close', () => {
       if (!res.writableEnded) controller.abort()
     })
     try {
       const visitor = access.authorize(req, res, {
-        config: parts.length === 3 && parts[2] === 'config',
+        config: req.method === 'GET' && parts.length === 3 && parts[2] === 'config',
         health: parts.length === 3 && parts[2] === 'health',
       })
+      const renewVisitor = () => {
+        access.touch(visitor, res)
+        activeRequest = true
+      }
       if (req.method === 'GET' && parts.length === 3 && parts[2] === 'health')
         return json(res, jobs.draining ? 503 : 200, {
           status: jobs.draining ? 'draining' : 'ok',
@@ -143,11 +206,12 @@ export function createDownloaderApi({
         if (
           !['GET', 'HEAD'].includes(req.headers['x-forwarded-method']) ||
           typeof original !== 'string' ||
-          !original.startsWith('/api/downloader/jobs/')
+          !original.startsWith(apiBase + '/jobs/')
         )
           return json(res, 404, { error: '文件不存在。' })
+        releaseVisitor = access.retain(visitor)
         const { file, download } = await downloadFile(
-          new URL(original, 'http://localhost'),
+          new URL('/api/downloader' + original.slice(apiBase.length), 'http://localhost'),
           visitor,
           controller.signal,
         )
@@ -159,6 +223,7 @@ export function createDownloaderApi({
         )
           throw new Error('文件路径无效。')
         await stat(file.path)
+        renewVisitor()
         res.writeHead(204, {
           'X-Caibao-File': '/' + relative,
           'X-Caibao-Type': file.type,
@@ -172,6 +237,10 @@ export function createDownloaderApi({
         if (resolving >= 2) return json(res, 429, { error: '正在解析其他作品，请稍后重试。' })
         access.consume(visitor, 'resolve', 20, 600000)
         const input = await body(req)
+        controller.signal.throwIfAborted()
+        if (jobs.draining) return json(res, 503, { error: '下载服务正在维护，请稍后重试。' })
+        if (resolving >= 2) return json(res, 429, { error: '正在解析其他作品，请稍后重试。' })
+        releaseVisitor = access.retain(visitor)
         resolving++
         try {
           let timing
@@ -196,6 +265,7 @@ export function createDownloaderApi({
               ].join(', '),
             )
           resolver.prefetch?.(result)
+          renewVisitor()
           return json(res, 200, publicResult(session))
         } finally {
           resolving--
@@ -208,19 +278,61 @@ export function createDownloaderApi({
         if (!session || session.owner !== visitor.id)
           throw new Error('作品信息已过期，请重新解析。')
         access.consume(visitor, 'jobs', 12, 600000)
+        releaseVisitor = access.retain(visitor)
         await jobs.ensureCapacity()
-        return json(res, 201, jobs.create(session, data.indices, data.delivery))
+        controller.signal.throwIfAborted()
+        // The running job protects its owner independently of this request.
+        const created = jobs.create(session, data.indices, data.delivery)
+        renewVisitor()
+        return json(res, 201, created)
       }
       if (parts[2] === 'jobs' && parts[3]) {
         const job = jobs.jobs.get(parts[3])
         if (!job || job.session.owner !== visitor.id)
           return json(res, 404, { error: '下载任务已过期。' })
-        if (req.method === 'GET' && parts.length === 4) return json(res, 200, jobs.public(job))
-        if (req.method === 'POST' && parts[4] === 'cancel') {
+        if (req.method === 'GET' && parts.length === 4) {
+          renewVisitor()
+          jobs.touch(job)
+          return json(res, 200, jobs.public(job))
+        }
+        if (req.method === 'POST' && parts.length === 5 && parts[4] === 'cancel') {
           jobs.cancel(job.id)
+          renewVisitor()
           return json(res, 200, jobs.public(job))
         }
         if (['GET', 'HEAD'].includes(req.method) && parts.length === 5 && parts[4] === 'stream') {
+          releaseVisitor = access.retain(visitor)
+          releaseRead = jobs.retain(job)
+          if (job.parts) {
+            const index = Number(url.searchParams.get('part'))
+            const part = job.parts.find((part) => part.index === index)
+            if (!part) return json(res, 404, { error: '分 P 不存在。' })
+            if (
+              req.method === 'HEAD' ||
+              req.headers.range ||
+              job.files.some((file) => file.index === index)
+            ) {
+              const file = await jobs.waitPart(job, index, controller.signal)
+              renewVisitor()
+              res.writeHead(307, {
+                Location: `${apiBase}/jobs/${job.id}/files/${file.id}?download=1`,
+                'Cache-Control': 'no-store',
+              })
+              return res.end()
+            }
+            if (['failed', 'cancelled'].includes(job.status))
+              return json(res, 409, { error: job.error || '下载已取消。' })
+            renewVisitor()
+            beginAttachment(res, { name: part.name, type: 'video/mp4' })
+            await jobs.waitPartStream(job, index, controller.signal)
+            const file = job.files.find((file) => file.index === index)
+            if (!part.stream?.bytes && !file) throw new Error(job.error || '下载已取消。')
+            const source = part.stream?.bytes
+              ? Readable.from(growingFile(job, controller.signal, { stream: part.stream }))
+              : createReadStream(file.path)
+            await pipeline(source, res, { signal: controller.signal })
+            return
+          }
           if (!job.attachment) return json(res, 404, { error: '文件不存在。' })
           // HEAD/resume wait for the immutable completed file. Never pretend a
           // growing MP4 has a fixed length or serve ranges from a partial file.
@@ -228,22 +340,17 @@ export function createDownloaderApi({
           if (['failed', 'cancelled'].includes(job.status))
             return json(res, 409, { error: job.error || '下载已取消。' })
           if (job.status === 'done') {
+            renewVisitor()
             res.writeHead(307, {
-              Location: `/api/downloader/jobs/${job.id}/download`,
+              Location: `${apiBase}/jobs/${job.id}/download`,
               'Cache-Control': 'no-store',
             })
             return res.end()
           }
           // Let the browser accept the attachment before resolving sources or
           // merging media. Do not invent a length or send placeholder file bytes.
-          res.writeHead(200, {
-            'Content-Type': job.attachment.type,
-            'Content-Disposition': disposition(job.attachment.name, true),
-            'Cache-Control': 'private, no-store',
-            'X-Content-Type-Options': 'nosniff',
-            'X-Accel-Buffering': 'no',
-          })
-          res.flushHeaders()
+          renewVisitor()
+          beginAttachment(res, job.attachment)
           await jobs.waitStream(job, controller.signal)
           // Once attachment headers have been sent, failure must break the
           // transfer, never turn an empty or truncated file into a success.
@@ -257,8 +364,11 @@ export function createDownloaderApi({
         }
         if (
           ['GET', 'HEAD'].includes(req.method) &&
-          (parts[4] === 'download' || parts[4] === 'files')
+          ((parts.length === 5 && parts[4] === 'download') ||
+            (parts.length === 6 && parts[4] === 'files' && /^[0-9a-f]{36}$/.test(parts[5])))
         ) {
+          releaseVisitor = access.retain(visitor)
+          releaseRead = jobs.retain(job)
           const { file, download } = await downloadFile(url, visitor, controller.signal)
           const { size } = await stat(file.path)
           const range = req.headers.range
@@ -286,6 +396,7 @@ export function createDownloaderApi({
             }
             status = 206
           }
+          renewVisitor()
           res.writeHead(status, {
             'Content-Type': file.type,
             'Content-Length': end - start + 1,
@@ -315,6 +426,7 @@ export function createDownloaderApi({
               ? session.result.avatar
               : asset?.thumbnail
         if (!source) return json(res, 404, { error: '没有可用的预览图片。' })
+        releaseVisitor = access.retain(visitor)
         const full = url.searchParams.get('size') === 'full'
         const value = await images.preview(
           full && asset?.type === 'image'
@@ -329,6 +441,7 @@ export function createDownloaderApi({
             size: full ? 'full' : key === 'cover' ? 'cover' : key === 'avatar' ? 'avatar' : 'thumb',
           },
         )
+        renewVisitor()
         res.writeHead(200, {
           'Content-Type': value.type,
           'Content-Length': value.data.length,
@@ -345,7 +458,13 @@ export function createDownloaderApi({
         res.destroy(error)
         return
       }
-      json(res, error.status || 400, { error: error.message || '操作失败，请重试。' })
+      json(res, error.status || 400, {
+        error: error.message || '操作失败，请重试。',
+        ...(error.code === 'SESSION_TOKEN_MISMATCH' ? { code: error.code } : {}),
+      })
+    } finally {
+      releaseRead?.()
+      releaseVisitor?.(activeRequest)
     }
   }
   return {

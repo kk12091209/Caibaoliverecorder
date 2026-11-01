@@ -13,7 +13,7 @@ namespace BililiveRecorder.Flv.Tests
         [Fact]
         public Task MeetsExpectations()
         {
-            var baseDirectory = new DirectoryInfo(Path.Combine(AttributeReader.GetProjectDirectory(), "../data/flv/TestData"));
+            var baseDirectory = new DirectoryInfo(TestDataPaths.Resolve("../data/flv/TestData"));
             var allFiles = baseDirectory.EnumerateFiles("*", new EnumerationOptions()
             {
                 RecurseSubdirectories = true

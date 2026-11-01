@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {Media} from '../server/media.js';
 import {FLV_HEADER,Ingestor} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';

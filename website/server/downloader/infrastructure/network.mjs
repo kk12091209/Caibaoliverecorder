@@ -7,7 +7,10 @@ import { Transform } from 'node:stream'
 import { createWriteStream } from 'node:fs'
 import { open as openFile } from 'node:fs/promises'
 import { ExpiringCache } from './cache.mjs'
+import { sizeLimitError } from './limits.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
+import { remoteBody, upstreamError, readRemoteText } from './remote-body.mjs'
+import { withDeadline } from './deadline.mjs'
 
 export const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1'
@@ -47,11 +50,21 @@ export function permittedAddress(address, family) {
 // usable only for the fixed platform allowlist below; TLS host verification
 // remains enabled, and private/loopback targets remain blocked.
 const roots = [
+  // Match operator domains, not individual edge names: node numbers, regions
+  // and experiment labels change between works and requests. Media domains do
+  // not widen the separate share-link inputHosts list in the resolver.
   'douyin.com',
   'iesdouyin.com',
+  'amemv.com',
   'douyinvod.com',
+  'idouyinvod.com',
+  'douyincdn.com',
+  'zjcdn.com',
   'douyinpic.com',
+  'douyinstatic.com',
   'byteimg.com',
+  'ibyteimg.com',
+  'pstatp.com',
   'snssdk.com',
   'bytecdn.cn',
   'bytecdn.com',
@@ -63,10 +76,14 @@ const roots = [
   'hdslb.com',
   'biliimg.com',
   'acgvideo.com',
+  'xiaohongshu.com',
+  'xhslink.com',
+  'xhslink.cn',
+  'xhscdn.com',
 ]
-// Observed as the media redirect from Douyin's official aweme.snssdk.com
-// playback endpoint. Keep this CDN exception exact instead of allowing zjcdn.
-const mediaHosts = new Set(['v3-dy-o.zjcdn.com'])
+// Akamai is shared with other customers. Only Bilibili's known video host is
+// allowed; neither its children nor the whole akamaized.net domain are trusted.
+const mediaHosts = new Set(['upos-hz-mirrorakam.akamaized.net'])
 const dnsCache = new ExpiringCache({ maxEntries: 256, ttl: 30000 })
 const agents = {
   http: new http.Agent({ keepAlive: true, maxSockets: 8, maxTotalSockets: 32 }),
@@ -85,11 +102,19 @@ export function approvedUrl(input) {
     u.port ||
     u.username ||
     u.password ||
-    isIP(u.hostname) ||
-    (!mediaHosts.has(u.hostname) &&
-      !roots.some((root) => u.hostname === root || u.hostname.endsWith('.' + root)))
+    isIP(u.hostname)
   )
     throw new Error('不支持这个媒体地址。')
+  if (
+    !mediaHosts.has(u.hostname) &&
+    !roots.some((root) => u.hostname === root || u.hostname.endsWith('.' + root))
+  )
+    // Name only the host: signed paths, query tokens and credentials must not
+    // appear in errors when a platform starts using another media network.
+    throw Object.assign(new Error(`不支持这个媒体地址（${u.hostname}）。`), {
+      code: 'UNSUPPORTED_MEDIA_HOST',
+      mediaHost: u.hostname,
+    })
   return u
 }
 
@@ -102,13 +127,20 @@ export async function openRemote(
     signal?.throwIfAborted()
     let addresses = dnsCache.get(url.hostname)
     if (!addresses) {
-      addresses = await lookup(url.hostname, { all: true })
+      addresses = await withDeadline(
+        signal,
+        timeout,
+        () => lookup(url.hostname, { all: true }),
+        '解析平台地址超时，请重试。',
+      )
       dnsCache.set(url.hostname, addresses)
     }
     if (!addresses.length || addresses.some((a) => !permittedAddress(a.address, a.family)))
       throw new Error('媒体地址不能指向本地网络。')
     const selected = addresses.find((a) => a.family === 4) || addresses[0]
+    let stream
     const response = await new Promise((resolve, reject) => {
+      let headerTimer
       const request = (url.protocol === 'https:' ? https : http).get(
         url,
         {
@@ -120,13 +152,31 @@ export async function openRemote(
               ? callback(null, [selected])
               : callback(null, selected.address, selected.family),
         },
-        resolve,
+        (response) => {
+          clearTimeout(headerTimer)
+          request.setTimeout(0)
+          stream = remoteBody(response, { timeout, url: url.href })
+          resolve(response)
+        },
       )
-      request.on('error', reject)
-      request.setTimeout(timeout, () => request.destroy(new Error('连接平台超时，请重试。')))
+      request.on('error', (error) => {
+        clearTimeout(headerTimer)
+        // Preserve the first cause after headers, instead of rejecting an
+        // already-resolved Promise and later exposing only "aborted".
+        if (stream) stream.destroy(error)
+        else reject(error)
+      })
+      headerTimer = setTimeout(
+        () =>
+          request.destroy(
+            upstreamError('连接平台超时，请重试。', 'UPSTREAM_HEADERS_TIMEOUT', url.href),
+          ),
+        timeout,
+      )
+      headerTimer.unref?.()
     })
     if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
-      response.destroy()
+      stream.destroy()
       const next = approvedUrl(new URL(response.headers.location, url))
       if (next.hostname !== url.hostname) {
         headers = { ...headers }
@@ -139,7 +189,7 @@ export async function openRemote(
     return {
       status: response.statusCode,
       headers: response.headers,
-      stream: response,
+      stream,
       url: url.href,
     }
   }
@@ -154,17 +204,7 @@ export async function remoteText(url, options = {}) {
       upstreamStatus: response.status,
     })
   }
-  const chunks = []
-  let size = 0
-  for await (const chunk of response.stream) {
-    size += chunk.length
-    if (size > (options.maxBytes || 12 * 1024 * 1024)) {
-      response.stream.destroy()
-      throw new Error('平台返回的数据过大。')
-    }
-    chunks.push(chunk)
-  }
-  return { ...response, text: Buffer.concat(chunks).toString('utf8') }
+  return { ...response, text: await readRemoteText(response, { maxBytes: options.maxBytes }) }
 }
 export async function remoteJson(url, options = {}) {
   const { text } = await remoteText(url, options)
@@ -318,7 +358,7 @@ export async function saveRemote(
       const total = Number(response.headers['content-length']) || 0
       if (total > maxBytes) {
         response.stream.destroy()
-        throw new Error('文件超出本地初版的单文件大小限制。')
+        throw sizeLimitError(maxBytes, '文件')
       }
       if (
         parallel &&

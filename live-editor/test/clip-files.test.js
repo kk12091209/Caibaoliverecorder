@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {execFileSync} from 'node:child_process';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {Ingestor} from '../server/ingest.js';
 
 test('HTTP export of three clips produces six independent dual-mode MP4s in selection order',async t=>{

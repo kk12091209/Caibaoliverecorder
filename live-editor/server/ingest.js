@@ -29,7 +29,17 @@ function keyframe(b) { return videoData(b) && b[11] >> 4 === 1; }
 const decodeXML = s => s.replace(/&#x([0-9a-f]+);|&#(\d+);|&(lt|gt|quot|apos|amp);/gi, (_, x, d, n) => x || d ? String.fromCodePoint(Math.min(0x10ffff, parseInt(x || d, x ? 16 : 10))) : ({lt:'<',gt:'>',quot:'"',apos:"'",amp:'&'}[n] || ''));
 
 export class Ingestor {
-  constructor(store, { now = Date.now, xmlRetryMs = 30000 } = {}) { this.store = store; this.states = new Map(); this.xmlStates = new Map(); this.health = new Map(); this.now = now; this.xmlRetryMs = xmlRetryMs; this.busy = false; this.timer = null; }
+  constructor(store, { now = Date.now, xmlRetryMs = 30000, maxBufferedBytes = 64 * 1024 * 1024, maxTotalBufferedBytes = 256 * 1024 * 1024, maxBufferedTags = 100000, stalledMediaMs = 30000 } = {}) {
+    for(const value of [maxBufferedBytes,maxTotalBufferedBytes,maxBufferedTags,stalledMediaMs])if(!Number.isSafeInteger(value)||value<=0)throw new Error('索引缓存预算必须是正整数。');
+    this.store = store; this.states = new Map(); this.xmlStates = new Map(); this.health = new Map(); this.now = now; this.xmlRetryMs = xmlRetryMs; this.busy = false; this.timer = null;
+    this.maxBufferedBytes=maxBufferedBytes;this.maxTotalBufferedBytes=maxTotalBufferedBytes;this.maxBufferedTags=maxBufferedTags;this.stalledMediaMs=stalledMediaMs;
+  }
+  checkBuffer(state,tag) {
+    if(state.bytes+tag.length>this.maxBufferedBytes)throw new Error('此路素材的未落盘索引缓存超过上限，已暂停索引并保留原始录制。');
+    if(state.parts.length>=this.maxBufferedTags)throw new Error('此路素材的未落盘数据包过多，已暂停索引并保留原始录制。');
+    let total=tag.length;for(const pending of this.states.values())total+=pending.bytes;
+    if(total>this.maxTotalBufferedBytes)throw new Error('索引总缓存超过上限，已暂停此路索引并保留原始录制。');
+  }
   healthSnapshot(sourceId) {const value=this.health.get(sourceId);return value?{...value}:null;}
   healthState(sourceId) {
     let value=this.health.get(sourceId);
@@ -40,14 +50,17 @@ export class Ingestor {
     return value;
   }
   start() { this.timer = setInterval(() => this.tick().catch(e => { this.lastError = e.message; }), 250); }
-  stop() { clearInterval(this.timer); }
+  stop() { clearInterval(this.timer); this.states.clear(); this.xmlStates.clear(); }
   async tick() {
     if (this.busy) return; this.busy = true;
     try {
       const rows = this.store.all("SELECT * FROM sources WHERE error='' AND session IN (SELECT id FROM sessions WHERE deleted_at='')");
+      const active=new Set(rows.map(source=>source.id));
+      for(const id of this.states.keys())if(!active.has(id))this.states.delete(id);
+      for(const id of this.xmlStates.keys())if(!active.has(id))this.xmlStates.delete(id);
       for (const source of rows) {
         try { await this.readSource(source); await this.readDanmaku(source); }
-        catch (e) { if (e.code !== 'ENOENT') { this.store.run('UPDATE sources SET error=? WHERE id=?', e.message, source.id); this.store.run('UPDATE sessions SET error=? WHERE id=?', e.message, source.session); } }
+        catch (e) { this.states.delete(source.id); if (e.code !== 'ENOENT') { this.store.run('UPDATE sources SET error=? WHERE id=?', e.message, source.id); this.store.run('UPDATE sessions SET error=? WHERE id=?', e.message, source.session); } }
       }
       await this.store.linkmic?.tick(rows);
     } finally { this.busy = false; }
@@ -57,7 +70,7 @@ export class Ingestor {
     let state = this.states.get(source.id);
     if (!state) {
       const max = this.store.get('SELECT MAX(seq) AS seq FROM chunks WHERE source=?', source.id);
-      state = { pos: source.pos, seq: (max.seq ?? -1) + 1, header: JSON.parse(source.header), parts: [], keys: [], bytes: 0, start: null, end: source.duration, boundary: 0, clock: new RecordingClock(source.duration * 1000) };
+      state = { pos: source.pos, seq: (max.seq ?? -1) + 1, header: JSON.parse(source.header), parts: [], keys: [], bytes: 0, start: null, end: source.duration, boundary: 0, clock: new RecordingClock(source.duration * 1000), mediaTime: null, mediaProgressAt: this.now() };
       this.states.set(source.id, state);
     }
     const file = await fs.open(source.path, 'r');
@@ -90,9 +103,12 @@ export class Ingestor {
             }
             else {
               const milliseconds = state.clock.read(tag), time = (milliseconds ?? state.clock.latest) / 1000;
+              if(state.mediaTime===null||state.clock.latest>state.mediaTime){state.mediaTime=state.clock.latest;state.mediaProgressAt=this.now();}
+              else if(this.now()-state.mediaProgressAt>=this.stalledMediaMs)throw new Error('素材持续收到数据但时间戳长时间未推进，已暂停索引并保留原始录制。');
               if(milliseconds===null&&state.clock.negativePackets===1)this.store.diagnostics?.record('录制时间戳',`素材 ${source.id} 出现负时间戳，已保留原始数据并阻止异常时长`,{level:'警告'});
               if (milliseconds !== null && state.parts.length && time >= state.boundary) await this.flush(source, state);
               if (state.start === null) { state.start = time; state.boundary = Math.floor(time) + 1; }
+              this.checkBuffer(state,tag);
               if (milliseconds !== null && keyframe(tag)) state.keys.push({ time: source.start + time, offset: state.bytes });
               state.parts.push(Buffer.from(tag)); state.bytes += tag.length; state.end = Math.max(state.end, time);
             }
@@ -110,6 +126,7 @@ export class Ingestor {
         // A crashed writer may leave a partial final tag; preserve original bytes and report the truncated tail.
         await this.flush(source, state);
         this.store.run('UPDATE sources SET closed=2,error=? WHERE id=?', '末尾存在未写完整的数据包；已保留原文件。', source.id);
+        this.states.delete(source.id);
       }
       if(state.pos>initialPos)health.lastProgressAt=this.now();
     } finally { await file.close(); }

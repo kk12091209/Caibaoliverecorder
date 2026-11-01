@@ -11,7 +11,7 @@ namespace BililiveRecorder.Web.Api
     [ApiController, Route("api/[controller]", Name = "[controller] [action]")]
     public sealed class FileController : ControllerBase, IDisposable
     {
-        private readonly PhysicalFileProvider? fileProvider;
+        private readonly RecordingFileProvider? fileProvider;
         private bool disposedValue;
 
         public FileController(IRecorder recorder, BililiveRecorderFileExplorerSettings fileExplorerSettings)
@@ -20,7 +20,7 @@ namespace BililiveRecorder.Web.Api
             if (fileExplorerSettings is null) throw new ArgumentNullException(nameof(fileExplorerSettings));
             if (fileExplorerSettings.Enable)
             {
-                this.fileProvider = new PhysicalFileProvider(recorder.Config.Global.WorkDirectory!);
+                this.fileProvider = new RecordingFileProvider(recorder.Config.Global.WorkDirectory!);
             }
         }
 

@@ -10,7 +10,7 @@ import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ServiceRuntime, serviceBuild } from '../server/service-runtime.js';
 import { availableLocalPort } from '../server/local-endpoint.js';
-import { createApp } from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const roots=[];
@@ -48,6 +48,7 @@ test('两份独立数据自动使用不同编辑端口，所有地址限于本�
   const descriptor=JSON.parse(await fs.readFile(first.runtime.file,'utf8'));
   assert.equal(descriptor.origin,first.runtime.origin);assert.equal(descriptor.dataPath,await fs.realpath(first.root));
   assert.equal(descriptor.build,await serviceBuild(appRoot));
+  assert.equal((await globalThis.fetch(first.runtime.origin+'/api/state')).status,401);
   assert.equal((await fetch(first.runtime.origin+'/api/state')).status,200);
   const forbidden=await new Promise((resolve,reject)=>{http.get(first.runtime.origin+'/api/state',{headers:{Host:'example.com:'+first.port}},res=>{res.resume();resolve(res.statusCode);}).on('error',reject);});
   assert.equal(forbidden,403);

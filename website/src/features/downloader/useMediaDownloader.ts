@@ -31,8 +31,7 @@ export function useMediaDownloader() {
     [error, setError] = useState('')
   const [selected, setSelected] = useState<Set<number>>(() => new Set()),
     [multiple, setMultiple] = useState(false),
-    [preview, setPreview] = useState<number | null>(null),
-    [player, setPlayer] = useState<{ url: string; name: string } | null>(null)
+    [preview, setPreview] = useState<number | null>(null)
   const [chosenSaveMode, setSaveMode] = useState<'file' | 'album'>(() =>
       appleMobile ? 'album' : 'file',
     ),
@@ -40,7 +39,9 @@ export function useMediaDownloader() {
   const [motionPlayer, setMotionPlayer] = useState<{ index: number; url: string } | null>(null)
   const saveMode = appleMobile ? chosenSaveMode : 'file'
   const [starting, setStarting] = useState(false),
-    [notice, setNotice] = useState('')
+    [notice, setNotice] = useState(''),
+    [partsJob, setPartsJob] = useState<DownloadJob | null>(null)
+  const [transferJobs, setTransferJobs] = useState<DownloadJob[]>([])
   const activeResolve = useRef<AbortController | null>(null),
     activeDownload = useRef<AbortController | null>(null),
     ready = useRef(new Map<string, DownloadJob>()),
@@ -84,12 +85,13 @@ export function useMediaDownloader() {
     setStarting(false)
     setNotice('')
     setAlbum(null)
+    setPartsJob(null)
+    setTransferJobs([])
     setMotionPlayer(null)
     setInput(text)
     setBusy(true)
     setError('')
     setPreview(null)
-    setPlayer(null)
     setResult(null)
     setSelected(new Set())
     setMultiple(false)
@@ -118,12 +120,33 @@ export function useMediaDownloader() {
     let failures = 0
     try {
       while (job.status === 'queued' || job.status === 'running') {
-        await pauseDownload(controller.signal, 2000)
+        await pauseDownload(controller.signal, Math.min(30000, 2000 * (failures + 1)))
         try {
           job = await getDownloadJob(job.id, controller.signal)
+          setTransferJobs((current) => current.map((value) => (value.id === job.id ? job : value)))
+          if (job.downloads) setPartsJob((current) => (current?.id === job.id ? job : current))
           failures = 0
-        } catch {
-          if (controller.signal.aborted || ++failures >= 3) return
+        } catch (reason) {
+          if (controller.signal.aborted) return
+          failures++
+          if (failures >= 3)
+            setTransferJobs((current) =>
+              current.map((value) =>
+                value.id === job.id
+                  ? {
+                      ...value,
+                      monitoringError: '暂时无法读取任务状态，请同时查看浏览器下载列表。',
+                    }
+                  : value,
+              ),
+            )
+          if (
+            reason &&
+            typeof reason === 'object' &&
+            'status' in reason &&
+            [401, 404].includes(Number(reason.status))
+          )
+            return
         }
       }
       if (controller.signal.aborted) return
@@ -135,17 +158,31 @@ export function useMediaDownloader() {
       browserDownloads.current.delete(key)
     }
   }
-  async function download(indices: number[], requestedIntent?: 'download' | 'preview' | 'album') {
+  async function download(indices: number[], requestedIntent?: 'download' | 'motion' | 'album') {
     if (!result || !indices.length || starting) return
     const intent = requestedIntent || (saveMode === 'album' ? 'album' : 'download')
+    const motion =
+      intent === 'motion' ? result.assets.find((asset) => asset.index === indices[0]) : null
+    if (intent === 'motion' && (indices.length !== 1 || motion?.type !== 'livePhoto')) return
+    const separateParts =
+      intent === 'download' &&
+      result.platform === 'bilibili' &&
+      result.kind === 'video' &&
+      indices.length > 1
+    const handoffParts = async (job: DownloadJob, signal?: AbortSignal) => {
+      setPartsJob(job)
+      for (const part of job.downloads || []) {
+        await startBrowserDownload(part.url, part.name, { parallel: part.ready, signal })
+      }
+      setNotice(
+        `已请求分别下载 ${job.downloads?.length || 0} 个 MP4。若浏览器询问，请允许下载多个文件；也可点击下方链接单独下载。`,
+      )
+    }
     setError('')
     setNotice('')
     if (intent === 'album') closeImage()
-    const showPreview = (job: DownloadJob) => {
-      const asset = result.assets.find((a) => a.index === indices[0])
-      if (asset?.type === 'livePhoto')
-        setMotionPlayer({ index: asset.index, url: job.files[0].previewUrl })
-      else setPlayer({ url: job.files[0].previewUrl, name: job.files[0].name })
+    const showMotion = (job: DownloadJob) => {
+      if (motion) setMotionPlayer({ index: motion.index, url: job.files[0].previewUrl })
     }
     const key =
       result.sessionId +
@@ -153,14 +190,27 @@ export function useMediaDownloader() {
       [...indices].sort((a, b) => a - b).join(',') +
       (intent === 'album' ? ':album' : ':file')
     if (intent === 'download' && browserDownloads.current.has(key)) {
-      setNotice('这份文件已发起下载，请在浏览器下载列表查看进度。')
+      setNotice(
+        separateParts
+          ? '已请求分别下载所选分 P；未出现在浏览器下载列表的文件，可点击下方链接单独下载。'
+          : '已请求下载，请在浏览器下载列表确认。',
+      )
       return
     }
-    const existing = ready.current.get(key)
+    let existing = ready.current.get(key)
+    if (existing) {
+      try {
+        existing = await getDownloadJob(existing.id)
+      } catch {
+        ready.current.delete(key)
+        existing = undefined
+      }
+    }
     if (existing) {
       const file = existing.archive || existing.files[0]
       if (intent === 'album') setAlbum(existing)
-      else if (intent === 'preview') showPreview(existing)
+      else if (intent === 'motion') showMotion(existing)
+      else if (existing.downloads) await handoffParts(existing)
       else {
         await startBrowserDownload(file.url, file.name, {
           parallel: file.bytes >= 2 * 1024 ** 2,
@@ -178,21 +228,34 @@ export function useMediaDownloader() {
         {
           sessionId: result.sessionId,
           indices,
-          delivery: intent === 'album' ? 'album' : intent === 'download' ? 'stream' : 'preview',
+          delivery:
+            intent === 'album'
+              ? 'album'
+              : separateParts
+                ? 'parts'
+                : intent === 'download'
+                  ? 'stream'
+                  : 'preview',
         },
         controller.signal,
       )
       if (controller.signal.aborted) return
       if (intent === 'download') {
-        await startBrowserDownload(job.downloadUrl, '', {
-          parallel: result.kind === 'video' || indices.length > 1,
-          signal: controller.signal,
-        })
+        setTransferJobs((current) =>
+          [job, ...current.filter((value) => value.id !== job.id)].slice(0, 4),
+        )
+        if (job.downloads) await handoffParts(job, controller.signal)
+        else {
+          await startBrowserDownload(job.downloadUrl, '', {
+            parallel: result.kind === 'video' || indices.length > 1,
+            signal: controller.signal,
+          })
+          setNotice('已请求浏览器下载，请在下载列表确认；文件准备期间可能暂时显示 0 B。')
+        }
         controller.signal.throwIfAborted()
         browserDownloads.current.set(key, controller)
         activeDownload.current = null
         void observeBrowserDownload(job, key, result.title, controller)
-        setNotice('已发起浏览器下载，请在下载列表确认并查看进度；文件准备期间可能暂时显示 0 B。')
         return
       }
       while (job.status === 'queued' || job.status === 'running') {
@@ -201,7 +264,7 @@ export function useMediaDownloader() {
           setNotice('')
           return
         }
-        setNotice(intent === 'preview' ? '正在准备动态预览…' : `正在准备相册文件 · ${job.phase}`)
+        setNotice(intent === 'motion' ? '正在准备动态预览…' : `正在准备相册文件 · ${job.phase}`)
         await pauseDownload(controller.signal, 900)
         job = await getDownloadJob(job.id, controller.signal)
       }
@@ -211,8 +274,8 @@ export function useMediaDownloader() {
       if (intent === 'album') {
         setAlbum(job)
         setNotice('')
-      } else if (intent === 'preview') {
-        showPreview(job)
+      } else if (intent === 'motion') {
+        showMotion(job)
         setNotice('')
       }
     } catch (reason) {
@@ -256,13 +319,14 @@ export function useMediaDownloader() {
     setMultiple,
     preview,
     setPreview,
-    player,
     setSaveMode,
     album,
     setAlbum,
     motionPlayer,
     saveMode,
     notice,
+    partsJob,
+    transferJobs,
     activeResolve,
     dialog,
     selectAll,

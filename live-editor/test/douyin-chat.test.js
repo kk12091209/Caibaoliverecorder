@@ -25,3 +25,14 @@ test('visitor refresh updates reconnect credentials without resetting sampling o
  chat.update('source',{cookie:'new',userUniqueId:'2'});assert.equal(chat.clients.get('source').details.cookie,'new');assert.equal(fake.sent.filter(message=>message.type==='start').length,1);assert.equal(fake.sent.at(-1).type,'credentials');
  chat.update('source',{cookie:'new',userUniqueId:'2'});assert.equal(fake.sent.filter(message=>message.type==='credentials').length,1);await chat.close();
 });
+
+test('worker reasons reach the recorder, first persisted batch follows disk completion, and protocol payloads never reach status consumers',async()=>{
+ const fake=worker(),chat=new DouyinChat({createWorker:()=>fake}),events=[];let release;
+ chat.start('source',{}, {write:()=>new Promise(resolve=>release=resolve),status:(state,detail)=>events.push([state,detail])});
+ fake.emit('message',{type:'status',key:'source',status:'retry',stage:'upgrade',reason:'http',code:403,retryMs:6000,elapsedMs:120,message:'private-protocol',cookie:'private-cookie'});
+ assert.deepEqual(events[0],['retry',{status:'retry',stage:'upgrade',reason:'http',code:403,elapsedMs:120,retryMs:6000}]);
+ fake.emit('message',{type:'batch',key:'source',id:1,messages:[{text:'private-chat'}]});await turn();assert.equal(events.some(([state])=>state==='first-write'),false);
+ release();await turn();assert.equal(events.filter(([state])=>state==='first-write').length,1);
+ assert.doesNotMatch(JSON.stringify(events),/private/);fake.emit('error',new Error('private-worker-error'));assert.deepEqual(events.at(-1),['retry',{stage:'worker',reason:'worker-exit',retryMs:2000}]);
+ await chat.close();
+});

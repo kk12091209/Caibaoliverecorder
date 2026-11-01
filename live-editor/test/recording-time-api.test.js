@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('素材详情保留重连前后的真实时间锚点，历史无锚点时仍提供场次开始时间',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-recording-time-api-'));

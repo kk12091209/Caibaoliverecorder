@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 
 test('设置拒绝已移除的登录与恢复功能；旧下载接口停用，保留失败清理及重试',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'bili-settings-cleanup-'));

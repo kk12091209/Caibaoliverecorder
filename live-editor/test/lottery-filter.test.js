@@ -216,7 +216,7 @@ async function availablePort() {
 test('HTTP 列表和叠加始终过滤抽奖，raw 参数和旧编辑开关都不能关闭', async () => {
   // Imported inside the test so store/ingest/export regressions can also run
   // independently while unrelated endpoint modules are being developed.
-  const { createApp } = await import('../server/index.js');
+  const {createApp,fetch} = await import('./helpers/authenticated-app.js');
   const appRoot = path.join(root, 'http');
   const app = await createApp({automaticClean:false,preparation:false, port: await availablePort(), data: path.join(appRoot, 'data'), projectRoot: appRoot, noRecorder: true, compact: false, ffmpeg: 'not-launched', ffprobe: 'not-launched' });
   app.ingestor.stop();

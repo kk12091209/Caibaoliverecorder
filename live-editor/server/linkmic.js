@@ -5,7 +5,7 @@ import { cameraLayout } from '../shared/recording-style.js';
 import { labelGeometry } from '../shared/linkmic-labels.js';
 import { LinkmicAvatars } from './linkmic-avatars.js';
 
-const VERSION=4,TTL=6,CAMERA_TTL=10;
+const VERSION=5,TTL=6,CAMERA_TTL=10;
 const stamp=tag=>(tag.readUIntBE(4,3)+tag[7]*16777216)/1000;
 
 // Both timelines coalesce repeated SEI frames, but keep separate expiry windows
@@ -142,7 +142,9 @@ export class LinkmicIndex {
       const source=sources.get(row.source),frame=JSON.parse(row.data),owner=this.store.setting('linkmic-owner:'+row.source);
       const participants=frame.participants.map(person=>{
         const found=people.get(row.source+':'+frame.channel+':'+person.linkId);
-        return {...person,...(found?{id:found.id,name:found.name,...(found.avatar?{avatar:found.avatar,avatarUrl:`/api/sessions/${id}/linkmic-avatars/${row.source}/${found.avatar}.png`}:{})}:person.owner&&owner?{id:owner.id,name:owner.name}:{})};
+        const identity=person.owner&&owner?{id:owner.id,name:owner.name}:found?{id:found.id,name:found.name,...(found.avatar?{avatar:found.avatar,avatarUrl:`/api/sessions/${id}/linkmic-avatars/${row.source}/${found.avatar}.png`}:{})}:person.ownerFallback&&owner?{id:owner.id,name:owner.name}:{};
+        const isOwner=frame.platform==='douyin'&&owner?.id&&identity.id===owner.id;
+        return {...person,...identity,...(isOwner?{owner:true,name:owner.name||identity.name}:{}),...(frame.platform==='douyin'&&(person.main||person.owner||isOwner)?{labelAlign:'left'}:{})};
       });
       return {source:row.source,time:row.time,end:Math.min(row.end,source.start+source.duration),participants};
     }).filter(event=>event.end>event.time);
@@ -178,7 +180,7 @@ export function linkmicAss(events,width,height,{base=0,from=0,to=Infinity,source
     for(const person of event.participants) {
       const g=labelGeometry(person,width,height,sourceWidth,sourceHeight);
       if(!g?.text)continue;
-      lines.push(`Dialogue: 2,${assTime(start-base)},${assTime(end-base)},Anchor,,0,0,0,,{\\an3\\pos(${g.x.toFixed(2)},${g.y.toFixed(2)})\\fs${g.size.toFixed(2)}\\clip(${Math.ceil(g.left)},${Math.ceil(g.top)},${Math.floor(g.right)},${Math.floor(g.bottom)})}${assEscape(g.text)}\n`);
+      lines.push(`Dialogue: 2,${assTime(start-base)},${assTime(end-base)},Anchor,,0,0,0,,{\\an${g.align==='left'?1:3}\\pos(${g.x.toFixed(2)},${g.y.toFixed(2)})\\fs${g.size.toFixed(2)}\\clip(${Math.ceil(g.left)},${Math.ceil(g.top)},${Math.floor(g.right)},${Math.floor(g.bottom)})}${assEscape(g.text)}\n`);
     }
   }
   return `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Anchor,Microsoft YaHei,16,&H00FFFFFF,&H00FFFFFF,&H80000000,&H90000000,0,0,0,0,100,100,0,0,1,1,1,3,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`+lines.join('');

@@ -45,14 +45,22 @@ function audienceFrame(app) {
     canvas.width<=0||canvas.height<=0||canvas.width/canvas.height>1||
     !Array.isArray(app.grids)||app.grids.length>7)return empty;
   const bottom=.149*canvas.width/canvas.height,height=.13*(1-bottom),participants=[];
+  const focus=app.anchor_interact_info?.layout_type?identifier(app.anchor_interact_info.focus_id):'';
   for(const grid of app.grids) {
     const linkId=identifier(grid?.uid_str)||identifier(grid?.uid),seat=grid?.p;
     if(!linkId||!Number.isInteger(seat)||seat< -1||seat>5||grid.visible===0||
       app.grids.filter(other=>other?.p===seat).length!==1||
       app.grids.filter(other=>(identifier(other?.uid_str)||identifier(other?.uid))===linkId).length!==1)continue;
     const rect=seat===-1?{x:0,y:0,w:1,h:1}:{x:.761,y:1-bottom-(seat+1)*height,w:.205,h:height};
-    if(validRect(rect))participants.push({...rect,linkId,...(seat===-1?{owner:true}:grid.type===2?{audioOnly:true}:{})});
+    // -1 identifies the main picture, not a permanent user identity. A guest
+    // promoted to this seat must be resolved through the exact roster ID.
+    if(validRect(rect))participants.push({...rect,linkId,...(seat===-1?{main:true,...(!focus?{ownerFallback:true}:{})}:grid.type===2?{audioOnly:true}:{})});
   }
+  // In this verified floating-seat layout the background is the room anchor
+  // when no main seat or explicit focus is supplied. Never infer a host over
+  // an explicitly identified main picture.
+  if(participants.length&&!participants.some(p=>p.main)&&!focus)
+    participants.unshift({x:0,y:0,w:1,h:1,linkId:'',owner:true,main:true});
   return {...empty,participants};
 }
 function douyinFrame(value) {
@@ -66,7 +74,7 @@ function douyinFrame(value) {
   // Game camera composites have a different coordinate transform. Hide those
   // until that transform is known, instead of attaching a name to the game.
   if(app.game_clip||app.camera_clip)return {platform:'douyin',channel,participants:[]};
-  const participants=[];
+  const participants=[],focus=app.anchor_interact_info?.layout_type?identifier(app.anchor_interact_info.focus_id):'';
   const grids=app.ver===2?app.grids.slice(0,1):app.grids;
   for(const grid of grids) {
     const linkId=identifier(grid.uid_str)||identifier(grid.uid);
@@ -77,7 +85,8 @@ function douyinFrame(value) {
       if(![crop.crop_y,crop.crop_h,crop.stride_h].every(Number.isFinite)||crop.stride_h<=0)return null;
       rect={...rect,y:crop.crop_y/crop.stride_h,h:crop.crop_h/crop.stride_h};
     }
-    if(validRect(rect))participants.push({...rect,linkId});
+    if(validRect(rect)&&grids.filter(other=>(identifier(other.uid_str)||identifier(other.uid))===linkId).length===1)
+      participants.push({...rect,linkId,...(focus===linkId||rect.x===0&&rect.y===0&&rect.w===1&&rect.h===1?{main:true}:{})});
   }
   // The double-link protocol sends the remote tile only. Its own player adds
   // the local anchor on the left. Do so only for the exact half-width layout.

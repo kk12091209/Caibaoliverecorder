@@ -7,6 +7,7 @@ import {decodePushFrame,decodeChat,decodeGift,decodeLottery,acknowledgeFrame,hea
 import {openDouyinSocket} from './douyin-websocket.js';
 import {signChatUrl} from './douyin-signing.js';
 import {DOUYIN_USER_AGENT} from './douyin-room.js';
+import {DouyinChatSignals,douyinChatError} from './douyin-chat-status.js';
 
 const rooms=new Map(),activities=new LotteryActivities();
 const intake=new ChatIntake({filterLottery:(key,message)=>activities.matches(key,message)});
@@ -33,26 +34,28 @@ function flush(room) {
 function retry(room,error) {
   if(room.stopped||room.retry)return;
   clearInterval(room.heartbeat);room.socket=null;
-  post({type:'status',key:room.key,status:'retry',reason:error?.message==='弹幕握手校验失败。'?'handshake':/^弹幕连接(?:失败|被关闭)：\d+$/.test(error?.message||'')?error.message:'connection'});
-  room.retry=setTimeout(()=>{room.retry=null;void connect(room);},Math.min(30000,3000*2**Math.min(room.failures++,4)));
+  const wait=Math.min(30000,3000*2**Math.min(room.failures++,4));room.signals.retry(error,wait);
+  room.retry=setTimeout(()=>{room.retry=null;void connect(room);},wait);
 }
 async function connect(room) {
   const generation=room.generation=(room.generation||0)+1;
   const current=()=>!room.stopped&&room.generation===generation;
+  room.firstAck=null;
+  room.signals.begin();
   try{
     const socket=await openDouyinSocket(chatSocketUrl(room),{signal:room.abort.signal,
       headers:{'User-Agent':DOUYIN_USER_AGENT,Origin:'https://live.douyin.com',Cookie:room.cookie},
       onClose:error=>{if(current())retry(room,error);},onMessage:bytes=>{
         if(!current())return;
-        room.lastFrame=Date.now();const frame=decodePushFrame(bytes);
+        const frame=decodePushFrame(bytes);room.lastFrame=Date.now();room.signals.first('first-frame');
         if(frame.needAck){const ack=acknowledgeFrame(frame.logId,frame.internalExt);if(room.socket)room.socket.send(ack);else room.firstAck=ack;}
         // Activity messages have priority even when chats precede them in the packet.
         for(const message of frame.messages)if(isLotteryMethod(message.method))for(const activity of decodeLottery(message,{roomId:room.roomId,serverTime:frame.serverTime}))activities.update(room.key,activity);
-        for(const message of frame.messages){try{const context={roomId:room.roomId,sourceStart:room.sourceStart};const gift=decodeGift(message,context);if(gift)giftIntake.add(room.key,gift);else{const chat=decodeChat(message,context);if(chat)intake.add(room.key,chat);}}catch{/* Skip one malformed event, preserving other messages and the ACK. */}}
+        for(const message of frame.messages){try{const context={roomId:room.roomId,sourceStart:room.sourceStart};const gift=decodeGift(message,context);if(gift){if(giftIntake.add(room.key,gift))room.signals.first('first-gift');}else{const chat=decodeChat(message,context);if(chat&&intake.add(room.key,chat))room.signals.first('first-comment');}}catch{room.signals.first('message-invalid');}}
       }});
-    if(!current()){socket.close();return;}
-    room.socket=socket;if(room.firstAck){socket.send(room.firstAck);room.firstAck=null;}socket.send(heartbeatFrame());room.failures=0;room.lastFrame=Date.now();post({type:'status',key:room.key,status:'connected'});
-    room.heartbeat=setInterval(()=>{if(Date.now()-room.lastFrame>45000)socket.close();else socket.send(heartbeatFrame());},5000);
+    if(!current()||socket.closed){socket.close();return;}
+    room.socket=socket;if(room.firstAck){socket.send(room.firstAck);room.firstAck=null;}socket.send(heartbeatFrame());if(socket.closed)return;room.failures=0;room.lastFrame=Date.now();room.signals.established();
+    room.heartbeat=setInterval(()=>{if(Date.now()-room.lastFrame>45000)socket.close(douyinChatError('heartbeat-timeout','receive'));else socket.send(heartbeatFrame());},5000);
   }catch(error){if(current())retry(room,error);}
 }
 parentPort.on('message',message=>{
@@ -61,6 +64,7 @@ parentPort.on('message',message=>{
   }else if(message.type==='start'){
     if(rooms.has(message.key)||rooms.size>=64)return;
     const room={...message,key:String(message.key),abort:new AbortController(),failures:0,stopped:false};
+    room.signals=new DouyinChatSignals(event=>post({type:'status',key:room.key,...event}));
     rooms.set(room.key,room);intake.start(room.key,{start:room.sourceStart});giftIntake.start(room.key);void connect(room);
   }else if(message.type==='credentials'){
     const room=rooms.get(message.key);if(room&&!room.stopped&&(room.cookie!==message.cookie||room.userUniqueId!==message.userUniqueId)){

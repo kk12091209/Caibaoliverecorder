@@ -111,3 +111,19 @@ test('danmaku lifecycle logs retain authentication, first comment and reconnect 
   assert.match(text,/\[信息\] B站弹幕：房间 25034104：弹幕认证通过/);
   assert.match(text,/\[警告\] B站弹幕：房间 25034104：弹幕心跳回应超时/);
 });
+
+test('connection failure keeps only known stages, safe categories, numeric codes and timing',async t=>{
+ const f=await fixture(t),stream=new PassThrough();f.log.attach(stream,'B站核心输出');
+ const lines=[
+  '[WRN] [DanmakuLifecycle] room=1852631778 event=connect-failed code=-352 stage=server-info kind=api elapsed_ms=215 synthetic-api-body-secret',
+  '[WRN] [DanmakuLifecycle] room=1852631778 event=connect-failed code=11001 stage=socket kind=dns elapsed_ms=10320 synthetic-socket-secret',
+  '[WRN] [DanmakuLifecycle] room=1852631778 event=connect-failed stage=server-info kind=api-paused elapsed_ms=0',
+  '[WRN] [DanmakuLifecycle] room=1852631778 event=connect-failed stage=private-phase-secret kind=private-category-secret elapsed_ms=999'
+ ];
+ const bytes=Buffer.from(lines.join('\n')+'\n');for(const byte of bytes)stream.write(Buffer.from([byte]));stream.end();
+ await new Promise(resolve=>stream.once('end',resolve));await f.log.pending;const text=await f.read('2026-10-06');
+ assert.match(text,/代码 -352.*阶段：请求弹幕地址.*平台接口返回错误.*0\.2 秒/);
+ assert.match(text,/代码 11001.*阶段：连接弹幕线路.*域名解析失败.*10\.3 秒/);
+ assert.match(text,/接口保护正在等待恢复.*0\.0 秒/);
+ for(const secret of ['synthetic-api-body-secret','synthetic-socket-secret','private-phase-secret','private-category-secret'])assert.ok(!text.includes(secret));
+});

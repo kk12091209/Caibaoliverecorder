@@ -14,7 +14,7 @@ export type MediaAsset = {
   quality?: string
 }
 export type MediaResult = {
-  platform: 'douyin' | 'bilibili'
+  platform: 'douyin' | 'bilibili' | 'xiaohongshu'
   kind: 'images' | 'video'
   id: string
   sessionId: string
@@ -54,6 +54,11 @@ export type DownloadJob = {
   bytes: number
   total: number
   error: string
+  recovering?: boolean
+  retries?: number
+  outputBytes?: number
+  monitoringError?: string
+  downloads?: { index: number; name: string; url: string; ready: boolean; streaming?: boolean }[]
   timings?: {
     firstReadyMs: number | null
     elapsedMs: number
@@ -62,36 +67,104 @@ export type DownloadJob = {
   files: DownloadFile[]
   archive: { name: string; bytes: number; url: string } | null
 }
-let token: Promise<string> | null = null
+const mainApi = '/api/downloader'
+const xhsApi = '/api/downloader-xhs-v2'
+const tokens = new Map<string, Promise<string>>()
+const sessionRoutes = new Map<string, string>()
+const jobRoutes = new Map<string, string>()
+function remember(routes: Map<string, string>, id: string, base: string) {
+  routes.set(id, base)
+  if (routes.size > 256) routes.delete(routes.keys().next().value!)
+}
+function shareApi(text: string) {
+  const links = text.replace(/\\\//g, '/').match(/https?:\/\/[^\s<>]+/g) || []
+  for (const link of links) {
+    try {
+      const host = new URL(link).hostname
+      if (
+        [
+          'xiaohongshu.com',
+          'www.xiaohongshu.com',
+          'xhslink.com',
+          'www.xhslink.com',
+          'xhslink.cn',
+          'www.xhslink.cn',
+        ].includes(host)
+      )
+        return xhsApi
+    } catch {
+      /* The server provides the full input validation message. */
+    }
+  }
+  return mainApi
+}
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, options)
   if (!response.headers.get('content-type')?.includes('application/json'))
     throw new Error('下载服务暂时不可用，请稍后重试。')
   const value = await response.json()
-  if (!response.ok) throw new Error(value.error || '操作失败，请重试。')
+  if (!response.ok)
+    throw Object.assign(new Error(value.error || '操作失败，请重试。'), {
+      status: response.status,
+      code: value.code,
+    })
   return value as T
 }
-export function prepareDownloaderSession(): Promise<string> {
-  token ??= request<{ token: string }>('/api/downloader/config')
+export function prepareDownloaderSession(base = mainApi): Promise<string> {
+  let token = tokens.get(base)
+  if (token) return token
+  token = request<{ token: string }>(base + '/config')
     .then((value) => value.token)
     .catch((error) => {
-      token = null
+      tokens.delete(base)
       throw error
     })
+  tokens.set(base, token)
   return token
 }
 export async function mediaPost<T>(path: string, value: unknown, signal?: AbortSignal): Promise<T> {
-  const csrf = await prepareDownloaderSession()
+  const payload = value as { text?: string; sessionId?: string }
+  const base =
+    path === 'resolve'
+      ? shareApi(payload.text || '')
+      : sessionRoutes.get(payload.sessionId || '') || jobRoutes.get(path.split('/')[1]) || mainApi
+  let csrf = await prepareDownloaderSession(base)
   signal?.throwIfAborted()
-  return request<T>('/api/downloader/' + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Downloader-Token': csrf },
-    body: JSON.stringify(value),
-    signal,
-  })
+  const send = () =>
+    request<T>(base + '/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Downloader-Token': csrf },
+      body: JSON.stringify(value),
+      signal,
+    })
+  let result: T
+  try {
+    result = await send()
+  } catch (error) {
+    // A fresh page can sit unused longer than its admission session. Only
+    // retry resolution rejected before authorization, never job mutations or
+    // a network-ambiguous operation that might already have been accepted.
+    const failure = error as { status?: number; code?: string }
+    if (
+      path !== 'resolve' ||
+      !(
+        failure.status === 401 ||
+        (failure.status === 403 && failure.code === 'SESSION_TOKEN_MISMATCH')
+      )
+    )
+      throw error
+    const cached = tokens.get(base)
+    if (cached && (await cached) === csrf && tokens.get(base) === cached) tokens.delete(base)
+    csrf = await prepareDownloaderSession(base)
+    signal?.throwIfAborted()
+    result = await send()
+  }
+  if (path === 'resolve') remember(sessionRoutes, (result as MediaResult).sessionId, base)
+  if (path === 'jobs') remember(jobRoutes, (result as DownloadJob).id, base)
+  return result
 }
 export const getDownloadJob = (id: string, signal?: AbortSignal) =>
-  request<DownloadJob>('/api/downloader/jobs/' + id, { signal })
+  request<DownloadJob>((jobRoutes.get(id) || mainApi) + '/jobs/' + id, { signal })
 export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`

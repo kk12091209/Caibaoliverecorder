@@ -12,11 +12,35 @@ class Response extends Writable {
   flushHeaders(){this.headersSent=true;}
   value(){return JSON.parse(Buffer.concat(this.chunks).toString());}
 }
-async function call(api,path,{method='GET',headers={},body}={}){
-  const req=Readable.from(body===undefined?[]:[Buffer.from(JSON.stringify(body))]);req.url='/api/downloader/'+path;req.method=method;req.headers={host:'caibao.media',...headers};req.socket={remoteAddress:'203.0.113.4'};
+async function call(api,path,{method='GET',headers={},body,base='/api/downloader'}={}){
+  const req=Readable.from(body===undefined?[]:[Buffer.from(JSON.stringify(body))]);req.url=base+'/'+path;req.method=method;req.headers={host:'caibao.media',...headers};req.socket={remoteAddress:'203.0.113.4'};
   const res=new Response();res.on('error',()=>{});await api.handler(req,res,()=>assert.fail('API route should be handled'));return {status:res.statusCode,headers:res.headers,error:res.errored,body:res.headers['content-type']?.includes('application/json')?res.value():Buffer.concat(res.chunks)};
 }
 const resolver={async resolve(){return {platform:'douyin',kind:'images',id:'123',title:'测试图片',author:'作者',url:'https://www.douyin.com/note/123',cover:'',avatar:'',assets:[{index:1,type:'image',title:'图片 1',width:100,height:100,urls:[],thumbnail:'https://p11-sign.douyinpic.com/fixture.webp'}]};}};
+test('a separate online XHS route retains file ranges and independent visitor ownership',async()=>{
+  const base='/api/downloader-xhs',bytes=Buffer.from('original-xhs-image');
+  const api=createDownloaderApi({resolver,apiBase:base,cookieName:'__Host-caibao-download-xhs',publicOrigins:['https://caibao.media'],jobOptions:{images:{download:async(_urls,{onProgress})=>{onProgress(bytes.length,bytes.length);return {data:bytes,extension:'jpg',type:'image/jpeg'};}}}});
+  const old=createDownloaderApi({resolver,publicOrigins:['https://caibao.media']});
+  try{
+    const previous=await call(old,'config'),current=await call(api,'config',{base});
+    const owner={cookie:current.headers['set-cookie'].split(';')[0],'x-downloader-token':current.body.token};
+    assert.match(current.headers['set-cookie'],/^__Host-caibao-download-xhs=/);
+    assert.equal((await call(api,'resolve',{base,method:'POST',headers:{cookie:previous.headers['set-cookie'].split(';')[0],'x-downloader-token':previous.body.token},body:{text:'x'}})).status,401);
+    const session=(await call(api,'resolve',{base,method:'POST',headers:owner,body:{text:'x'}})).body;
+    assert.ok(session.assets[0].thumbnail.startsWith(base+'/media/'));
+    const created=(await call(api,'jobs',{base,method:'POST',headers:owner,body:{sessionId:session.sessionId,indices:[1]}})).body;
+    assert.ok(created.downloadUrl.startsWith(base+'/jobs/'));
+    await api.idle();
+    const state=(await call(api,`jobs/${created.id}`,{base,headers:owner})).body;
+    assert.ok(state.files[0].url.startsWith(base+'/jobs/'));
+    const file=await call(api,`jobs/${created.id}/download`,{base,headers:{...owner,range:'bytes=2-6'}});
+    assert.equal(file.status,206);assert.deepEqual(file.body,bytes.subarray(2,7));
+    let forwarded=false;
+    const req=Readable.from([]);req.url='/api/downloader-xhs-evil/config';
+    await api.handler(req,new Response(),()=>{forwarded=true;});assert.equal(forwarded,true);
+  }finally{await api.close();await old.close();}
+  assert.throws(()=>createDownloaderApi({apiBase:'/api/../private'}));
+});
 test('ready album files retain owner authorization during processing and service drain',async()=>{
   let release;const blocked=new Promise(resolve=>{release=resolve;});
   const multiple={resolve:async()=>{const result=await resolver.resolve();result.assets=[1,2].map(index=>({...result.assets[0],index,urls:[String(index)]}));return result;}};
@@ -74,6 +98,18 @@ test('public visit expiry and request rate limits are enforced without affecting
   req.headers.cookie=res.headers['set-cookie'].split(';')[0];now+=7200001;assert.throws(()=>access.authorize(req,res),error=>error.status===401);
   const local=new DownloadAccess();assert.doesNotThrow(()=>local.authorize({method:'GET',headers:{host:'127.0.0.1:17970'}},res,{config:true}));
   assert.throws(()=>new DownloadAccess({publicOrigins:['http://caibao.media']}));
+});
+
+test('parallel release sessions keep independent secure cookies without overwriting the old visitor',()=>{
+  const old=new DownloadAccess({publicOrigins:['https://caibao.media']}),next=new DownloadAccess({publicOrigins:['https://caibao.media'],cookieName:'__Host-caibao-download-parts'});
+  const request={method:'GET',headers:{host:'caibao.media'},socket:{remoteAddress:'203.0.113.4'}},a=new Response(),b=new Response();
+  const previous=old.authorize(request,a,{config:true}),current=next.authorize(request,b,{config:true});
+  assert.match(a.headers['set-cookie'],/^__Host-caibao-download=/);
+  assert.match(b.headers['set-cookie'],/^__Host-caibao-download-parts=.*Secure; HttpOnly; SameSite=Strict$/);
+  request.headers.cookie=[a.headers['set-cookie'].split(';')[0],b.headers['set-cookie'].split(';')[0]].join('; ');
+  assert.equal(old.authorize(request,new Response()).id,previous.id);
+  assert.equal(next.authorize(request,new Response()).id,current.id);
+  assert.throws(()=>new DownloadAccess({cookieName:'other; Path=/'}));
 });
 
 test('native browser download waits for preparation, supports ranges and HEAD, and authorizes the owner before waiting',async()=>{

@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
-import {createApp} from '../server/index.js';
+import {createApp,fetch} from './helpers/authenticated-app.js';
 import {testProtection,biliFixture,biliReplacement,douyinFixture} from './credential-fixtures.js';
 test('local credential API never returns secrets, replaces Bilibili, removes Douyin support, survives restart and rejects cross-origin writes',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-api-')),protection=testProtection();

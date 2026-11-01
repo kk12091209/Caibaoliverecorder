@@ -29,6 +29,17 @@ test('FLV normalization changes timestamps only, preserving every compressed pac
  for(let i=0;i<before.length;i++){assert.deepEqual(before[i].tag.subarray(11),after[i].tag.subarray(11));}assert.equal(normalizer.duration,2);
  const bad=encoded();bad[24]=0x1c;assert.throws(()=>new DouyinFlv().feed(bad),/H.264/);
 });
+
+test('Douyin recorder logs safe connection diagnostics and first persistence without disrupting the active video',async t=>{
+ const f=await fixture(t),events=[];f.store.diagnostics={record:(...args)=>events.push(args)};
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.writes.length>0);
+ const notify=f.writes[0].callbacks.status;
+ notify('retry',{reason:'http',stage:'upgrade',code:403,elapsedMs:200,retryMs:3000,cookie:'private-cookie'});
+ assert.match(f.recorder.rooms[0].chatError,/重试/);assert.equal(f.recorder.rooms[0].recording,true);
+ notify('first-frame',{stage:'receive'});assert.equal(f.recorder.rooms[0].chatError,'');notify('first-write',{stage:'write'});
+ const lines=events.filter(([source])=>source==='抖音弹幕').map(([,line])=>line).join('\n');
+ assert.match(lines,/WebSocket 握手.*代码 403.*3\.0 秒后重试/);assert.match(lines,/首个有效数据包/);assert.match(lines,/写入原始记录/);assert.doesNotMatch(lines,/private-cookie/);
+});
 test('Douyin records in its own originals namespace, indexes continuous chunks and drains final chat on stop',async t=>{
  const f=await fixture(t);f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);
  const session=f.store.sessions()[0];assert.equal(session.room,0);await assert.rejects(f.store.deleteSession(session.id,true),/录制|结束/);
