@@ -9,6 +9,12 @@ import {createApp,fetch} from './helpers/authenticated-app.js';
 import { alive } from '../server/service-runtime.js';
 import { availableLocalPort,findOwnedCore,stopOwnedCore,browserAccessiblePort,listenLocal } from '../server/local-endpoint.js';
 
+async function coreFailureDetails(app){
+  await app.diagnostics.tick();
+  const log=await fs.readFile(path.join(app.root,'logs',app.diagnostics.day+'.txt'),'utf8');
+  return `${app.recorder.error}\n${log.slice(-16000)}`;
+}
+
 test('核心停止器拒绝不属于本份原件目录的 PID，不碰端口上的其他程序',async()=>{
   assert.equal(await stopOwnedCore({pid:0,executable:process.execPath,directory:os.tmpdir()}),false);
   assert.equal(await stopOwnedCore({pid:process.pid,executable:process.execPath,directory:path.join(os.tmpdir(),'not-current-process')}),false);
@@ -50,7 +56,7 @@ test('真实录制核心自动启动、编辑器重启复用，完整退出清�
     await app?.close();if(owned&&alive(owned.pid))await stopOwnedCore(owned);
     await fs.rm(root,{recursive:true,force:true});
   });
-  async function until(check,message){const end=Date.now()+35000;while(Date.now()<end){if(await check())return;await delay(50);}assert.fail(message);}
+  async function until(check,message){const end=Date.now()+35000;while(Date.now()<end){if(await check())return;await delay(50);}assert.fail(message+'\n'+await coreFailureDetails(app));}
   app=await createApp(options);await until(()=>app.recorder.online,'core did not become ready: '+app.recorder.error);
   owned=app.recorder.ownedEndpoint;assert.ok(owned.pid>0);assert.notEqual(app.port,owned.port);
   assert.deepEqual((await findOwnedCore(owned)).pid,owned.pid);
@@ -83,7 +89,7 @@ test('global:null 配置恢复后真实核心可连接，再次冷启动不重�
     app=await createApp(options);
     const deadline=Date.now()+20000;
     while(!app.recorder.online&&Date.now()<deadline)await delay(50);
-    assert.equal(app.recorder.online,true,app.recorder.error);
+    assert.equal(app.recorder.online,true,app.recorder.online?'':await coreFailureDetails(app));
     assert.deepEqual(await app.recorder.api('room'),[]);
     const current=await fs.readdir(path.join(root,'recovery'));
     if(attempt===0){
