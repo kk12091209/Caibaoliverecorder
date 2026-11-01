@@ -60,12 +60,21 @@ test('真实录制核心自动启动、编辑器重启复用，完整退出清�
   app=await createApp(options);await until(()=>app.recorder.online,'core did not become ready: '+app.recorder.error);
   owned=app.recorder.ownedEndpoint;assert.ok(owned.pid>0);assert.notEqual(app.port,owned.port);
   assert.deepEqual((await findOwnedCore(owned)).pid,owned.pid);
-  const config=await app.recorder.api('config/global');
-  assert.ok(JSON.stringify(config).includes('127.0.0.1:'+app.port));
+  async function assertWebhookConfiguration(){
+    // Public config intentionally omits token-bearing callback URLs. Verify
+    // the persisted fixture privately, including rebinding after UI restart.
+    const config=JSON.stringify(await app.recorder.api('config/global'));
+    assert.doesNotMatch(config,/webhookurls|optionalcookie/i);
+    const saved=await fs.readFile(path.join(app.recorder.directory,'config.json'),'utf8');
+    assert.ok(saved.includes('127.0.0.1:'+app.port));
+    assert.ok(saved.includes(app.recorder.webhookSecret));
+  }
+  await assertWebhookConfiguration();
   const oldPort=app.port;await app.close();assert.equal(alive(owned.pid),true);
   app=await createApp(options);await until(()=>app.recorder.online,'core reconnect failed');
   assert.equal(app.recorder.ownedEndpoint.pid,owned.pid);assert.equal(app.recorder.process,null);
   assert.notEqual(app.port,oldPort);
+  await assertWebhookConfiguration();
   const started=performance.now();
   const response=await fetch(app.runtime.origin+'/internal/desktop',{method:'POST',headers:{'X-Caibo-Instance':app.runtime.token,'Content-Type':'application/json'},body:JSON.stringify({action:'quit',confirmed:false})});
   assert.equal(response.status,200);const decision=await response.json();assert.equal(decision.quitAccepted,true);assert.equal(decision.requiresExitConfirmation,false);
