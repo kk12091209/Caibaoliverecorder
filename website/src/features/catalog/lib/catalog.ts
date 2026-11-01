@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { downloadUrl } from './download-url'
 import { works as definitions, type Work } from '../data/works'
 
 type ReleaseFile = {
@@ -16,7 +17,7 @@ type Release = {
   notes: string
   releaseUrl?: string
   files: ReleaseFile[]
-  sources?: { name: string; url: string }[]
+  sources?: { name: string; url: string; sha256?: string }[]
 }
 type Catalog = { schemaVersion: number; products: Record<string, Release> }
 type Snapshot = { works: Work[]; loading: boolean; error: boolean }
@@ -31,14 +32,6 @@ const subscribe = (listener: () => void) => {
   }
 }
 const getSnapshot = () => snapshot
-
-function safeUrl(value: string) {
-  const url = new URL(value)
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash)
-    throw new Error('下载地址无效')
-  if (url.hostname !== 'download.caibao.media') throw new Error('下载域名无效')
-  return url.href
-}
 
 function mergeCatalog(data: Catalog): Work[] {
   if (data.schemaVersion !== 1 || !data.products || typeof data.products !== 'object')
@@ -67,7 +60,7 @@ function mergeCatalog(data: Catalog): Work[] {
         throw new Error('安装包信息无效')
       return {
         ...file,
-        href: safeUrl(match.url),
+        href: downloadUrl(match.url, match.sha256),
         name: match.name,
         sha256: match.sha256,
         size: `${(match.size / 1024 / 1024).toFixed(1)} MB`,
@@ -88,7 +81,7 @@ function mergeCatalog(data: Catalog): Work[] {
       updates: typeof release.notes === 'string' ? release.notes.split('\n').filter(Boolean) : [],
       sources: (release.sources || []).map((source) => ({
         name: source.name,
-        url: safeUrl(source.url),
+        url: downloadUrl(source.url, source.sha256),
       })),
       releaseUrl: release.releaseUrl,
     }
