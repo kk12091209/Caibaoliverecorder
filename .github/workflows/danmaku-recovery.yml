@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.425
+      - name: Verify native private directory ACL
+        shell: pwsh
+        run: node live-editor/scripts/verify-windows-access.mjs
       - name: Build and test candidate core without packaging or release
         shell: pwsh
         run: |
