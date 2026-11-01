@@ -1,0 +1,17 @@
+name: Windows local access validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  access:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - name: Verify native private directory ACL
+        shell: pwsh
+        run: node live-editor/scripts/verify-windows-access.mjs
