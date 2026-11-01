@@ -187,7 +187,7 @@ async function verifyPublic(asset) {
   })
   if ([301, 302, 307, 308].includes(response.status)) {
     const location = response.headers.get('location')
-    const expected = `https://${process.env.COS_BUCKET}.cos.${process.env.COS_REGION || 'ap-singapore'}.myqcloud.com/${asset.key}`
+    const expected = `https://${process.env.COS_BUCKET}.cos.${process.env.COS_REGION || 'ap-singapore'}.myqcloud.com/${asset.key}${new URL(asset.url).search}`
     if (location !== expected) throw new Error(`下载跳转目标不正确：${asset.name}`)
     response = await fetchWithRetry(location, {
       method: 'HEAD',
@@ -195,7 +195,7 @@ async function verifyPublic(asset) {
       timeoutMs: 30000,
     })
   }
-  if (!response.ok || Number(response.headers.get('content-length')) !== asset.size)
+  if (!response.ok || Number(response.headers.get('content-length')) !== asset.size || response.headers.get('x-cos-meta-sha256') !== asset.sha256)
     throw new Error(`公开下载地址尚不可用：${asset.name}`)
 }
 

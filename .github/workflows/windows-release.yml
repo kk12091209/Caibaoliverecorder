@@ -38,6 +38,22 @@ jobs:
         run: |
           $version = (Get-Content live-editor/package.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Prepare native desktop regression probes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm install --prefix .tools/ui-probe --no-audit --no-fund playwright-core@1.64.1
+          if ($LASTEXITCODE -ne 0) { throw 'Renderer probe restore failed' }
+          "CAIBO_PLAYWRIGHT_MODULE=$((Resolve-Path .tools/ui-probe/node_modules/playwright-core/index.mjs).Path)" >> $env:GITHUB_ENV
+          $release=Invoke-RestMethod -Uri 'https://api.github.com/repos/kk12091209/Caibaoliverecorder/releases/latest' -Headers @{Authorization="Bearer $env:GH_TOKEN"}
+          $asset=@($release.assets | Where-Object {$_.name -match '^BiliLiveEditor-[0-9.]+-win-x64.zip$'})
+          if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Previous package is not verified' }
+          node live-editor/scripts/fetch-tool.mjs $asset[0].browser_download_url .tools/ui-previous.zip $Matches[1]
+          if ($LASTEXITCODE -ne 0) { throw 'Previous package download failed' }
+          Expand-Archive .tools/ui-previous.zip .tools/ui-previous
+          $desktop=Get-ChildItem .tools/ui-previous -Recurse -Filter '录播机.exe' | Select-Object -First 1
+          "CAIBO_PREVIOUS_DESKTOP=$($desktop.FullName)" >> $env:GITHUB_ENV
       - name: Build, test and package Windows application
         shell: pwsh
         run: ./live-editor/scripts/build-windows-ci.ps1
@@ -63,6 +79,8 @@ jobs:
             .tools/windows-release-qa/**/verification.json
             .tools/release-qa/**/verification.json
             .tools/release-qa/**/*.log
+            .tools/windows-release-qa/ui/**
+            .tools/release-qa/**/ui/**
           if-no-files-found: ignore
           retention-days: 14
   publish-draft:
@@ -95,7 +113,7 @@ jobs:
           data = json.loads((root/'windows-build.json').read_text(encoding='utf-8-sig'))
           assert data['sourceRevision'] == os.environ['GITHUB_SHA']
           assert data['version'] == os.environ['RELEASE_VERSION']
-          for name in ('nodeTests', 'coreTests', 'coreLifecycle', 'portableZip', 'portable7z', 'installerUpgradeUninstall'):
+          for name in ('nodeTests', 'coreTests', 'coreLifecycle', 'portableZip', 'portable7z', 'installerUpgradeUninstall', 'nativeDesktopUI'):
               assert data[name] == 'passed', name
           listed = set()
           for line in (root/'SHA256SUMS.txt').read_text().splitlines():

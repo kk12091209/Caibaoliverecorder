@@ -126,3 +126,18 @@ test('所有文件先完成上传，公开下载失败仍保留旧版本', async
   assert.deepEqual(success, ['upload:win', 'upload:mac', 'public:win', 'public:mac']);
   assert.equal(visible, current.publicRelease);
 });
+
+
+test('经人工核验的同版本下载缓存标识保持稳定，不能带入外站或旧哈希', () => {
+  const old = plan().publicRelease;
+  const canonical = old.files[0].url;
+  old.files[0].url = `${canonical}?sha256=${hash}`;
+  assert.equal(plan(release(), old).publicRelease.files[0].url, old.files[0].url);
+  for (const unsafe of [`https://other.test/file?sha256=${hash}`, `${canonical}?sha256=${'0'.repeat(64)}`, `${canonical}?sha256=${hash}&extra=1`]) {
+    old.files[0].url = unsafe;
+    assert.equal(plan(release(), old).publicRelease.files[0].url, canonical);
+  }
+  old.files[0].url = `${canonical}?sha256=${hash}`;
+  const changed = release(); changed.assets[0].digest = `sha256:${'a'.repeat(64)}`;
+  assert.throws(() => plan(changed, old), /发生变化/);
+});

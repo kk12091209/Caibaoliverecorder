@@ -79,13 +79,22 @@ export function planRelease(product, release, baseUrl, previous) {
       throw new Error(`文件尚未就绪：${name}`)
     if (!/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) throw new Error(`缺少 SHA-256：${name}`)
     const key = `${product.slug}/${version}/${name}`
+    const canonicalUrl = new URL(key, base).href
+    // An operator may republish a verified same-version package. Preserve only
+    // its exact content-keyed URL so a later sync cannot revive cached bytes.
+    const prior = previous?.version === `v${version}`
+      ? [...(previous.files || []), ...(previous.sources || []), previous.desktopUpdate].find(item => item?.id === spec.id)
+      : null
+    const contentUrl = `${canonicalUrl}?sha256=${asset.digest.slice(7)}`
+    const url = prior?.sha256 === asset.digest.slice(7) && prior?.size === asset.size && prior?.url === contentUrl
+      ? contentUrl : canonicalUrl
     return {
       id: spec.id,
       ...(spec.platform ? { platform: spec.platform, arch: spec.arch } : {}),
       name,
       size: asset.size,
       sha256: asset.digest.slice(7),
-      url: new URL(key, base).href,
+      url,
       key,
       assetId: asset.id,
     }
