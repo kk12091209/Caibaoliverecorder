@@ -18,7 +18,9 @@ export async function protectDataDirectory(root){
   if(process.platform!=='win32'){await fs.chmod(root,0o700);return;}
   // Protect the parent before writing any descriptor. Newly created files
   // inherit only the current Windows account and SYSTEM, including on portable installs.
-  const script="$ErrorActionPreference='Stop'; $p=$env:CAIBAO_PRIVATE_ROOT; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=New-Object System.Security.AccessControl.DirectorySecurity; $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($id in @($sid,(New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'))){$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule)}; Set-Acl -LiteralPath $p -AclObject $acl";
+  // Call .NET directly: inherited PowerShell 7 module paths can prevent the
+  // Windows PowerShell Security module (Set-Acl) from loading.
+  const script="$ErrorActionPreference='Stop'; $p=$env:CAIBAO_PRIVATE_ROOT; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=New-Object System.Security.AccessControl.DirectorySecurity; $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($id in @($sid,(New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'))){$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule)}; [System.IO.Directory]::SetAccessControl($p,$acl)";
   try{await execute('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{env:{...process.env,CAIBAO_PRIVATE_ROOT:root},timeout:10000,windowsHide:true,maxBuffer:32768});}
   catch{throw Error('无法保护本地数据目录的访问权限，请将软件移至当前用户的目录后重试。');}
 }
