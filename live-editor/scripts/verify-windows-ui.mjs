@@ -39,7 +39,7 @@ try{
  page.on('framenavigated',f=>{if(f===page.mainFrame())record('navigation',{url:safeUrl(f.url())});});
  try{
   await page.getByRole('button',{name:'设置',exact:true}).waitFor({state:'visible',timeout:35000});
-  if(!await page.getByLabel('主播直播间或抖音名片分享内容').isVisible())await page.getByRole('button',{name:'素材',exact:true}).click();
+  if(!await page.getByLabel('主播直播间或抖音名片分享内容').isVisible())await page.getByRole('button',{name:'切换素材栏',exact:true}).click();
   await page.getByLabel('主播直播间或抖音名片分享内容').waitFor({state:'visible',timeout:5000});
   const status=await page.evaluate(async()=>({status:(await fetch('/api/state')).status,text:document.body.innerText.slice(0,800)}));
   assert.equal(status.status,200);assert.match(status.text,/监控主播/);assert.deepEqual(failures,[]);
@@ -65,6 +65,7 @@ try{
  throw error;
 }finally{
  await request({action:'quit',confirmed:true});
+ for(let n=0;child&&child.exitCode===null&&n<50;n++)await delay(100);
  // Stop only the executable in this disposable fixture; never a name-wide kill.
  try{await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -in @($env:CAIBO_QA_EXE,$env:CAIBO_QA_NODE)} | ForEach-Object {Stop-Process -Id $_.ProcessId -Force}"],{env:{...process.env,CAIBO_QA_EXE:exe,CAIBO_QA_NODE:path.join(root,'程序组件','runtime','node','node.exe')},timeout:10000});}catch{}
  try{await browser?.close();}catch{}
