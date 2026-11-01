@@ -195,7 +195,11 @@ async function verifyPublic(asset) {
       timeoutMs: 30000,
     })
   }
-  if (!response.ok || Number(response.headers.get('content-length')) !== asset.size || response.headers.get('x-cos-meta-sha256') !== asset.sha256)
+  if (
+    !response.ok ||
+    Number(response.headers.get('content-length')) !== asset.size ||
+    response.headers.get('x-cos-meta-sha256') !== asset.sha256
+  )
     throw new Error(`公开下载地址尚不可用：${asset.name}`)
 }
 

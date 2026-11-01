@@ -82,12 +82,19 @@ export function planRelease(product, release, baseUrl, previous) {
     const canonicalUrl = new URL(key, base).href
     // An operator may republish a verified same-version package. Preserve only
     // its exact content-keyed URL so a later sync cannot revive cached bytes.
-    const prior = previous?.version === `v${version}`
-      ? [...(previous.files || []), ...(previous.sources || []), previous.desktopUpdate].find(item => item?.id === spec.id)
-      : null
+    const prior =
+      previous?.version === `v${version}`
+        ? [...(previous.files || []), ...(previous.sources || []), previous.desktopUpdate].find(
+            (item) => item?.id === spec.id,
+          )
+        : null
     const contentUrl = `${canonicalUrl}?sha256=${asset.digest.slice(7)}`
-    const url = prior?.sha256 === asset.digest.slice(7) && prior?.size === asset.size && prior?.url === contentUrl
-      ? contentUrl : canonicalUrl
+    const url =
+      prior?.sha256 === asset.digest.slice(7) &&
+      prior?.size === asset.size &&
+      prior?.url === contentUrl
+        ? contentUrl
+        : canonicalUrl
     return {
       id: spec.id,
       ...(spec.platform ? { platform: spec.platform, arch: spec.arch } : {}),
