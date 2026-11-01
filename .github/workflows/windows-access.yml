@@ -15,7 +15,10 @@ jobs:
       - name: Verify native private directory ACL
         shell: pwsh
         run: node live-editor/scripts/verify-windows-access.mjs
-      - name: Test published Windows desktop and renderer
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.425
+      - name: Test repaired Windows desktop and renderer
         shell: pwsh
         run: |
           node live-editor/scripts/fetch-tool.mjs 'https://github.com/kk12091209/Caibaoliverecorder/releases/download/v0.3.6/BiliLiveEditor-0.3.6-win-x64.zip' .tools/ui-original.zip 9368a362d462180293cd46e5bedae949cdd443bb499a15f210cd3c0d0db5f4ab
@@ -25,6 +28,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Renderer probe restore failed' }
           $env:CAIBO_PLAYWRIGHT_MODULE=(Resolve-Path .tools/ui-probe/node_modules/playwright-core/index.mjs).Path
           $desktop=Get-ChildItem .tools/ui-original -Recurse -Filter '录播机.exe' | Select-Object -First 1
+          & ./live-editor/desktop/build.ps1 -OutputDirectory $desktop.Directory.FullName
           node live-editor/scripts/verify-windows-ui.mjs $desktop.Directory.FullName .tools/ui-results
           if ($LASTEXITCODE -ne 0) { throw 'Actual desktop rendering failed' }
       - uses: actions/upload-artifact@v4

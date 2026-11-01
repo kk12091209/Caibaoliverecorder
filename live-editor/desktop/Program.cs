@@ -136,6 +136,7 @@ internal sealed class MainWindow : Form
         FormClosing += async (_, e) => { if (closing) return; e.Cancel = true; var external = e.CloseReason != CloseReason.UserClosing; await RequestCloseAsync(external, external); };
         FormClosed += (_, _) => { Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerChanged; ProtectSleep(false); health.Stop(); health.Dispose(); tray.Visible = false; tray.Dispose(); backend.Dispose(); };
         Controls.Add(web); Controls.Add(splash);
+        splash.BringToFront();
         health.Start();
         Shown += async (_, _) => await InitializeAsync();
     }
@@ -185,7 +186,13 @@ internal sealed class MainWindow : Form
                 })();");
             web.CoreWebView2.NavigationCompleted += (_, e) =>
             {
-                if (!e.IsSuccess && !closing) _ = RecoverInterfaceAsync();
+                // WebView2 completes the initial unauthenticated navigation
+                // with 401 before retrying through BasicAuthenticationRequested.
+                // Do not destroy that successful authentication retry. A real
+                // failure still has the existing bounded page-ready deadline.
+                if (!e.IsSuccess && !closing && e.HttpStatusCode != 401 &&
+                    e.WebErrorStatus != CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired)
+                    _ = RecoverInterfaceAsync();
             };
             ready = true;
             if (recoveryAttempts >= 3) { splash.Text = "自动恢复连续失败，已暂停重试。\n原有录像和设置会保留，请稍后重新打开软件。"; return; }

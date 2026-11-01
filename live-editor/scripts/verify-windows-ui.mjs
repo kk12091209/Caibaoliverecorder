@@ -60,7 +60,7 @@ try{
 }finally{
  await request({action:'quit',confirmed:true});
  // Stop only the executable in this disposable fixture; never a name-wide kill.
- try{await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process -Filter \"Name = '录播机.exe'\" | Where-Object {$_.ExecutablePath -eq $env:CAIBO_QA_EXE} | ForEach-Object {Stop-Process -Id $_.ProcessId -Force}"],{env:{...process.env,CAIBO_QA_EXE:exe},timeout:10000});}catch{}
+ try{await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -in @($env:CAIBO_QA_EXE,$env:CAIBO_QA_NODE)} | ForEach-Object {Stop-Process -Id $_.ProcessId -Force}"],{env:{...process.env,CAIBO_QA_EXE:exe,CAIBO_QA_NODE:path.join(root,'程序组件','runtime','node','node.exe')},timeout:10000});}catch{}
  try{await browser?.close();}catch{}
  try{const logs=await fs.readdir(path.join(data,'logs'));for(const name of logs)if(/\.txt$/.test(name))await fs.copyFile(path.join(data,'logs',name),path.join(out,name));}catch{}
  await fs.writeFile(path.join(out,'events.json'),JSON.stringify(events,null,2));
