@@ -44,10 +44,13 @@ namespace BililiveRecorder.Cli
     {
         private static int Main(string[] args)
         {
-            // The desktop reads redirected core output as UTF-8. A Windows
-            // console code page otherwise corrupts Chinese diagnostics.
-            if (Console.IsOutputRedirected || Console.IsErrorRedirected)
-                Console.OutputEncoding = new UTF8Encoding(false);
+            // The desktop reads the pipes as UTF-8. Detached Windows cores
+            // have no console, so changing its code page can throw before
+            // startup. Encode redirected streams without touching the console.
+            if (Console.IsOutputRedirected)
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true });
+            if (Console.IsErrorRedirected)
+                Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true });
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BREC_SKIP_DISABLE_QUICK_EDIT")))
