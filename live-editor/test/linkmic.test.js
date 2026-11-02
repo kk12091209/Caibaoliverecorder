@@ -9,6 +9,7 @@ import { linkmicSei, parsePlatformJson } from '../server/linkmic-sei.js';
 import { labelGeometry, labelsAt, participantName } from '../shared/linkmic-labels.js';
 import { FLV_HEADER } from '../server/ingest.js';
 import { DouyinResolver } from '../server/douyin-room.js';
+import { seiTag } from './helpers/linkmic-sei.js';
 
 // Shapes captured from the two supplied public streams on 2026-10-20;
 // identifiers and names are replaced. No stream URL, visitor token or profile.
@@ -19,20 +20,11 @@ const bili=()=>({LIVE_MULTI_VIDEO_LINK:{session_status:1,sei_room_status:1,
 const douyin=()=>({app_data:JSON.stringify({vendor:'BYTE',canvas:{width:1080,height:780},channel_id:'7698675449551328282',ver:2,
   grids:[{uid_str:'1_remote',x:.5,y:0,w:.5,h:1}],anchor_interact_info:{layout_type:0,focus_id:'1_owner'}}),
   live_crop:{crop_x:0,crop_y:360,crop_w:1080,crop_h:780,stride_w:1080,stride_h:1920}});
-// Captured audience protocol: order differs from seats; -1 is the host,
+// Captured audience protocol: order differs from seats; -1 is the main picture,
 // 0 is the bottom video guest and 1 is the voice guest immediately above.
 const audience=(overrides={})=>({app_data:JSON.stringify({ver:15,ui_layout:7,interactive_scene:8,hide_micseat:0,
   channel_id:'998',canvas:{width:360,height:640},grids:[
     {p:-1,type:1,uid_str:'1_owner'},{p:1,type:2,uid_str:'2_voice'},{p:0,type:1,uid_str:'3_video'}],...overrides})});
-function seiTag(value,type=5,time=0,lengthSize=4,suffix='') {
-  const payload=Buffer.from((type===5?'LIVE_SEI_CHANNEL':'')+JSON.stringify(value)+suffix),size=[];
-  for(let n=payload.length;n>=255;n-=255)size.push(255);size.push(payload.length%255);
-  const raw=Buffer.concat([Buffer.from([type,...size]),payload,Buffer.from([128])]),escaped=[];
-  for(let i=0;i<raw.length;i++){if(i>=2&&raw[i]<=3&&raw[i-1]===0&&raw[i-2]===0)escaped.push(3);escaped.push(raw[i]);}
-  const nalu=Buffer.concat([Buffer.from([6]),Buffer.from(escaped)]),length=Buffer.alloc(lengthSize);length.writeUIntBE(nalu.length,0,lengthSize);
-  const body=Buffer.concat([Buffer.from([0x27,1,0,0,0]),length,nalu]),tag=Buffer.alloc(body.length+15);
-  tag[0]=9;tag.writeUIntBE(body.length,1,3);tag.writeUIntBE(time*1000,4,3);body.copy(tag,11);tag.writeUInt32BE(tag.length-4,tag.length-4);return tag;
-}
 test('Bilibili matches members to explicit cells, not array order; no guessed placement',()=>{
   const result=linkmicSei(seiTag(bili()))[0];
   assert.deepEqual(result.participants.find(p=>p.id==='103'),{x:.5,y:.5,w:.5,h:.5,id:'103',name:'嘉宾乙'});
@@ -95,7 +87,7 @@ test('previously scanned NUL-terminated sources are reindexed and retain resolve
 test('audience floating seats match native bottom-up positions and preserve host and guest IDs',()=>{
   const people=linkmicSei(seiTag(audience(),100))[0].participants;
   assert.equal(people.length,3);
-  assert.deepEqual(people[0],{x:0,y:0,w:1,h:1,linkId:'1_owner',main:true,ownerFallback:true});
+  assert.deepEqual(people[0],{x:0,y:0,w:1,h:1,linkId:'1_owner',main:true});
   const voice=people.find(p=>p.linkId==='2_voice'),video=people.find(p=>p.linkId==='3_video');
   assert.equal(voice.audioOnly,true);assert.equal(video.audioOnly,undefined);
   const cameraOn=linkmicSei(seiTag(audience({grids:[{p:1,type:1,uid_str:'2_voice'}]}),100))[0].participants.find(p=>p.linkId==='2_voice');
@@ -135,6 +127,52 @@ test('Douyin focused large picture follows exact identity and host labels use th
   assert.equal(at(5.5).find(p=>p.main).id,'103','focus is matched by ID rather than array order');
   const g=labelGeometry(at(5.5).find(p=>p.main),640,360);assert.equal(g.align,'left');assert.ok(g.x<10&&g.y>350);
   const ass=linkmicAss(events,640,360);assert.match(ass,/\\an1\\pos/);assert.match(ass,/大屏嘉宾/);
+});
+// Public portrait stream captured on 2026-11-02: p=6 is the enlarged guest,
+// while the host occupies p=2. Roster/list order is deliberately different.
+test('portrait p=6 main follows guest swaps and return to host; v6 cached host labels are replaced',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-main-seat-')),store=new Store(root);
+  const index=new LinkmicIndex(store);t.after(async()=>{await index.close();store.close();await fs.rm(root,{recursive:true,force:true});});
+  const session=store.createSession({status:'finished'}),file=path.join(root,'sample.flv');
+  const scene=main=>audience({style:4,sub_scene:8,grids:[
+    {p:2,type:1,uid_str:'1_owner'},{p:1,type:2,uid_str:'2_voice'},
+    {p:6,type:1,uid_str:main},{p:0,type:2,uid_str:'4_voice'}]});
+  const samples=[scene('3_video'),scene('5_guest'),scene('unknown_guest'),
+    audience({grids:[{p:6,type:1,uid_str:'1_owner'},{p:0,type:1,uid_str:'3_video'}]}),audience({grids:[]})];
+  const bytes=Buffer.concat([FLV_HEADER,...samples.map((value,i)=>seiTag(value,100,i+1,4,'\0'))]);
+  await fs.writeFile(file,bytes);const source=store.addSource(session.id,file);
+  store.run('UPDATE sources SET duration=8,closed=2 WHERE id=?',source.id);
+  store.setting('linkmic-owner:'+source.id,{id:'101',name:'本房主播',roomId:'998'});
+  for(const [linkId,id,name]of [['5_guest','105','另一位嘉宾'],['1_owner','101','本房主播'],['3_video','103','大屏嘉宾']])
+    store.run('INSERT INTO linkmic_people(source,channel,link_id,id,name) VALUES(?,?,?,?,?)',source.id,'998',linkId,id,name);
+  store.setting('linkmic-index:'+source.id,{version:6,pos:bytes.length,seq:0,lengthSize:4,mode:'original',complete:true});
+  store.run('INSERT INTO linkmic_frames VALUES(?,?,?,?)',source.id,1,8,JSON.stringify({platform:'douyin',channel:'998',participants:[{x:0,y:0,w:1,h:1,linkId:'',owner:true,main:true}]}));
+  await index.ensure(session.id);const events=index.events(session.id),at=time=>labelsAt(events,time);
+  for(const [time,name]of [[1.5,'大屏嘉宾'],[2,'另一位嘉宾'],[4,'本房主播']]){
+    const main=at(time).filter(p=>p.main);assert.equal(main.length,1);assert.equal(main[0].name,name);
+    assert.equal(main[0].labelAlign,'left');assert.deepEqual([main[0].x,main[0].y,main[0].w,main[0].h],[0,0,1,1]);
+  }
+  assert.equal(at(1.5).filter(p=>p.name==='本房主播').length,1,'host appears only in its actual small seat');
+  assert.equal(at(1.5).find(p=>p.owner).main,undefined);
+  assert.equal(participantName(at(3).find(p=>p.main)),'连麦 unknown_guest');
+  assert.equal(at(3).find(p=>p.main).owner,undefined);
+  assert.deepEqual(at(5),[],'leaving linkmic clears all names at the event boundary');
+  assert.doesNotMatch(linkmicAss(events,360,640,{from:1,to:2}),/另一位嘉宾/);
+  assert.match(linkmicAss(events,360,640,{from:2,to:3}),/另一位嘉宾/);
+  assert.doesNotMatch(linkmicAss(events,360,640,{from:2,to:3}),/大屏嘉宾/);
+});
+test('invalid or conflicting main seats never manufacture a host label',()=>{
+  const host={p:2,type:1,uid_str:'1_owner'},main={p:6,type:1,uid_str:'3_video'};
+  for(const grids of [
+    [host,{...main,visible:0}],[host,{...main,uid_str:''}],[host,main,{...main,uid_str:'5_guest'}],
+    [host,main,{p:-1,type:1,uid_str:'5_guest'}],[host,{...main,p:7}],
+    [host,main,{p:0,type:1,uid_str:'3_video'}],
+  ]){
+    const people=linkmicSei(seiTag(audience({grids}),100))[0].participants;
+    assert.equal(people.filter(p=>p.main||p.owner).length,0,'invalid explicit main cannot fall back to the local anchor');
+  }
+  const focused=linkmicSei(seiTag(audience({anchor_interact_info:{layout_type:1,focus_id:'5_guest'},grids:[host,main]}),100))[0].participants;
+  assert.equal(focused.some(p=>p.main),false,'conflicting focus and main-seat IDs are ambiguous');
 });
 test('geometry fits portrait and landscape letterboxing, bounds long names and escapes ASS tags',()=>{
   const p={x:.5,y:.1875,w:.5,h:.40625,name:'嘉宾{\\pos(0,0)}'.repeat(20)};
@@ -210,7 +248,7 @@ test('audience roster uses its own endpoint and matches by link ID rather than l
   t.after(async()=>{await index.close();store.close();await fs.rm(root,{recursive:true,force:true});});
   await index.ensure(session.id);await Promise.all(index.refreshes.values());
   const labels=labelsAt(index.events(session.id),2).map(participantName);
-  assert.deepEqual(labels,['当前主播','ID 102','视频用户']);
+  assert.deepEqual(labels,['连麦 1_owner','ID 102','视频用户'],'an unresolved explicit main ID must not inherit the host identity');
   assert.equal(new URL(requests[0]).pathname,'/webcast/linkmic_audience/list/v2/');
   assert.equal(new URL(requests[0]).searchParams.get('anchor_id'),'101');
   assert.deepEqual(captures,[[source.id,'998','2_voice','https://p3.douyinpic.com/avatar.jpeg']],'only the matched voice guest is fetched; download failure preserves names and video');

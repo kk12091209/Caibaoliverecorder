@@ -5,7 +5,7 @@ import { cameraLayout } from '../shared/recording-style.js';
 import { labelGeometry } from '../shared/linkmic-labels.js';
 import { LinkmicAvatars } from './linkmic-avatars.js';
 
-const VERSION=6,TTL=6,CAMERA_TTL=10;
+const VERSION=7,TTL=6,CAMERA_TTL=10;
 const stamp=tag=>(tag.readUIntBE(4,3)+tag[7]*16777216)/1000;
 
 // Both timelines coalesce repeated SEI frames, but keep separate expiry windows
@@ -142,7 +142,7 @@ export class LinkmicIndex {
       const source=sources.get(row.source),frame=JSON.parse(row.data),owner=this.store.setting('linkmic-owner:'+row.source);
       const participants=frame.participants.map(person=>{
         const found=people.get(row.source+':'+frame.channel+':'+person.linkId);
-        const identity=person.owner&&owner?{id:owner.id,name:owner.name}:found?{id:found.id,name:found.name,...(found.avatar?{avatar:found.avatar,avatarUrl:`/api/sessions/${id}/linkmic-avatars/${row.source}/${found.avatar}.png`}:{})}:person.ownerFallback&&owner?{id:owner.id,name:owner.name}:{};
+        const identity=person.owner&&owner?{id:owner.id,name:owner.name}:found?{id:found.id,name:found.name,...(found.avatar?{avatar:found.avatar,avatarUrl:`/api/sessions/${id}/linkmic-avatars/${row.source}/${found.avatar}.png`}:{})}:{};
         const isOwner=frame.platform==='douyin'&&owner?.id&&identity.id===owner.id;
         return {...person,...identity,...(isOwner?{owner:true,name:owner.name||identity.name}:{}),...(frame.platform==='douyin'&&(person.main||person.owner||isOwner)?{labelAlign:'left'}:{})};
       });

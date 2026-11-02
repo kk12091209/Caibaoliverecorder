@@ -46,20 +46,25 @@ function audienceFrame(app) {
     !Array.isArray(app.grids)||app.grids.length>7)return empty;
   const bottom=.149*canvas.width/canvas.height,height=.13*(1-bottom),participants=[];
   const focus=app.anchor_interact_info?.layout_type?identifier(app.anchor_interact_info.focus_id):'';
+  // Both -1 (legacy) and 6 (promoted audience member) describe the full
+  // picture. Count raw declarations so a hidden/invalid main cannot silently
+  // turn into an inferred host, or two conflicting mains overlap each other.
+  const mainSeats=app.grids.filter(grid=>grid?.p===-1||grid?.p===6);
   for(const grid of app.grids) {
-    const linkId=identifier(grid?.uid_str)||identifier(grid?.uid),seat=grid?.p;
-    if(!linkId||!Number.isInteger(seat)||seat< -1||seat>5||grid.visible===0||
+    const linkId=identifier(grid?.uid_str)||identifier(grid?.uid),seat=grid?.p,main=seat===-1||seat===6;
+    if(!linkId||!Number.isInteger(seat)||seat< -1||seat>6||grid.visible===0||
+      main&&(mainSeats.length!==1||focus&&focus!==linkId)||
       app.grids.filter(other=>other?.p===seat).length!==1||
       app.grids.filter(other=>(identifier(other?.uid_str)||identifier(other?.uid))===linkId).length!==1)continue;
-    const rect=seat===-1?{x:0,y:0,w:1,h:1}:{x:.761,y:1-bottom-(seat+1)*height,w:.205,h:height};
-    // -1 identifies the main picture, not a permanent user identity. A guest
-    // promoted to this seat must be resolved through the exact roster ID.
-    if(validRect(rect))participants.push({...rect,linkId,...(seat===-1?{main:true,...(!focus?{ownerFallback:true}:{})}:grid.type===2?{audioOnly:true}:{})});
+    const rect=main?{x:0,y:0,w:1,h:1}:{x:.761,y:1-bottom-(seat+1)*height,w:.205,h:height};
+    // Resolve every explicit main through its exact roster ID. Neither seat
+    // number nor the monitored user identifies the current enlarged person.
+    if(validRect(rect))participants.push({...rect,linkId,...(main?{main:true}:grid.type===2?{audioOnly:true}:{})});
   }
   // In this verified floating-seat layout the background is the room anchor
   // when no main seat or explicit focus is supplied. Never infer a host over
   // an explicitly identified main picture.
-  if(participants.length&&!participants.some(p=>p.main)&&!focus)
+  if(participants.length&&!focus&&app.grids.every(grid=>Number.isInteger(grid?.p)&&grid.p>=0&&grid.p<=5))
     participants.unshift({x:0,y:0,w:1,h:1,linkId:'',owner:true,main:true});
   return {...empty,participants};
 }

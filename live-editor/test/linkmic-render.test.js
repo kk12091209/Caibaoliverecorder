@@ -11,6 +11,9 @@ import { softwareEncoder } from '../server/export-encoding.js';
 import { clipFile } from '../server/output-names.js';
 import { normalizeAvatar } from '../server/linkmic-avatars.js';
 import { createHash } from 'node:crypto';
+import { LinkmicIndex } from '../server/linkmic.js';
+import { labelsAt } from '../shared/linkmic-labels.js';
+import { seiTag } from './helpers/linkmic-sei.js';
 
 const ffmpeg=process.env.FFMPEG_PATH||'ffmpeg',ffprobe=process.env.FFPROBE_PATH||'ffprobe';
 test('Douyin main picture and local anchor use bottom-left names through switches, clean, danmaku and prepared dual exports',async t=>{
@@ -104,4 +107,55 @@ test('offline voice avatars follow seat changes and camera state in clean, danma
   const job={id:'prepared-avatar',session:session.id,scope:'clips',ranges:[{start:.1,end:3.8}],excluded:[],mode:'dual',linkmicEvents:events,outputRoot:path.join(root,'exports')};
   job.output=await media.reserveOutput(job,store.session(session.id),store.sources(session.id));
   const output=await media.renderer.exportJob(job,softwareEncoder());check(output,.1);check(clipFile(output,'danmaku'),.1);
+});
+
+// Exercise actual SEI -> persisted index -> preview events -> encoded pixels,
+// including the newly observed p=6 layout, rather than supplying labels by hand.
+test('portrait promoted-main SEI drives the same changing names in preview and real exports',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-promoted-render-')),file=path.join(root,'source.flv');
+  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=black:size=360x640:rate=30','-t','5','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-g','30','-bf','0','-f','flv',file]);
+  const scene=grids=>({app_data:JSON.stringify({ver:15,ui_layout:7,interactive_scene:8,hide_micseat:0,style:4,sub_scene:8,
+    channel_id:'998',canvas:{width:360,height:640},grids})});
+  const changes=[
+    [1,scene([{p:2,type:1,uid_str:'host'},{p:6,type:1,uid_str:'guest_a'}])],
+    [2,scene([{p:6,type:1,uid_str:'guest_b'},{p:2,type:1,uid_str:'host'}])],
+    [3,scene([{p:0,type:1,uid_str:'guest_a'},{p:6,type:1,uid_str:'host'}])],
+    [4,scene([])]
+  ];
+  const original=await fs.readFile(file),parts=[original.subarray(0,13)];let next=0;
+  for(let offset=13;offset+15<=original.length;){
+    const length=original.readUIntBE(offset+1,3)+15;let tag=original.subarray(offset,offset+length);offset+=length;
+    const time=(tag.readUIntBE(4,3)+tag[7]*16777216)/1000;
+    if(tag[0]===9&&tag[12]===1&&next<changes.length&&time>=changes[next][0]){
+      const payload=seiTag(changes[next++][1],100,0,4,'\0').subarray(16,-4);
+      tag=Buffer.concat([tag.subarray(0,16),payload,tag.subarray(16)]);
+      tag.writeUIntBE(tag.length-15,1,3);tag.writeUInt32BE(tag.length-4,tag.length-4);
+    }
+    parts.push(tag);
+  }
+  assert.equal(next,4);await fs.writeFile(file,Buffer.concat(parts));
+  const store=new Store(path.join(root,'data')),session=store.createSession({status:'finished'}),source=store.addSource(session.id,file,0,undefined,true);
+  const ingest=new Ingestor(store);for(let i=0;i<4;i++)await ingest.tick();
+  store.setting('linkmic-owner:'+source.id,{id:'101',name:'HOST',roomId:'998'});
+  for(const [linkId,id,name]of [['guest_b','103','SECOND GUEST'],['host','101','HOST'],['guest_a','102','GUEST A']])
+    store.run('INSERT INTO linkmic_people(source,channel,link_id,id,name) VALUES(?,?,?,?,?)',source.id,'998',linkId,id,name);
+  const index=new LinkmicIndex(store);await index.ensure(session.id);const events=index.events(session.id);
+  assert.deepEqual([1.5,2.5,3.5].map(time=>labelsAt(events,time).find(p=>p.main)?.name),['GUEST A','SECOND GUEST','HOST']);
+  assert.deepEqual(labelsAt(events,4),[]);
+  const media=new Media(store,{ffmpeg,ffprobe,exportAcceleration:'software',renderBlockSeconds:1});
+  t.after(async()=>{await index.close();media.close();await media.waitForSaves();store.close();await fs.rm(root,{recursive:true,force:true});});
+  const crop=(output,time,rect)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',output,'-frames:v','1','-vf','crop='+rect,'-pix_fmt','gray','-f','rawvideo','pipe:1']);
+  const bright=bytes=>bytes.reduce((sum,value)=>sum+(value>64?1:0),0);
+  const check=output=>{
+    const names=[1.5,2.5,3.5].map(time=>crop(output,time,'240:32:0:608'));
+    for(const bytes of names)assert.ok(bright(bytes)>20,'main name is burned at the bottom-left');
+    assert.notDeepEqual(names[0],names[1],'guest-to-guest switch replaces the actual rendered text');
+    assert.notDeepEqual(names[1],names[2],'return to host replaces the actual rendered text');
+    assert.ok(bright(crop(output,1.5,'80:24:272:410'))>10,'host remains in its own p=2 small picture');
+    assert.equal(bright(crop(output,4.5,'360:640:0:0')),0,'ended linkmic has no stale labels');
+  };
+  for(const mode of ['clean','danmaku'])check(await media.exportJob({id:'promoted-'+mode,session:session.id,scope:'full',ranges:[{start:0,end:5}],excluded:[],mode,linkmicEvents:events}));
+  const job={id:'promoted-prepared',session:session.id,scope:'clips',ranges:[{start:0,end:5}],excluded:[],mode:'dual',linkmicEvents:events,outputRoot:path.join(root,'exports')};
+  job.output=await media.reserveOutput(job,store.session(session.id),store.sources(session.id));
+  const output=await media.renderer.exportJob(job,softwareEncoder());check(output);check(clipFile(output,'danmaku'));
 });
