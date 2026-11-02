@@ -1,15 +1,21 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {BilibiliRoomResolver} from '../server/room-lookup.js';import {DouyinResolver} from '../server/douyin-room.js';import {Recorder} from '../server/recorder.js';
 import {biliFixture,biliReplacement,douyinFixture} from './credential-fixtures.js';
-test('Bilibili account queries stay on the official host and Douyin ignores account credentials',async()=>{
- const calls=[],credentials={get:p=>p==='bilibili'?biliFixture:douyinFixture};
+test('platform account credentials stay isolated and clearing Douyin restores anonymous bootstrap',async()=>{
+ let douyinCookie=douyinFixture;
+ const calls=[],credentialReads=[],credentials={get:p=>{credentialReads.push(p);return p==='bilibili'?biliFixture:douyinCookie;}};
  const bili=new BilibiliRoomResolver({credentials,request:async(url,options)=>{calls.push({url,options});return new Response('{"code":0,"data":{"uid":123}}');}});
  assert.equal(await bili.verifyCookie(),true);
  assert.equal(new URL(calls[0].url).hostname,'api.live.bilibili.com');assert.equal(calls[0].options.redirect,'error');assert.equal(calls[0].options.headers.Cookie,biliFixture);
- const douyin=new DouyinResolver({credentials:{get(){assert.fail('Douyin must not read saved account credentials');}},request:async(url,options)=>{calls.push({url,options});return new Response('',{headers:{'Set-Cookie':'ttwid=anonymous-visitor; Path=/'}});}});
+ credentialReads.length=0;
+ const douyin=new DouyinResolver({credentials,request:async(url,options)=>{calls.push({url,options});return new Response('',{headers:{'Set-Cookie':'ttwid=anonymous-visitor; Path=/'}});}});
+ const signedIn=await douyin.cookie();assert.equal(signedIn.cookie,douyinFixture);assert.equal(calls.length,1);
+ assert.ok(credentialReads.length>0);assert.deepEqual([...new Set(credentialReads)],['douyin']);
+ douyinCookie='';
  const visitor=await douyin.cookie();assert.equal(visitor.cookie,'ttwid=anonymous-visitor');
  assert.equal(calls[1].url,'https://live.douyin.com/');assert.equal(calls[1].options.redirect,'error');assert.equal(calls[1].options.headers.Cookie,undefined);
  assert.equal(await douyin.cookie(),visitor);assert.equal(calls.length,2);
+ assert.equal(await bili.verifyCookie(),true);assert.equal(calls[2].options.headers.Cookie,biliFixture);
 });
 test('Bilibili runtime delivery is serialized, retries failure and never falls back to ordinary config',async()=>{
  const settings=new Map(),store={root:'/private/tmp/never-written-auth',setting(k,v){if(v!==undefined)settings.set(k,v);return settings.get(k);}};let value=biliFixture,now=1000;
