@@ -77,7 +77,7 @@ async function createManagedApp(options,runtime) {
   store.density=density;
   const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
   const lotteries=new LotteryRecorder(store,options.lotteryOptions);
-  const credentialChecks={bilibili:'unknown'};
+  const credentialChecks={bilibili:'unknown',douyin:'unknown'};
   const credentialSnapshot=()=>({...credentials.snapshot(),checks:{...credentialChecks},bilibiliCore:{...recorder.credentialStatus}});
   media.isRecording=()=>recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
   const linkmic=new LinkmicIndex(store,{resolver:recorder.douyin.resolver,ffmpeg});store.linkmic=linkmic;
@@ -194,13 +194,14 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
       if(p==='/api/platform-credentials'&&req.method==='GET')return json(res,credentialSnapshot());
-      if((match=/^\/api\/platform-credentials\/(bilibili)\/(save|delete|verify|unlock)$/.exec(p))&&req.method==='POST'){
+      if((match=/^\/api\/platform-credentials\/(bilibili|douyin)\/(save|delete|verify|unlock)$/.exec(p))&&req.method==='POST'){
         const [,platform,action]=match,input=await body(req,65536);
         if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>action!=='save'||key!=='cookie'))throw new Error('登录信息请求无效。');
         if(action==='save')await credentials.save(platform,input.cookie);
         else if(action==='delete')await credentials.remove(platform);
         else if(action==='unlock')await credentials.unlock(platform);
         else {
+          if(platform==='douyin')throw new Error('抖音 Cookie 保存后会用于弹幕和礼物连接；请以直播间实际采集结果确认。');
           if(!credentials.get(platform))throw new Error('请先保存 Cookie。');
           const before=credentials.get(platform);
           try{const valid=await recorder.bilibiliResolver.verifyCookie();if(before===credentials.get(platform))credentialChecks[platform]=valid?'valid':'invalid';}
@@ -208,7 +209,10 @@ async function createManagedApp(options,runtime) {
           return json(res,credentialSnapshot());
         }
         credentialChecks[platform]='unknown';
-        if(recorder.online)await recorder.applyCredentials();else recorder.credentialStatus={applied:false,error:credentials.get(platform)?'已安全保存，连接录制核心后应用。':''};
+        if(platform==='douyin'){
+          try{await recorder.douyin.applyCredentials();credentialChecks.douyin='applied';}
+          catch{credentialChecks.douyin='pending';diagnostics.record('抖音 Cookie','已更新安全保存项；当前弹幕连接刷新失败，将在后续连接时重试。',{level:'警告'});}
+        }else if(recorder.online)await recorder.applyCredentials();else recorder.credentialStatus={applied:false,error:credentials.get(platform)?'已安全保存，连接录制核心后应用。':''};
         return json(res,credentialSnapshot());
       }
       if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));

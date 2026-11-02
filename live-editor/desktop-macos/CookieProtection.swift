@@ -34,7 +34,7 @@ do {
     guard input.count <= 131072, let request = try JSONSerialization.jsonObject(with: input) as? [String: String],
           let operation = request["operation"], ["seal", "open", "unlock"].contains(operation),
           let namespace = request["namespace"], namespace.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
-          let context = request["context"], context == "caibao.cookies.v1:\(namespace):bilibili",
+          let context = request["context"], ["bilibili", "douyin"].contains(where: { context == "caibao.cookies.v1:\(namespace):\($0)" }),
           let encoded = request["data"], let data = Data(base64Encoded: encoded) else { throw StorageFailure.unavailable }
     let encryptionKey = try key(namespace, create: operation == "seal", interactive: operation != "open")
     let aad = Data(context.utf8)

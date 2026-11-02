@@ -95,3 +95,26 @@ test('malformed SDK parameters do not hide compatible backup or subsequent quali
  assert.equal(selectDouyinFlv(stream).url,cdn('backup'));
  delete data.data.origin.backup;assert.equal(selectDouyinFlv(stream).url,cdn('uhd'));
 });
+
+test('saved Douyin login reaches only official API requests; replacement/removal take effect without a stale visitor cache',async()=>{
+ let login='sessionid=synthetic-one; ttwid=account-visitor';const seen=[];
+ const resolver=new DouyinResolver({credentials:{get:()=>login},request:async(url,options)=>{
+  seen.push({url:String(url),cookie:options.headers.Cookie,redirect:options.redirect});
+  if(String(url)==='https://live.douyin.com/')return new Response('visitor',{headers:{'set-cookie':'ttwid=anonymous; Secure'}});
+  return new Response(JSON.stringify({status_code:0,data:{data:[{id_str:'1234',status:2,owner:{id_str:'5',nickname:'主播'},stream_url:{flv_pull_url:{origin:cdn('live')}}}]}}));
+ }});
+ const first=await resolver.room('123');assert.equal(seen.length,1);assert.equal(seen[0].cookie,login);assert.equal(seen[0].redirect,'error');
+ login='sessionid_ss=synthetic-two; ttwid=replaced';const next=await resolver.room('123');assert.equal(seen.at(-1).cookie,login);assert.notEqual(first.userUniqueId,next.userUniqueId);
+ login='';const guest=await resolver.room('123');assert.equal(guest.cookie,'ttwid=anonymous');assert.ok(!seen.at(-1).cookie.includes('sessionid'));
+ assert.equal(resolver.accountCookie,'');assert.ok(seen.every(x=>new URL(x.url).origin==='https://live.douyin.com'));
+});
+test('removing a login during a room lookup cannot return the old credentials to a later chat reconnect',async()=>{
+ let login='sessionid=synthetic-one; ttwid=account',release,requests=0;
+ const resolver=new DouyinResolver({credentials:{get:()=>login},request:async url=>{
+  if(String(url)==='https://live.douyin.com/')return new Response('visitor',{headers:{'set-cookie':'ttwid=anonymous'}});
+  if(++requests===1)await new Promise(resolve=>{release=resolve;});
+  return new Response(JSON.stringify({status_code:0,data:{data:[{id_str:'1234',status:3,owner:{nickname:'主播'}}]}}));
+ }});
+ const pending=resolver.room('123');while(!release)await new Promise(resolve=>setImmediate(resolve));login='';release();
+ const result=await pending;assert.equal(requests,2);assert.equal(result.cookie,'ttwid=anonymous');
+});

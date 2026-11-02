@@ -10,7 +10,9 @@ import {testProtection,biliFixture,biliReplacement,douyinFixture} from './creden
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-vault-')),protection=testProtection(),vault=await new PlatformCredentials(root,{protection}).initialize();t.after(async()=>{await vault.close();await fs.rm(root,{recursive:true,force:true});});return {root,protection,vault};}
 test('Cookie input accepts a single header value and rejects injection, missing login fields and ambiguous duplicates',()=>{
  assert.equal(normalizePlatformCookie('bilibili','Cookie: '+biliFixture),biliFixture);
- assert.throws(()=>normalizePlatformCookie('douyin',douyinFixture));
+ assert.equal(normalizePlatformCookie('douyin',douyinFixture),douyinFixture);
+ assert.throws(()=>normalizePlatformCookie('douyin','ttwid=visitor-only'));
+ assert.equal(normalizePlatformCookie('douyin','sessionid_ss=test-login'),'sessionid_ss=test-login');
  for(const value of [undefined,null,{},'',biliFixture+'\nX: bad',biliFixture+'\0',biliFixture+'; SESSDATA=other','SESSDATA=x; DedeUserID=no','x'.repeat(32769),'SESSDATA="secret"; DedeUserID=1'])assert.throws(()=>normalizePlatformCookie('bilibili',value));
  assert.throws(()=>normalizePlatformCookie('douyin',biliFixture));assert.throws(()=>normalizePlatformCookie('unknown',biliFixture));
 });
@@ -41,21 +43,23 @@ test('symlinked private directories and symlinked entries never unlock another f
  await fs.unlink(vault.directory);await fs.mkdir(vault.directory);await fs.writeFile(path.join(elsewhere,'entry'),'not a credential');await fs.symlink(path.join(elsewhere,'entry'),vault.file('bilibili'));
  const linked=await new PlatformCredentials(root,{protection}).initialize();assert.equal(linked.get('bilibili'),'');assert.match(linked.snapshot().platforms.bilibili.error,/无法读取/);await linked.close();
 });
-test('upgrading removes the old Douyin ciphertext without unlocking it and keeps Bilibili',async t=>{
- const {root,vault,protection}=await fixture(t);await vault.save('bilibili',biliFixture);
- const legacy=path.join(vault.directory,'douyin.sealed');
- await fs.writeFile(legacy,await protection.run('seal',vault.namespace,'douyin',Buffer.from(douyinFixture)));
- const reopened=await new PlatformCredentials(root,{protection:{...protection,run(...args){assert.notEqual(args[2],'douyin');return protection.run(...args);}}}).initialize();
- assert.equal(reopened.get('bilibili'),biliFixture);assert.equal(reopened.get('douyin'),'');
- assert.deepEqual(Object.keys(reopened.snapshot().platforms),['bilibili']);
- await assert.rejects(fs.access(legacy),{code:'ENOENT'});await assert.rejects(reopened.save('douyin',douyinFixture));await reopened.close();
+test('both platform ciphertexts survive restart, stay isolated and support clearing one login',async t=>{
+ const {root,vault,protection}=await fixture(t);await vault.save('bilibili',biliFixture);await vault.save('douyin',douyinFixture);
+ const before=await fs.readFile(vault.file('douyin'));assert.ok(!before.includes(Buffer.from('synthetic')));
+ const reopened=await new PlatformCredentials(root,{protection}).initialize();
+ assert.equal(reopened.get('bilibili'),biliFixture);assert.equal(reopened.get('douyin'),douyinFixture);
+ assert.deepEqual(Object.keys(reopened.snapshot().platforms),['bilibili','douyin']);
+ await assert.rejects(protection.run('open',vault.namespace,'bilibili',before));
+ await reopened.remove('douyin');assert.equal(reopened.get('douyin'),'');assert.equal(reopened.get('bilibili'),biliFixture);
+ assert.deepEqual(await fs.readdir(vault.directory),['bilibili.sealed']);await reopened.close();
 });
-test('retiring a symlinked Douyin entry preserves its outside target',async t=>{
+test('a symlinked Douyin entry remains locked and preserves its outside target',async t=>{
  const {root,vault,protection}=await fixture(t);await fs.mkdir(vault.directory);
  const outside=path.join(root,'outside');await fs.writeFile(outside,'keep');
- const legacy=path.join(vault.directory,'douyin.sealed');await fs.symlink(outside,legacy);
+ await fs.symlink(outside,vault.file('douyin'));
  const reopened=await new PlatformCredentials(root,{protection}).initialize();
- assert.equal(await fs.readFile(outside,'utf8'),'keep');await assert.rejects(fs.lstat(legacy),{code:'ENOENT'});await reopened.close();
+ assert.equal(reopened.get('douyin'),'');assert.equal(reopened.snapshot().platforms.douyin.configured,true);
+ assert.equal(await fs.readFile(outside,'utf8'),'keep');await reopened.close();
 });
 test('an update can unlock the original Bilibili cookie after system authorization without replacing it',async t=>{
  const {root,vault,protection}=await fixture(t);await vault.save('bilibili',biliFixture);
@@ -81,14 +85,14 @@ test('Windows CurrentUser DPAPI really restores Bilibili and rejects scope chang
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-dpapi-')),protection=new NativeCookieProtection({timeoutMs:45000});
  let vault=await new PlatformCredentials(root,{protection}).initialize();
  t.after(async()=>{await vault.close();await fs.rm(root,{recursive:true,force:true});});
- await vault.save('bilibili',biliFixture);
+ await vault.save('bilibili',biliFixture);await vault.save('douyin',douyinFixture);
  const sealed=await fs.readFile(vault.file('bilibili'));assert.ok(!sealed.includes(Buffer.from(biliFixture)));
  await vault.close();vault=await new PlatformCredentials(root,{protection}).initialize();
- assert.equal(vault.get('bilibili'),biliFixture);assert.equal(vault.get('douyin'),'');
+ assert.equal(vault.get('bilibili'),biliFixture);assert.equal(vault.get('douyin'),douyinFixture);
  await vault.unlock('bilibili');assert.equal(vault.get('bilibili'),biliFixture);assert.deepEqual(await fs.readFile(vault.file('bilibili')),sealed);
  await assert.rejects(protection.run('open',vault.namespace,'douyin',sealed));
  await assert.rejects(protection.run('open','f'.repeat(64),'bilibili',sealed));
  const damaged=Buffer.from(sealed);damaged[damaged.length-1]^=1;
  await assert.rejects(protection.run('open',vault.namespace,'bilibili',damaged));
- await vault.remove('bilibili');assert.deepEqual(await fs.readdir(vault.directory),[]);
+ await vault.remove('bilibili');await vault.remove('douyin');assert.deepEqual(await fs.readdir(vault.directory),[]);
 });

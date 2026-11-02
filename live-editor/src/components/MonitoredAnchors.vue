@@ -6,12 +6,13 @@ defineEmits(['action','remove']);
 const rawStatus=anchor=>anchor.legacy?roomStatus(anchor):anchor.state||'';
 function status(anchor){
   const value=rawStatus(anchor);
+  if(/正在恢复|重试|正在重连/.test(value))return '正在恢复录制';
   if(/上限/.test(value))return '已达时长上限';
   if(/待确认|疑似|失联/.test(value))return anchor.recording?'录制中 · 待确认':'等待恢复';
   if(anchor.recording)return anchor.kind==='guest'?'连麦录制中':'直播录制中';
   return anchor.enabled?'监控中':'已停止';
 }
-const warning=anchor=>anchor.error||anchor.chatError||(/待确认|疑似|失联|上限/.test(rawStatus(anchor))?rawStatus(anchor):'');
+const warning=anchor=>anchor.error||anchor.chatError||(/待确认|疑似|失联|上限|正在恢复|重试|正在重连/.test(rawStatus(anchor))?rawStatus(anchor):'');
 const identity=anchor=>(anchor.platform==='douyin'?'抖音':'B站')+(anchor.ownWebRid?' · 本人直播间 '+anchor.ownWebRid:'');
 </script>
 <template>

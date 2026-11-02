@@ -6,7 +6,7 @@ import {BilibiliRoomResolver,numericRoomId,discoverRoomNumber} from './room-look
 import {isDouyinMonitorLink,decimal} from './douyin-user-discovery.js';
 
 export class MultiPlatformRecorder extends Recorder {
-  constructor(store,options={}){super(store,options);this.douyin=new DouyinRecorder(store,options.douyin);this.following=new DouyinUserFollow(store,{recorder:this.douyin,...options.douyinFollow});this.bilibiliResolver=options.bilibiliResolver||new BilibiliRoomResolver({credentials:options.credentials});this.migrations=new Map();this.douyin.onRoomMetadata=(room,metadata)=>this.adoptMonitoredRoom(room,metadata);}
+  constructor(store,options={}){super(store,options);this.douyin=new DouyinRecorder(store,{credentials:options.credentials,...options.douyin});this.following=new DouyinUserFollow(store,{recorder:this.douyin,...options.douyinFollow});this.bilibiliResolver=options.bilibiliResolver||new BilibiliRoomResolver({credentials:options.credentials});this.migrations=new Map();this.douyin.onRoomMetadata=(room,metadata)=>this.adoptMonitoredRoom(room,metadata);}
   get rooms(){return [...(this.biliRooms||[]).map(room=>({...room,platform:'bilibili'})),...(this.douyin?.rooms||[])];}
   set rooms(rooms){this.biliRooms=rooms;}
   get available(){return this.online||this.douyin.started&&!this.douyin.closed;}

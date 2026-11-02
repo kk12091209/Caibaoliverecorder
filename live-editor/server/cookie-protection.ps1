@@ -4,7 +4,8 @@ try {
     $text = [Console]::In.ReadToEnd()
     if ($text.Length -gt 131072) { throw 'Invalid request' }
     $request = $text | ConvertFrom-Json
-    if ($request.namespace -notmatch '^[a-f0-9]{64}$' -or $request.context -cne "caibao.cookies.v1:$($request.namespace):bilibili") { throw 'Invalid scope' }
+    $allowedContexts = @("caibao.cookies.v1:$($request.namespace):bilibili", "caibao.cookies.v1:$($request.namespace):douyin")
+    if ($request.namespace -notmatch '^[a-f0-9]{64}$' -or ($allowedContexts -cnotcontains $request.context)) { throw 'Invalid scope' }
     $bytes = [Convert]::FromBase64String($request.data)
     $entropy = [Text.Encoding]::UTF8.GetBytes($request.context)
     if ($request.operation -eq 'seal') {

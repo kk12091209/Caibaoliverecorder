@@ -98,7 +98,9 @@ function decodePayload(type,payload) {
   try {
     if(type===5&&payload.subarray(0,16).toString('ascii')==='LIVE_SEI_CHANNEL')
       return {platform:'bilibili',value:parsePlatformJson(payload.subarray(16).toString('utf8').replace(/\0+$/,''))};
-    if(type===100&&payload[0]===123)return {platform:'douyin',value:parsePlatformJson(payload.toString('utf8'))};
+    // Douyin can terminate otherwise valid SEI JSON with NUL bytes. Remove
+    // only that suffix; embedded NULs and other malformed data stay invalid.
+    if(type===100&&payload[0]===123)return {platform:'douyin',value:parsePlatformJson(payload.toString('utf8').replace(/\0+$/,''))};
   }catch{/* Optional overlays must never interrupt recording on malformed SEI. */}
   return null;
 }

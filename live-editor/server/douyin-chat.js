@@ -17,7 +17,7 @@ export class DouyinChat {
   }
   update(key,{cookie,userUniqueId},{reauthenticate=false}={}) {
     const client=this.clients.get(key);if(!client||client.stopping)return;
-    if(client.details.cookie===cookie&&client.details.userUniqueId===userUniqueId)return;
+    if(!reauthenticate&&client.details.cookie===cookie&&client.details.userUniqueId===userUniqueId)return;
     Object.assign(client.details,{cookie,userUniqueId});this.worker?.postMessage({type:'credentials',key,cookie,userUniqueId,reauthenticate});
   }
   ensureWorker() {

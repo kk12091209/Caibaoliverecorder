@@ -67,7 +67,7 @@ parentPort.on('message',message=>{
     room.signals=new DouyinChatSignals(event=>post({type:'status',key:room.key,...event}));
     rooms.set(room.key,room);intake.start(room.key,{start:room.sourceStart});giftIntake.start(room.key);void connect(room);
   }else if(message.type==='credentials'){
-    const room=rooms.get(message.key);if(room&&!room.stopped&&(room.cookie!==message.cookie||room.userUniqueId!==message.userUniqueId)){
+    const room=rooms.get(message.key);if(room&&!room.stopped&&(message.reauthenticate===true||room.cookie!==message.cookie||room.userUniqueId!==message.userUniqueId)){
       room.cookie=message.cookie;room.userUniqueId=message.userUniqueId;
       if(message.reauthenticate!==true)return;
       room.generation=(room.generation||0)+1;

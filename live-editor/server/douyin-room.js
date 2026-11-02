@@ -142,8 +142,22 @@ export function selectDouyinIndependentFlv(stream={}) {
 }
 
 export class DouyinResolver {
-  constructor({ request = fetch, now = Date.now } = {}) { this.request = request; this.now = now; this.visitor = null; this.refreshing = null; }
+  constructor({ request = fetch, now = Date.now, credentials } = {}) { this.request = request; this.now = now; this.credentials=credentials;this.visitor = null; this.refreshing = null; }
   async cookie(signal) {
+    const saved=this.credentials?.get('douyin')||'';
+    const hasVisitor=/(?:^|;\s*)ttwid=[^;]+/.test(saved);
+    const visitor=hasVisitor?null:await this.visitorCookie(signal);
+    // Re-read after async visitor bootstrap: a removed/replaced login must not
+    // be reintroduced by an older in-flight request.
+    const current=this.credentials?.get('douyin')||'';
+    if(!current){this.accountCookie='';this.accountId='';return visitor||this.visitorCookie(signal);}
+    if(current!==saved)return this.cookie(signal);
+    if(this.accountCookie!==current){this.accountCookie=current;this.accountId=(randomBytes(8).readBigUInt64BE()&9223372036854775807n).toString();}
+    const parts=new Map((visitor?.cookie||'').split(';').filter(Boolean).map(p=>{const at=p.indexOf('=');return [p.slice(0,at).trim(),p.slice(at+1)];}));
+    for(const part of current.split(';')){const at=part.indexOf('=');parts.set(part.slice(0,at).trim(),part.slice(at+1));}
+    return {cookie:[...parts].map(([k,v])=>`${k}=${v}`).join('; '),userUniqueId:this.accountId};
+  }
+  async visitorCookie(signal) {
     if (this.visitor && this.visitor.expires > this.now()) return this.visitor;
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
@@ -160,13 +174,14 @@ export class DouyinResolver {
   async room(webRid, { signal } = {}) {
     if (!/^\d{1,20}$/.test(webRid)) throw new Error('抖音房间编号无效。');
     signal ||= AbortSignal.timeout(15000);
-    const visitor = await this.cookie(signal);
+    const visitor = await this.cookie(signal),login=this.credentials?.get('douyin')||'';
     const query = new URLSearchParams({ aid: '6383', app_name: 'douyin_web', live_id: '1', device_platform: 'web',
       language: 'zh-CN', web_rid: webRid, browser_name: 'Chrome', browser_version: '140.0.0.0', browser_language: 'zh-CN',
       browser_platform: 'Win32', is_need_double_stream: 'true', msToken: '' });
     const url = 'https://live.douyin.com/webcast/room/web/enter/?' + query + '&a_bogus=' + encodeURIComponent(signRoomQuery(query.toString(), DOUYIN_USER_AGENT));
     const response = await this.request(url, { signal, redirect:'error', headers: { 'User-Agent': DOUYIN_USER_AGENT, Referer: 'https://live.douyin.com/', Cookie: visitor.cookie } });
     let data; try { data = JSON.parse(await readBoundedResponse(response)); } catch (error) { this.visitor = null; throw new Error('抖音暂时未返回直播信息，请稍后重试。', { cause: error }); }
+    if(login!==(this.credentials?.get('douyin')||''))return this.room(webRid,{signal});
     if(data.status_code===0&&Array.isArray(data.data?.data)&&data.data.data.length===0){
       // An identified anchor can be offline before a webcast room exists.
       const owner=data.data.user;

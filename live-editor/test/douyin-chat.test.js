@@ -26,6 +26,18 @@ test('visitor refresh updates reconnect credentials without resetting sampling o
  chat.update('source',{cookie:'new',userUniqueId:'2'});assert.equal(fake.sent.filter(message=>message.type==='credentials').length,1);await chat.close();
 });
 
+test('explicit login refresh reconnects even if a concurrent room poll has already copied the new credentials',async()=>{
+ const fake=worker(),chat=new DouyinChat({createWorker:()=>fake});
+ try{
+  chat.start('source',{cookie:'guest',userUniqueId:'1'},{write:async()=>{}});
+  chat.update('source',{cookie:'sessionid=synthetic',userUniqueId:'2'});
+  chat.update('source',{cookie:'sessionid=synthetic',userUniqueId:'2'},{reauthenticate:true});
+  assert.equal(fake.sent.filter(message=>message.type==='credentials').length,2);
+  assert.equal(fake.sent.at(-1).reauthenticate,true);
+  assert.equal(fake.sent.filter(message=>message.type==='start').length,1,'keeps the existing sampling and persistence channel');
+ }finally{await chat.close();}
+});
+
 test('worker reasons reach the recorder, first persisted batch follows disk completion, and protocol payloads never reach status consumers',async()=>{
  const fake=worker(),chat=new DouyinChat({createWorker:()=>fake}),events=[];let release;
  chat.start('source',{}, {write:()=>new Promise(resolve=>release=resolve),status:(state,detail)=>events.push([state,detail])});

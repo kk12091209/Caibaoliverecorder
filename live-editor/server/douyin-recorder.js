@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {DouyinResolver,DOUYIN_USER_AGENT,safeStreamUrl,safeStreamRedirect} from './douyin-room.js';
-import {DouyinFlv} from './douyin-flv.js';
+import {DouyinFlv,DouyinStreamChange} from './douyin-flv.js';
 import {DouyinChat} from './douyin-chat.js';
 import {chatStatusMessage} from './douyin-chat-status.js';
 import {chatRate} from './chat-rules.js';
@@ -16,15 +16,38 @@ export function chatXml(batch){
 }
 
 export class DouyinRecorder {
-  constructor(store,{resolver=new DouyinResolver(),request=fetch,chat=new DouyinChat(),now=Date.now,pollMs=5000,idleMs=20000}={}) {
-    Object.assign(this,{store,resolver,request,chat,now,pollMs,idleMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();
+  constructor(store,{credentials,resolver=new DouyinResolver({credentials}),request=fetch,chat=new DouyinChat(),now=Date.now,pollMs=5000,idleMs=20000,mediaIdleMs=10000,watchdogMs=1000}={}) {
+    for(const value of [pollMs,idleMs,mediaIdleMs,watchdogMs])if(!Number.isSafeInteger(value)||value<1)throw new Error('录制监测间隔无效。');
+    Object.assign(this,{store,resolver,request,chat,now,pollMs,idleMs,mediaIdleMs,watchdogMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();
     this.chat.setRateLimit?.(chatRate(store));
     const savedRooms=store.setting('douyin-rooms');
     for(const saved of Array.isArray(savedRooms)?savedRooms:[])if(saved&&typeof saved.webRid==='string'&&/^\d{1,20}$/.test(saved.webRid)&&this.entries.size<64)this.entries.set(saved.webRid,this.entry(saved));
   }
-  entry(saved){return {webRid:saved.webRid,name:String(saved.name||'抖音直播间').slice(0,100),title:String(saved.title||'').slice(0,300),autoRecord:saved.autoRecord!==false,enabled:saved.enabled!==false,followers:new Map(),streaming:false,recording:false,error:'',chatError:'',nextPoll:0,retryAt:0};}
+  entry(saved){return {webRid:saved.webRid,name:String(saved.name||'抖音直播间').slice(0,100),title:String(saved.title||'').slice(0,300),autoRecord:saved.autoRecord!==false,enabled:saved.enabled!==false,followers:new Map(),streaming:false,recording:false,error:'',chatError:'',nextPoll:0,retryAt:0,recoveryFailures:0,recoveryReason:''};}
   wanted(room){return room.enabled||[...room.followers.values()].some(roomId=>roomId===room.metadata?.roomId);}
-  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,followOnly:room.followOnly===true,streaming:room.streaming,recording:room.recording,recordingEnabled:this.wanted(room),followUsers:room.followers.size,autoRecord:room.autoRecord,autoRecordForThisSession:this.wanted(room),error:room.error,chatError:room.chatError,recordingProgress:room.progress?{...room.progress}:null}));}
+  get rooms(){return [...this.entries.values()].map(room=>({platform:'douyin',roomId:'douyin:'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,followOnly:room.followOnly===true,streaming:room.streaming,recording:room.recording,recordingEnabled:this.wanted(room),followUsers:room.followers.size,autoRecord:room.autoRecord,autoRecordForThisSession:this.wanted(room),error:room.error,chatError:room.chatError,recordingHealth:room.recoveryReason?{state:'recovering',message:room.recoveryReason}:null,recordingProgress:room.progress?{...room.progress}:null}));}
+  async applyCredentials(){
+    // Reauthenticate chat only; never interrupt the video writer on a login edit.
+    if(!this.entries.size)return;
+    let details;
+    try{details=await this.resolver.cookie(AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)]));}
+    catch(error){
+      for(const room of this.entries.values()){
+        if(room.metadata)room.metadata.cookie='';
+        if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:'',userUniqueId:room.metadata?.userUniqueId},{reauthenticate:true});
+        room.credentialsPending=true;
+        room.nextPoll=0;
+      }
+      throw error;
+    }
+    for(const room of this.entries.values()){
+      if(room.metadata)Object.assign(room.metadata,details);
+      if(room.sourceId)this.chat.update?.(room.sourceId,details,{reauthenticate:true});
+      room.credentialsPending=false;
+      room.nextPoll=0;
+    }
+  }
+
   save(){this.store.setting('douyin-rooms',[...this.entries.values()].filter(room=>!room.followOnly).map(room=>({webRid:room.webRid,name:room.name,title:room.title,autoRecord:room.autoRecord,enabled:room.enabled})));}
   async acquireFollow(uid,metadata,isCurrent=()=>true){
     this.assertOpen();let room=this.entries.get(metadata.webRid);
@@ -66,7 +89,8 @@ export class DouyinRecorder {
           const metadata=await this.resolver.room(room.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});
           if(this.closed||!this.entries.has(room.webRid))continue;
           room.metadata=metadata;room.name=metadata.name;room.title=metadata.title;room.streaming=metadata.streaming;if(!room.blocked)room.error='';
-          if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:metadata.cookie,userUniqueId:metadata.userUniqueId});
+          if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:metadata.cookie,userUniqueId:metadata.userUniqueId},{reauthenticate:room.credentialsPending===true});
+          room.credentialsPending=false;
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);
           await this.onRoomMetadata?.(room,metadata);
           if(!metadata.streaming||room.actualRoom&&room.actualRoom!==metadata.roomId){await this.finish(room);}
@@ -83,8 +107,15 @@ export class DouyinRecorder {
   }
   async capture(room){
     const metadata=room.metadata,abort=new AbortController();room.abort=abort;let response,flv,xml,source,session,normalizer;
-    let lastData=this.now(),recordError;
-    const watchdog=setInterval(()=>{if(this.now()-lastData>this.idleMs&&!abort.signal.aborted){this.store.diagnostics?.record('抖音连接',`房间 ${room.webRid}：连续 ${this.idleMs/1000} 秒没有视频数据，取消连接并重试`,{level:'警告'});abort.abort(new Error('直播连接超时。'));}},Math.min(5000,this.idleMs));
+    let lastData=this.now(),lastMedia=lastData,lastVideo=lastData,mediaValue=-1,videoValue=null,recordError,recoverable;
+    const healthySince=this.now();
+    const watchdog=setInterval(()=>{
+      if(abort.signal.aborted)return;
+      const at=this.now();
+      const reason=at-lastData>=this.idleMs?'直播连接长时间未收到数据。'
+        :at-lastMedia>=this.mediaIdleMs||normalizer?.videoTime!==null&&normalizer?.videoTime!==undefined&&at-lastVideo>=this.mediaIdleMs?'直播仍收到数据，但有效画面时间未推进。':'';
+      if(reason){this.store.diagnostics?.record('抖音录制恢复',`房间 ${room.webRid}：${reason} 保留已录内容并重连。`,{level:'警告'});abort.abort(new DouyinStreamChange(reason));}
+    },this.watchdogMs);
     const signal=AbortSignal.any([this.shutdown.signal,abort.signal]);
     try{
       const origin=safeStreamUrl(metadata.stream.url);if(!origin)throw new Error('直播服务器地址无效。');
@@ -113,8 +144,7 @@ export class DouyinRecorder {
       await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="douyin" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
       this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.followCaptured?.(room);this.store.diagnostics?.record('抖音录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
       normalizer=new DouyinFlv();room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
-      const chatCredentials=room.metadata||metadata;
-      try{this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
+      try{const chatCredentials=this.resolver.cookie?await this.resolver.cookie(signal):room.metadata||metadata;this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
         {write:batch=>writeAll(xml,chatXml(batch)),status:(status,detail)=>{
           if(['connected','first-frame','first-comment','first-gift','first-write'].includes(status))room.chatError='';
           else if(status==='write-failed')room.chatError='弹幕保存失败。';
@@ -123,18 +153,29 @@ export class DouyinRecorder {
         }});}catch{room.chatError='弹幕暂时无法连接。';this.store.diagnostics?.record('抖音弹幕',`房间 ${room.webRid}：弹幕采集未能启动。`,{level:'警告'});}
       for await(const chunk of response.body){
         lastData=this.now();if(signal.aborted)break;
-        const frames=normalizer.feed(chunk),started=this.now();let written=0;
+        let frames,change;
+        try{frames=normalizer.feed(chunk);}catch(error){if(error.code!=='DOUYIN_STREAM_CHANGE')throw error;frames=error.frames;change=error;}
+        const started=this.now();let written=0;
         room.progress.inFlightWriteSince=started;
         for(const bytes of frames){await writeAll(flv,bytes);written+=bytes.length;}
         room.progress.bytes+=written;room.progress.mediaMs=normalizer.duration*1000;
         room.progress.writeLatencyMs=Math.max(0,this.now()-started);room.progress.inFlightWriteSince=null;room.progress.observedAt=this.now();
+        if(room.progress.mediaMs>mediaValue){mediaValue=room.progress.mediaMs;lastMedia=this.now();}
+        if(normalizer.videoTime!==null&&(videoValue===null||normalizer.videoTime>videoValue)){
+          const advanced=videoValue!==null;videoValue=normalizer.videoTime;lastVideo=this.now();
+          if(advanced&&room.recoveryReason){room.recoveryReason='';room.error='';this.store.diagnostics?.record('抖音录制恢复',`房间 ${room.webRid}：已重新收到有效画面，继续录制。`);}
+        }
+        if(this.now()-healthySince>=30000&&this.now()-lastVideo<this.mediaIdleMs&&normalizer.duration>=20)room.recoveryFailures=0;
+        if(change)throw change;
       }
+      if(signal.aborted&&signal.reason?.code==='DOUYIN_STREAM_CHANGE')throw signal.reason;
       if(!signal.aborted)normalizer.finish();
     }catch(error){
+      recoverable=error.code==='DOUYIN_STREAM_CHANGE'?error:signal.reason?.code==='DOUYIN_STREAM_CHANGE'?signal.reason:null;
       if(!this.closed&&(!room.abort?.signal.aborted||room.abort.signal.reason?.message==='直播连接超时。'))this.store.diagnostics?.record('抖音录制连接',error,{level:'警告'});
       // Network failures retain the partial source and reconnect. Invalid
       // codec/data or disk failures stop retries until the user starts again.
-      if(!signal.aborted&&source&&(!response?.body||!/fetch|network|terminated|socket|abort/i.test(error.message))){recordError=error;room.blocked=true;room.error=error.message;}
+      if(!recoverable&&!signal.aborted&&source&&(!response?.body||!/fetch|network|terminated|socket|abort/i.test(error.message))){recordError=error;room.blocked=true;room.error=error.message;}
       else if(!this.closed&&!abort.signal.aborted)room.error='直播连接中断，正在重试。';
     }finally{
       clearInterval(watchdog);if(!signal.aborted)abort.abort();
@@ -154,11 +195,21 @@ export class DouyinRecorder {
         this.store.run("UPDATE sessions SET status=?,error=? WHERE id=?",recordError?'finishing':this.wanted(room)&&!this.closed?'waiting':'finishing',recordError?.message||'',session.id);
       }
       room.recording=false;room.abort=null;room.sourceId=null;room.progress=null;room.retryAt=this.now()+3000;
+      if(recoverable&&!recordError&&!this.closed&&this.wanted(room)){
+        const delay=Math.min(30000,1000*2**Math.min(room.recoveryFailures++,5));
+        room.retryAt=this.now()+delay;room.nextPoll=room.retryAt;room.recoveryReason=`直播流切换或停滞，正在恢复录制（${delay/1000} 秒后重试）`;
+        this.store.diagnostics?.record('抖音录制恢复',`房间 ${room.webRid}：${recoverable.message} ${delay/1000} 秒后重新查询直播地址。`,{level:'警告'});
+        clearTimeout(room.recoveryTimer);room.recoveryTimer=setTimeout(()=>{
+          room.recoveryTimer=null;
+          if(!this.closed&&!this.paused&&this.entries.get(room.webRid)===room&&this.wanted(room)){room.nextPoll=0;void this.poll().catch(error=>this.reportPollError(error));}
+        },delay);room.recoveryTimer.unref?.();
+      }
     }
   }
-  async startRoom(key){this.assertOpen();const room=this.room(key);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
+  async startRoom(key){this.assertOpen();const room=this.room(key);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.recoveryFailures=0;room.recoveryReason='';clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
   async setAuto(key,enabled){this.assertOpen();const room=this.room(key);room.followOnly=false;room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;if(!this.wanted(room))await this.finish(room);}this.save();await this.poll();}
   async finish(room){
+    clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.recoveryReason='';room.recoveryFailures=0;
     room.abort?.abort();await room.active;
     if(room.session){this.store.run("UPDATE sessions SET status='finishing' WHERE id=? AND status IN ('recording','waiting')",room.session);room.session=null;room.actualRoom=null;}
     if(!room.autoRecord)room.enabled=false;

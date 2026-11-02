@@ -4,7 +4,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
-export const COOKIE_PLATFORMS=['bilibili'];
+export const COOKIE_PLATFORMS=['bilibili','douyin'];
 const MAX_COOKIE=32768,appRoot=fileURLToPath(new URL('..',import.meta.url));
 const failure=()=>new Error('系统安全存储不可用，Cookie 未保存。请解锁系统钥匙串或检查应用组件后重试。');
 export function normalizePlatformCookie(platform,input){
@@ -17,6 +17,7 @@ export function normalizePlatformCookie(platform,input){
     parts.set(match[1],match[2]);
   }
   if(platform==='bilibili'&&(!parts.get('SESSDATA')||!/^\d{1,20}$/.test(parts.get('DedeUserID')||'')))throw new Error('B 站 Cookie 需要包含 SESSDATA 和 DedeUserID。');
+  if(platform==='douyin'&&!parts.get('sessionid')&&!parts.get('sessionid_ss'))throw new Error('抖音 Cookie 需要包含 sessionid 或 sessionid_ss，请先登录再复制。');
   return [...parts].map(([key,value])=>`${key}=${value}`).join('; ');
 }
 
@@ -80,10 +81,6 @@ export class PlatformCredentials {
     this.available=await this.protection.available();
     try{const directory=await fs.lstat(this.directory);if(!directory.isDirectory()||directory.isSymbolicLink())throw failure();}
     catch(error){if(error.code!=='ENOENT'){for(const platform of COOKIE_PLATFORMS)this.states.set(platform,{configured:true,error:'安全保存目录异常，请检查本机数据目录。'});return this;}}
-    // Retire the old account cookie without decrypting or loading it. unlink
-    // removes only this entry, and never follows a link to an outside file.
-    try{await fs.unlink(path.join(this.directory,'douyin.sealed'));}
-    catch(error){if(error.code!=='ENOENT')this.diagnostics?.record('Cookie 管理','旧版抖音 Cookie 未能清理，已停止使用。',{level:'警告'});}
     for(const platform of COOKIE_PLATFORMS){
       try{await this.restore(platform);}
       catch(error){if(error.code!=='ENOENT')this.states.set(platform,{configured:true,error:'安全保存项无法读取或未能解锁，暂以未登录方式工作。可点击“解锁已保存的 Cookie”完成系统授权，无需重新填写。'});}

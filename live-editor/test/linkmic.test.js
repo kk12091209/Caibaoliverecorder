@@ -24,8 +24,8 @@ const douyin=()=>({app_data:JSON.stringify({vendor:'BYTE',canvas:{width:1080,hei
 const audience=(overrides={})=>({app_data:JSON.stringify({ver:15,ui_layout:7,interactive_scene:8,hide_micseat:0,
   channel_id:'998',canvas:{width:360,height:640},grids:[
     {p:-1,type:1,uid_str:'1_owner'},{p:1,type:2,uid_str:'2_voice'},{p:0,type:1,uid_str:'3_video'}],...overrides})});
-function seiTag(value,type=5,time=0,lengthSize=4) {
-  const payload=Buffer.from((type===5?'LIVE_SEI_CHANNEL':'')+JSON.stringify(value)),size=[];
+function seiTag(value,type=5,time=0,lengthSize=4,suffix='') {
+  const payload=Buffer.from((type===5?'LIVE_SEI_CHANNEL':'')+JSON.stringify(value)+suffix),size=[];
   for(let n=payload.length;n>=255;n-=255)size.push(255);size.push(payload.length%255);
   const raw=Buffer.concat([Buffer.from([type,...size]),payload,Buffer.from([128])]),escaped=[];
   for(let i=0;i<raw.length;i++){if(i>=2&&raw[i]<=3&&raw[i-1]===0&&raw[i-2]===0)escaped.push(3);escaped.push(raw[i]);}
@@ -64,6 +64,33 @@ test('bounded SEI parsing handles NAL length sizes, unrelated messages, invalid 
   assert.equal(linkmicSei(seiTag(bad))[0].participants.length,2);
   assert.equal(parsePlatformJson('{"id":7698675449551328282}').id,'7698675449551328282');
   const bytes=seiTag(bili());for(let i=0;i<bytes.length;i+=17)assert.doesNotThrow(()=>linkmicSei(bytes.subarray(0,i)));
+});
+// Shape from the 2026-11-02 public game/camera stream; identities replaced.
+const gameLink=()=>({app_data:JSON.stringify({ver:6,channel_id:'7703214997949912100',is_game:true,
+  grids:[{uid_str:'host_camera',x:0,y:2/3,w:.5,h:1/3},{uid_str:'guest_camera',x:.5,y:2/3,w:.5,h:1/3},
+    {uid_str:'mock_game_uid',x:0,y:0,w:1,h:2/3,is_game:1}]})});
+test('NUL-terminated Douyin game SEI retains both camera identities and rejects non-padding suffixes',()=>{
+  for(const suffix of ['', '\0', '\0\0']){
+    const frame=linkmicSei(seiTag(gameLink(),100,0,4,suffix))[0];
+    assert.equal(frame.channel,'7703214997949912100');
+    assert.deepEqual(frame.participants.map(p=>[p.linkId,p.x,p.y,p.w,p.h]),[
+      ['host_camera',0,2/3,.5,1/3],['guest_camera',.5,2/3,.5,1/3]]);
+  }
+  for(const suffix of ['\0garbage','\0{}','x'])assert.deepEqual(linkmicSei(seiTag(gameLink(),100,0,4,suffix)),[]);
+});
+test('previously scanned NUL-terminated sources are reindexed and retain resolved names',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-linkmic-nul-')),store=new Store(root);
+  const index=new LinkmicIndex(store);t.after(async()=>{await index.close();store.close();await fs.rm(root,{recursive:true,force:true});});
+  const session=store.createSession({status:'finished'}),file=path.join(root,'sample.flv');
+  const bytes=Buffer.concat([FLV_HEADER,seiTag(gameLink(),100,1,4,'\0'),seiTag(gameLink(),100,2,4,'\0')]);
+  await fs.writeFile(file,bytes);const source=store.addSource(session.id,file,0,undefined,true);
+  store.run('UPDATE sources SET duration=10,closed=2 WHERE id=?',source.id);
+  store.setting('linkmic-index:'+source.id,{version:5,pos:bytes.length,seq:0,lengthSize:4,mode:'original',complete:true});
+  for(const [link,id,name] of [['host_camera','101','本房主播'],['guest_camera','102','连麦嘉宾']])
+    store.run('INSERT INTO linkmic_people(source,channel,link_id,id,name) VALUES(?,?,?,?,?)',source.id,'7703214997949912100',link,id,name);
+  await index.ensure(session.id);const events=index.events(session.id);
+  assert.equal(events.length,1);assert.deepEqual(events[0].participants.map(p=>p.name),['本房主播','连麦嘉宾']);
+  assert.match(linkmicAss(events,1920,1620),/本房主播/);assert.match(linkmicAss(events,1920,1620),/连麦嘉宾/);
 });
 test('audience floating seats match native bottom-up positions and preserve host and guest IDs',()=>{
   const people=linkmicSei(seiTag(audience(),100))[0].participants;

@@ -143,3 +143,58 @@ test('a month of offline checks and network failures recovers without losing a u
  f.state.failure=false;f.state.metadata.streaming=true;now+=86400000;await f.recorder.poll();assert.equal(f.state.streams,0);
  await f.recorder.startRoom('123');await until(()=>f.recorder.rooms[0].recording);assert.equal(f.state.streams,1);
 });
+
+test('clear timestamp/codec transitions preserve valid prefix and reconnect in the same session without poisoning its index',async t=>{
+ const f=await fixture(t);f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);
+ const session=f.store.sessions()[0].id;
+ for(const change of ['reset','forward','codec','end']){
+  const controller=f.controls.at(-1),room=f.recorder.entries.get('123'),before=f.state.streams;
+  let bad=flvTag(9,change==='forward'?999999:0,60,{key:true});
+  if(change==='codec'){bad=flvTag(9,0,24,{header:true});bad[18]^=1;}
+  if(change==='end'){bad=flvTag(9,0,8);bad[12]=2;}
+  controller.enqueue(Buffer.concat([flvTag(9,126000,60,{key:true}),bad]));
+  await until(()=>!room.active);assert.equal(room.blocked,undefined);assert.match(room.recoveryReason,/正在恢复/);assert.ok(room.retryAt>Date.now());
+  const previous=f.store.sources(session).at(-1);assert.equal(previous.error,'');assert.equal(previous.closed,1);
+  const content=await fs.readFile(previous.path),times=tags(content.subarray(13)).items.filter(x=>x.tag[12]===1).map(x=>timestamp(x.tag));
+  assert.deepEqual(times,[0,20,1000,2000,3000]);
+  room.retryAt=0;await f.recorder.poll(true);await until(()=>f.state.streams>before&&room.recording);
+  assert.equal(f.store.sessions().length,1);assert.equal(room.session,session);
+ }
+ await f.recorder.stopRoom('douyin:123');const ingest=new Ingestor(f.store);await ingest.tick();await ingest.tick();
+ for(const source of f.store.sources(session)){assert.equal(source.error,'');assert.equal(source.closed,2);assert.ok(source.duration>=2);}
+});
+test('video progress watchdog reconnects when audio/bytes continue; a stopped user intent cancels recovery',async t=>{
+ let now=Date.now();const f=await fixture(t,{now:()=>now,watchdogMs:5,mediaIdleMs:1000,idleMs:5000});
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);
+ const room=f.recorder.entries.get('123');await until(()=>room.progress?.mediaMs===2000);
+ // The recording flag precedes the first asynchronous write. Wait for that
+ // write, then prove audio has advanced before expiring the video clock.
+ now+=500;f.controls[0].enqueue(flvTag(8,126000,20));await until(()=>room.progress?.mediaMs===3000);
+ now+=600;
+ await until(()=>!room.active);assert.match(room.recoveryReason,/恢复/);assert.equal(room.blocked,undefined);
+ const count=f.state.streams;await f.recorder.stopRoom('douyin:123');assert.equal(room.recoveryTimer,null);now+=30000;await f.recorder.poll(true);assert.equal(f.state.streams,count);assert.equal(room.recording,false);
+});
+test('automatic recovery timer re-queries room address and starts a new source; repeated switches back off',async t=>{
+ const f=await fixture(t);f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);
+ const room=f.recorder.entries.get('123'),start=Date.now();f.controls[0].enqueue(flvTag(9,0,60,{key:true}));await until(()=>!room.active);
+ f.state.metadata.stream={url:'https://pull-test.douyincdn.com/new-state.flv'};
+ await delay(1150);await until(()=>f.state.streams===2&&room.recording);assert.ok(Date.now()-start<3000);assert.equal(f.store.sources(room.session).length,2);
+ f.controls[1].enqueue(flvTag(9,0,60,{key:true}));await until(()=>!room.active);assert.equal(room.recoveryFailures,2);assert.ok(room.retryAt-Date.now()>1500);
+});
+test('normal AV interleave and repeated headers are continuous; a flood of frozen timestamps is bounded before index budget',()=>{
+ const normalizer=new DouyinFlv();normalizer.feed(encoded());
+ assert.doesNotThrow(()=>normalizer.feed(Buffer.concat([flvTag(9,0,24,{header:true}),flvTag(8,0,8,{header:true}),flvTag(8,124980,20),flvTag(9,125040,60),flvTag(9,125020,60),flvTag(9,125080,60)])));
+ assert.equal(normalizer.duration,2.08);
+ let frozenBytes=0;assert.throws(()=>{for(let i=0;i<20;i++){frozenBytes+=1024*1024;normalizer.feed(flvTag(9,125080,1024*1024));}},error=>error.code==='DOUYIN_STREAM_CHANGE');assert.ok(frozenBytes<32*1024*1024);
+});
+test('credential changes reauthenticate chat and retain ongoing video; gifts written by the updated channel reach XML',async t=>{
+ const f=await fixture(t),updates=[];f.recorder.chat.update=(...args)=>updates.push(args);
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);const sourceId=f.recorder.entries.get('123').sourceId;
+ f.recorder.resolver.cookie=async()=>({cookie:'sessionid=synthetic-new',userUniqueId:'77'});await f.recorder.applyCredentials();
+ assert.equal(updates.length,1);assert.equal(updates[0][0],sourceId);assert.equal(updates[0][1].cookie,'sessionid=synthetic-new');assert.equal(updates[0][2].reauthenticate,true);assert.equal(f.state.streams,1);assert.equal(f.recorder.rooms[0].recording,true);
+ await f.writes[0].callbacks.write({messages:[],density:[],gifts:[{id:'gift-one',time:1,user:'观众',giftId:'1',name:'小心心',count:1,totalPrice:1,icon:''}]});
+ f.recorder.resolver.cookie=async()=>{throw new Error('visitor unavailable');};await assert.rejects(f.recorder.applyCredentials());assert.equal(updates.at(-1)[1].cookie,'');assert.equal(f.recorder.rooms[0].recording,true);
+ f.state.metadata={...f.state.metadata,cookie:'sessionid=synthetic-retried',userUniqueId:'88'};
+ await f.recorder.poll(true);assert.equal(updates.at(-1)[1].cookie,'sessionid=synthetic-retried');assert.equal(updates.at(-1)[2].reauthenticate,true,'retry actually changes the active connection, not only its next reconnect');assert.equal(f.state.streams,1);
+ await f.recorder.stopRoom('douyin:123');const ingest=new Ingestor(f.store);await ingest.tick();assert.equal(f.store.get('SELECT count(*) n FROM gift_events').n,1);
+});
