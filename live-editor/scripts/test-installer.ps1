@@ -101,13 +101,29 @@ db.close();
     & $node $fixture (Join-Path $data 'editor.sqlite') idle
     $expectedDesktopHash=(Get-FileHash -LiteralPath (Join-Path $Stage '录播机.exe')).Hash
     $previousDesktopVersion=$null
+    $previousPayloadFiles=@()
     if ($env:CAIBO_PREVIOUS_DESKTOP) {
         $previousDesktopVersion=(Get-Item -LiteralPath $env:CAIBO_PREVIOUS_DESKTOP).VersionInfo.FileVersion
-        Copy-Item -LiteralPath $env:CAIBO_PREVIOUS_DESKTOP -Destination (Join-Path $target '录播机.exe') -Force
-        Assert-Installer ((Get-FileHash (Join-Path $target '录播机.exe')).Hash -ne $expectedDesktopHash) 'Prior desktop fixture must differ from the replacement.'
+        # Shared editor fixes can leave the native launcher byte-for-byte unchanged.
+        # Seed every changed packaged file from the verified previous ZIP, so the
+        # upgrade must replace the actual old application payload as well.
+        $previousRoot=Split-Path $env:CAIBO_PREVIOUS_DESKTOP -Parent
+        $previousManifest=Get-Content (Join-Path $previousRoot '程序组件/release-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $expectedFiles=@{}
+        foreach ($file in $manifest.files) { $expectedFiles[$file.path]=$file.sha256 }
+        foreach ($file in $previousManifest.files) {
+            if ($expectedFiles.ContainsKey($file.path) -and $expectedFiles[$file.path] -ne $file.sha256) {
+                $previousFile=Join-Path $previousRoot $file.path
+                Assert-Installer ((Get-FileHash -LiteralPath $previousFile).Hash.ToLowerInvariant() -eq $file.sha256) ('Previous payload differs from its manifest: '+$file.path)
+                Copy-Item -LiteralPath $previousFile -Destination (Join-Path $target $file.path) -Force
+                $previousPayloadFiles+=@($file.path)
+            }
+        }
+        Assert-Installer ($previousPayloadFiles.Count -gt 0) 'Previous application payload must differ from the replacement.'
     }
     Assert-Installer ((Invoke-Setup $installer $arguments) -eq 0) 'Idle upgrade failed.'
     Assert-Installer ((Get-FileHash (Join-Path $target '录播机.exe')).Hash -eq $expectedDesktopHash) 'Upgrade retained the old desktop executable.'
+    foreach ($file in $manifest.files) { Assert-Installer ((Get-FileHash -LiteralPath (Join-Path $target $file.path)).Hash.ToLowerInvariant() -eq $file.sha256) ('Upgrade retained an old application file: '+$file.path) }
 
     Wait-BackendExit
     foreach ($file in $preserved) { Assert-Installer ([IO.File]::ReadAllText((Join-Path $target $file)) -eq 'private synthetic fixture') ('Upgrade changed user data: '+$file) }
@@ -168,7 +184,7 @@ db.close();
     Assert-Installer (!(Test-Path -LiteralPath $registry)) 'Uninstall registration remained.'
     Assert-Installer (!(Test-Path -LiteralPath $target)) 'Uninstall left the installation directory behind.'
     Assert-Installer ([IO.File]::ReadAllText($outside) -eq 'outside installation') 'Uninstall followed a junction into unrelated files.'
-    [ordered]@{result='passed';qaRoot=$qaRoot;filesVerified=$manifest.files.Count;previousDesktopVersion=$previousDesktopVersion;replacementDesktopVersion=(Get-Item -LiteralPath (Join-Path $Stage '录播机.exe')).VersionInfo.FileVersion;installedBytes=$installedBytes;checks=@('shared-folder-install-refused','install','root-uninstall-shortcut','Windows-uninstall-registration','installed-hashes','busy-upgrade-refused','busy-uninstall-refused','idle-safe-upgrade','prior-desktop-replaced','installed-native-ui','installed-ui-reopened','automatic-update-waits-for-gui','automatic-silent-upgrade-and-relaunch','user-data-survives-automatic-update','user-data-survives-upgrade','ownership-mismatch-refused','all-installation-files-removed','outside-junction-target-preserved','program-directory-and-registration-removed')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'verification.json') -Encoding UTF8
+    [ordered]@{result='passed';qaRoot=$qaRoot;filesVerified=$manifest.files.Count;previousDesktopVersion=$previousDesktopVersion;previousPayloadFiles=$previousPayloadFiles;replacementDesktopVersion=(Get-Item -LiteralPath (Join-Path $Stage '录播机.exe')).VersionInfo.FileVersion;installedBytes=$installedBytes;checks=@('shared-folder-install-refused','install','root-uninstall-shortcut','Windows-uninstall-registration','installed-hashes','busy-upgrade-refused','busy-uninstall-refused','idle-safe-upgrade','previous-application-payload-replaced','installed-native-ui','installed-ui-reopened','automatic-update-waits-for-gui','automatic-silent-upgrade-and-relaunch','user-data-survives-automatic-update','user-data-survives-upgrade','ownership-mismatch-refused','all-installation-files-removed','outside-junction-target-preserved','program-directory-and-registration-removed')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'verification.json') -Encoding UTF8
     Get-Content (Join-Path $qaRoot 'verification.json') -Raw -Encoding UTF8
 } finally {
     if ($backend) {
