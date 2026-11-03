@@ -60,6 +60,8 @@ namespace BililiveRecorder.Core
 
         private IRecordTask? recordTask;
         private DateTimeOffset danmakuClientConnectTime;
+        private int danmakuFailures;
+        private DateTimeOffset danmakuRetryAfter;
         private readonly ManualResetEventSlim danmakuConnectHoldOff = new();
 
         private static readonly TimeSpan danmakuClientReconnectNoDelay = TimeSpan.FromMinutes(1);
@@ -400,11 +402,13 @@ namespace BililiveRecorder.Core
             }
         }
 
+        private int DanmakuRetryDelay() => (int)Math.Min(60000, Math.Max(1000, this.RoomConfig.TimingDanmakuRetry) * Math.Pow(2, Math.Max(0, this.danmakuFailures - 1)));
+
         ///
         private void StartDamakuConnection(bool delay = true) =>
             _ = Task.Run(async () =>
             {
-                if (this.disposedValue)
+                if (this.disposedValue || (!delay && DateTimeOffset.UtcNow < this.danmakuRetryAfter))
                     return;
                 try
                 {
@@ -412,7 +416,7 @@ namespace BililiveRecorder.Core
                     {
                         try
                         {
-                            await Task.Delay((int)this.RoomConfig.TimingDanmakuRetry, this.ct).ConfigureAwait(false);
+                            await Task.Delay(this.DanmakuRetryDelay(), this.ct).ConfigureAwait(false);
                         }
                         catch (TaskCanceledException)
                         {
@@ -437,6 +441,8 @@ namespace BililiveRecorder.Core
                 }
                 catch (Exception ex)
                 {
+                    this.danmakuFailures = Math.Min(4, this.danmakuFailures + 1);
+                    this.danmakuRetryAfter = DateTimeOffset.UtcNow.AddMilliseconds(this.DanmakuRetryDelay());
                     this.logger.Write(ex is ExecutionRejectedException ? LogEventLevel.Verbose : LogEventLevel.Warning, ex, "连接弹幕服务器时出错");
 
                     if (!this.ct.IsCancellationRequested)
@@ -663,6 +669,7 @@ namespace BililiveRecorder.Core
             this.DanmakuConnected = e.Connected;
             if (e.Connected)
             {
+                this.danmakuFailures = 0; this.danmakuRetryAfter = DateTimeOffset.MinValue;
                 this.danmakuClientConnectTime = DateTimeOffset.UtcNow;
                 this.logger.Information("弹幕服务器已连接");
             }

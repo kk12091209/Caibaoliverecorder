@@ -1,21 +1,22 @@
+import { ui } from './ui-copy.js';
 export const TIMESTAMP_STYLE_SETTING='preview-timestamp-style';
 export const TIMESTAMP_STYLES=Object.freeze([
-  Object.freeze({value:'outline',label:'极简描边'}),
-  Object.freeze({value:'inline',label:'清晰分隔'}),
-  Object.freeze({value:'stacked',label:'双层时钟'})
+  Object.freeze({value:'outline',label:ui.timestamp.极简描边}),
+  Object.freeze({value:'inline',label:ui.timestamp.清晰分隔}),
+  Object.freeze({value:'stacked',label:ui.timestamp.双层时钟})
 ]);
 export const DEFAULT_TIMESTAMP_STYLE='outline';
 export const TIMESTAMP_POSITION_SETTING='preview-timestamp-position';
 export const TIMESTAMP_POSITIONS=Object.freeze([
-  Object.freeze({value:'top-left',label:'左上角'}),
-  Object.freeze({value:'top-right',label:'右上角'}),
-  Object.freeze({value:'bottom-left',label:'左下角'}),
-  Object.freeze({value:'bottom-right',label:'右下角'})
+  Object.freeze({value:'top-left',label:ui.common.左上角}),
+  Object.freeze({value:'top-right',label:ui.common.右上角}),
+  Object.freeze({value:'bottom-left',label:ui.common.左下角}),
+  Object.freeze({value:'bottom-right',label:ui.common.右下角})
 ]);
 export const DEFAULT_TIMESTAMP_POSITION='top-left';
 
 export function validateTimestampStyle(value) {
-  if(!TIMESTAMP_STYLES.some(style=>style.value===value))throw new Error('请选择有效的时间戳样式。');
+  if(!TIMESTAMP_STYLES.some(style=>style.value===value))throw new Error(ui.timestamp.请选择有效的时间戳样式);
   return value;
 }
 export function normalizedTimestampStyle(value) {
@@ -24,7 +25,7 @@ export function normalizedTimestampStyle(value) {
 export const savedTimestampStyle=store=>normalizedTimestampStyle(store.setting(TIMESTAMP_STYLE_SETTING));
 
 export function validateTimestampPosition(value) {
-  if(!TIMESTAMP_POSITIONS.some(position=>position.value===value))throw new Error('请选择有效的时间戳位置。');
+  if(!TIMESTAMP_POSITIONS.some(position=>position.value===value))throw new Error(ui.timestamp.请选择有效的时间戳位置);
   return value;
 }
 export function normalizedTimestampPosition(value) {

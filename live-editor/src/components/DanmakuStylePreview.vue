@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {ref,computed,watch,nextTick,onBeforeUnmount} from 'vue';
 import image from '../assets/danmaku-style-preview.webp';
 import {danmakuGeometry} from '../../shared/danmaku-style.js';
@@ -32,7 +34,7 @@ async function request(input,signal){
     signal.throwIfAborted();
     const response=await fetch('/api/danmaku-style/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input),signal});
     if(response.status===409&&attempt<4){await new Promise(resolve=>setTimeout(resolve,250));continue;}
-    if(!response.ok)throw new Error((await response.json()).error||'样式预览生成失败。');
+    if(!response.ok)throw new Error((await response.json()).error||ui.danmakuPreview.样式预览生成失败);
     return response;
   }
 }
@@ -47,7 +49,7 @@ async function render(version,motion){
     const response=await request(input,signal),count=Number(response.headers.get('X-Danmaku-Preview-Count'));
     const blob=await response.blob();if(disposed||version!==generation)return;
     const url=URL.createObjectURL(blob),check=new Image();
-    try{check.src=url;await check.decode();}catch{URL.revokeObjectURL(url);throw new Error('样式预览图片无法显示。');}
+    try{check.src=url;await check.decode();}catch{URL.revokeObjectURL(url);throw new Error(ui.danmakuPreview.样式预览图片无法显示);}
     if(disposed||version!==generation){URL.revokeObjectURL(url);return;}
     if(motion&&!motionFinished)pendingOverlay.value=url;
     else{showStill(url);finishMotion();}
@@ -77,7 +79,7 @@ async function renderMotion(input,version,signal){
   }catch(e){
     if(disposed||version!==generation||signal.aborted)return false;
     retainClip(visibleClip.value);motionLoading.value=false;motionFinished=true;
-    motionError.value='滚动预览暂时无法播放，已保留静态预览。';return false;
+    motionError.value=ui.danmakuPreview.滚动预览暂时无法播放已保留静态预览;return false;
   }
 }
 function ended(clip){
@@ -88,7 +90,7 @@ function ended(clip){
 }
 function playbackError(clip){
   if(clip.version!==generation)return;
-  motionFinished=true;finishMotion();motionError.value='滚动预览暂时无法播放，已保留静态预览。';
+  motionFinished=true;finishMotion();motionError.value=ui.danmakuPreview.滚动预览暂时无法播放已保留静态预览;
 }
 watch(()=>[props.style?.size,props.style?.opacity,props.style?.speed,props.style?.fps,props.rate,props.font?.id,props.style?.areaTop,props.style?.areaHeight,adjusting.value,JSON.stringify(props.highlightStyle),JSON.stringify(props.highlighted)],(value,previous=[])=>{
   schedule(!!previous.length&&(value[2]!==previous[2]||value[3]!==previous[3]));
@@ -97,16 +99,16 @@ onBeforeUnmount(()=>{disposed=true;generation++;clearTimeout(timer);controller?.
 </script>
 <template>
   <figure class="style-preview">
-    <div class="area-toolbar"><div><strong>弹幕展示区域</strong><output>高度 {{ percent(props.style.areaHeight) }}% · 顶部 {{ percent(props.style.areaTop) }}%</output></div><button type="button" class="text-button" :disabled="disabled||(props.style.areaHeight===1&&props.style.areaTop===0)" @click="emit('area-change',{areaTop:0,areaHeight:1})">恢复全屏</button></div>
+    <div class="area-toolbar"><div><strong>{{ ui.danmakuPreview.弹幕展示区域 }}</strong><output>{{ ui.danmakuPreview.高度 }} {{ percent(props.style.areaHeight) }}{{ ui.danmakuPreview.顶部 }} {{ percent(props.style.areaTop) }}%</output></div><button type="button" class="text-button" :disabled="disabled||(props.style.areaHeight===1&&props.style.areaTop===0)" @click="emit('area-change',{areaTop:0,areaHeight:1})">{{ ui.danmakuPreview.恢复全屏 }}</button></div>
     <div class="style-preview-image" :data-sample-count="samples" :data-font-size="geometry.size" :data-opacity="geometry.opacity" :data-ready="!loading&&!error&&!!(overlay||pendingOverlay)" :data-motion="motionLoading?'loading':visibleClip?'playing':'idle'">
-      <img :src="overlay||image" alt="当前弹幕样式预览" width="1672" height="940" draggable="false"/>
-      <video v-for="clip in clips" :key="clip.url" :ref="node=>node?players.set(clip.url,node):players.delete(clip.url)" class="style-preview-motion" :class="{'is-visible':visibleClip===clip.url}" :src="clip.url" muted playsinline disablepictureinpicture aria-label="弹幕滚动预览，播放一轮后恢复静态" @ended="ended(clip)" @error="playbackError(clip)"/>
+      <img :src="overlay||image" :alt="ui.danmakuPreview.当前弹幕样式预览" width="1672" height="940" draggable="false"/>
+      <video v-for="clip in clips" :key="clip.url" :ref="node=>node?players.set(clip.url,node):players.delete(clip.url)" class="style-preview-motion" :class="{'is-visible':visibleClip===clip.url}" :src="clip.url" muted playsinline disablepictureinpicture :aria-label="ui.danmakuPreview.弹幕滚动预览播放一轮后恢复静态" @ended="ended(clip)" @error="playbackError(clip)"/>
       <DanmakuAreaSelector :area-top="props.style.areaTop" :area-height="props.style.areaHeight" :disabled="disabled" @change="emit('area-change',$event)" @dragging="adjusting=$event"/>
-      <span v-if="motionLoading||(!visibleClip&&loading)" class="preview-status" role="status">{{ adjusting?'松开后更新弹幕预览':motionLoading?'正在准备滚动预览…':'正在更新预览…' }}</span>
+      <span v-if="motionLoading||(!visibleClip&&loading)" class="preview-status" role="status">{{ adjusting?ui.danmakuPreview.松开后更新弹幕预览:motionLoading?ui.danmakuPreview.正在准备滚动预览:ui.danmakuPreview.正在更新预览 }}</span>
     </div>
-    <figcaption><span>{{ visibleClip&&!motionLoading?'滚动预览 · '+props.style.speed.toFixed(1)+' 倍 · '+props.style.fps+' 帧':'导出样式预览' }}</span><span>{{ samples }} 条示例弹幕</span></figcaption>
-    <div class="area-help"><p class="motion-hint">拖动上下手柄调整高度（最小 1/3），按住框内上下移动；宽度固定全屏。松开后自动预览，也可播放查看滚动效果。</p><button type="button" class="button motion-preview-button" :disabled="disabled||loading||adjusting||motionLoading" @click="schedule(true)">{{ visibleClip?'重新播放':'播放滚动预览' }}</button></div>
-    <p v-if="error" class="inline-warning" role="alert">{{ error }} <button class="text-button" @click="schedule()">重新预览</button></p>
+    <figcaption><span>{{ visibleClip&&!motionLoading?ui.danmakuPreview.滚动预览+props.style.speed.toFixed(1)+ui.danmakuPreview.倍+props.style.fps+ui.danmakuPreview.帧:ui.danmakuPreview.导出样式预览 }}</span><span>{{ samples }} {{ ui.danmakuPreview.条示例弹幕 }}</span></figcaption>
+    <div class="area-help"><button type="button" class="button motion-preview-button" :disabled="disabled||loading||adjusting||motionLoading" @click="schedule(true)">{{ visibleClip?ui.danmakuPreview.重新播放:ui.danmakuPreview.播放滚动预览 }}</button></div>
+    <p v-if="error" class="inline-warning" role="alert">{{ error }} <button class="text-button" @click="schedule()">{{ ui.danmakuPreview.重新预览 }}</button></p>
     <p v-if="motionError" class="inline-warning" role="status">{{ motionError }}</p>
   </figure>
 </template>

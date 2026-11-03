@@ -1,7 +1,8 @@
+import { ui } from '../shared/ui-copy.js';
 // The editor's recording clock uses Beijing time, independently of the OS zone.
 const OFFSET_MS=8*60*60*1000;
 const EPSILON_SECONDS=.000001;
-const INVALID_INPUT='请填写有效的录制日期和时间（北京时间）。';
+const INVALID_INPUT=ui.recordingTime.请填写有效的录制日期和时间北京时间;
 const pad=(value,width=2)=>String(value).padStart(width,'0');
 
 function civilMilliseconds(year,month,day,hour,minute,second,millisecond) {
@@ -71,14 +72,14 @@ export function recordingTimeBounds(session,sources,duration=session?.duration) 
 export function positionAtRecordingTime(epochMs,session,sources,duration=session?.duration) {
   if(!Number.isFinite(epochMs))throw new Error(INVALID_INPUT);
   const spans=spansFor(session,sources,duration),bounds=recordingTimeBounds(session,sources,duration);
-  if(!bounds)throw new Error('素材还没有可定位的录制内容，请使用视频时间定位。');
-  if(epochMs<bounds.min-.001)throw new Error('这个时间早于已录制内容的开始时间。');
-  if(epochMs>bounds.max+.001)throw new Error(session?.status==='recording'||session?.status==='waiting'||session?.status==='finishing'?'这个时间尚未录制，请选择已录制的时间。':'这个时间晚于已录制内容的结束时间。');
+  if(!bounds)throw new Error(ui.recordingTime.缺少录制内容无法定位);
+  if(epochMs<bounds.min-.001)throw new Error(ui.recordingTime.这个时间早于已录制内容的开始时间);
+  if(epochMs>bounds.max+.001)throw new Error(session?.status==='recording'||session?.status==='waiting'||session?.status==='finishing'?ui.recordingTime.这个时间尚未录制请选择已录制的时间:ui.recordingTime.这个时间晚于已录制内容的结束时间);
   const candidates=spans.flatMap(span=>{
     const seconds=span.start+(epochMs-span.wall)/1000;
     return seconds>=span.start-EPSILON_SECONDS&&seconds<=span.end+EPSILON_SECONDS?[Math.max(span.start,Math.min(span.end,seconds))]:[];
   });
-  if(!candidates.length)throw new Error('这个时间处于断流或未录制的间隙，请选择已有画面的时间。');
-  if(candidates.some(seconds=>Math.abs(seconds-candidates[0])>EPSILON_SECONDS))throw new Error('这个录制时间对应多个视频位置，请切换到视频时间定位。');
+  if(!candidates.length)throw new Error(ui.recordingTime.录制空档无法定位);
+  if(candidates.some(seconds=>Math.abs(seconds-candidates[0])>EPSILON_SECONDS))throw new Error(ui.recordingTime.录制时间存在歧义);
   return candidates[0];
 }

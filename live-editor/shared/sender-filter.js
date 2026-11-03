@@ -1,3 +1,4 @@
+import { ui } from './ui-copy.js';
 const uid=value=>typeof value==='string'&&/^[1-9]\d{0,30}$/.test(value);
 export function senderFilterFor(message){
   const originalName=message.originalUser??message.user;
@@ -8,11 +9,11 @@ export function senderFilterFor(message){
 }
 export function validateSenderFilter(value){
   if(value==null)return null;
-  if(typeof value!=='object'||Array.isArray(value)||typeof value.name!=='string'||!value.name.trim()||value.name.length>200)throw new Error('发送者筛选条件无效。');
+  if(typeof value!=='object'||Array.isArray(value)||typeof value.name!=='string'||!value.name.trim()||value.name.length>200)throw new Error(ui.messageEditor.发送者筛选无效);
   if(value.mode==='uid'&&uid(value.uid)&&['bilibili','douyin'].includes(value.platform)&&Object.keys(value).every(k=>['mode','name','uid','platform'].includes(k)))return {mode:'uid',name:value.name,uid:value.uid,platform:value.platform};
   if(value.mode==='name'&&Object.keys(value).every(k=>['mode','name'].includes(k)))return {mode:'name',name:value.name};
   if(value.mode==='approx'&&Object.keys(value).every(k=>['mode','name','prefix','suffix'].includes(k))&&[value.prefix,value.suffix].every(x=>typeof x==='string'&&x.length>0&&x.length<=200))return {mode:'approx',name:value.name,prefix:value.prefix,suffix:value.suffix};
-  throw new Error('发送者筛选条件无效。');
+  throw new Error(ui.messageEditor.发送者筛选无效);
 }
 export function matchesSender(message,filter){
   if(!filter)return true;

@@ -34,7 +34,27 @@ namespace BililiveRecorder.Core
                     logger.Debug(nameof(this.IpBlockedHttp412CircuitBreakerPolicy) + " onHalfOpen");
                 });
 
-            this.RequestFailedCircuitBreakerPolicy = Policy
+            this.RequestFailedCircuitBreakerPolicy = CreateRequestBreaker("房间状态");
+            var danmakuBreaker = CreateRequestBreaker("弹幕连接");
+            var streamBreaker = CreateRequestBreaker("直播流地址");
+
+            var retry = Policy.Handle<Exception>().RetryAsync();
+
+            var bulkhead = Policy.BulkheadAsync(maxParallelization: 5, maxQueuingActions: 200);
+
+            this.memoryCache = new MemoryCache(new MemoryCacheOptions());
+
+            this[PolicyNames.PolicyRoomInfoApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
+            // A reconnect must obtain a fresh authentication token. Reusing a
+            // rejected token (or one issued before a cookie change) repeats the
+            // same failure until the old two-minute cache expires.
+            this[PolicyNames.PolicyDanmakuApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, danmakuBreaker);
+            this[PolicyNames.PolicyStreamApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, streamBreaker);
+        }
+
+        private static AsyncCircuitBreakerPolicy CreateRequestBreaker(string category)
+        {
+            return Policy
                 .Handle<HttpRequestException>()
                 .Or<JsonException>()
                 .Or<BilibiliApiResponseCodeNotZeroException>(x =>
@@ -50,29 +70,17 @@ namespace BililiveRecorder.Core
                 durationOfBreak: TimeSpan.FromMinutes(1),
                 onBreak: (_, _) =>
                 {
-                    logger.Warning("大部分请求出错，暂停发送请求");
+                    logger.Warning("{Category} 大部分请求出错，暂停该类请求", category);
                 },
                 onReset: () =>
                 {
-                    logger.Information("恢复正常发送请求");
+                    logger.Information("{Category} 恢复正常发送请求", category);
                 },
                 onHalfOpen: () =>
                 {
-                    logger.Debug(nameof(this.RequestFailedCircuitBreakerPolicy) + " onHalfOpen");
+                    logger.Debug(category + " onHalfOpen");
                 });
 
-            var retry = Policy.Handle<Exception>().RetryAsync();
-
-            var bulkhead = Policy.BulkheadAsync(maxParallelization: 5, maxQueuingActions: 200);
-
-            this.memoryCache = new MemoryCache(new MemoryCacheOptions());
-
-            this[PolicyNames.PolicyRoomInfoApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
-            // A reconnect must obtain a fresh authentication token. Reusing a
-            // rejected token (or one issued before a cookie change) repeats the
-            // same failure until the old two-minute cache expires.
-            this[PolicyNames.PolicyDanmakuApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
-            this[PolicyNames.PolicyStreamApiRequestAsync] = Policy.WrapAsync(bulkhead, retry, this.IpBlockedHttp412CircuitBreakerPolicy, this.RequestFailedCircuitBreakerPolicy);
         }
 
         public readonly MemoryCache memoryCache;

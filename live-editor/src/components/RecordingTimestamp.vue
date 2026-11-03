@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createRecordingClock, toRecordingInput } from '../recording-time.js';
 import TimestampText from './TimestampText.vue';
@@ -50,7 +52,7 @@ onBeforeUnmount(()=>observer?.disconnect());
 <template>
   <!-- DOM only: this component never touches video pixels or export settings. -->
   <div ref="surface" class="recording-timestamp-layer" aria-hidden="true">
-    <TimestampText v-if="label&&frame" class="recording-timestamp" :label="label" :variant="timestampStyle" :position="timestampPosition" :style="frame" :data-epoch="epoch" title="录制时间（北京时间），仅用于本地预览"/>
+    <TimestampText v-if="label&&frame" class="recording-timestamp" :label="label" :variant="timestampStyle" :position="timestampPosition" :style="frame" :data-epoch="epoch" :title="ui.timestamp.录制时间北京时间仅用于本地预览"/>
   </div>
 </template>
 

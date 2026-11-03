@@ -1,5 +1,6 @@
 import {PreparationReconciliation} from './preparation-reconciliation.js';
 import {LivePreparationPolicy} from './live-preparation-policy.js';
+import {cacheWarningSnapshot} from './preparation-cache-warning.js';
 
 const ACTIVE = new Set(['recording', 'waiting', 'finishing', 'importing']);
 const interrupted = error => ['AbortError', 'PREP_CANCELLED', 'ABORT_ERR'].includes(error?.name) || ['PREP_CANCELLED', 'ABORT_ERR'].includes(error?.code);
@@ -36,6 +37,9 @@ export class BackgroundPreparation {
     this.enabled = typeof saved === 'boolean' ? saved : enabled !== false;
     if (typeof saved !== 'boolean') store.setting('backgroundPreparationEnabled', this.enabled);
     store.run("UPDATE preparation_jobs SET status=CASE WHEN paused=1 THEN 'paused' ELSE 'queued' END,reason=CASE WHEN paused=1 THEN 'user' ELSE '' END WHERE status='preparing'");
+    // Retired quota waits must not strand old jobs after upgrading. Explicit
+    // user pauses and real disk-space waits retain their existing behavior.
+    if (media.renderCache?.maxBytes === Infinity) store.run("UPDATE preparation_jobs SET status=?,reason=?,error='',next_retry=0,live_next_source_seconds=NULL WHERE paused=0 AND status IN ('waiting','queued') AND reason='capacity'", this.enabled ? 'queued' : 'waiting', this.enabled ? '' : 'disabled');
     const first = store.setting('backgroundPreparationBaselineEstablished') !== true;
     store.transaction(() => {
       this.discover(first);
@@ -50,7 +54,7 @@ export class BackgroundPreparation {
   status(id) {
     const columns = 'p.session,p.status,p.prepared_seconds AS preparedSeconds,p.total_seconds AS totalSeconds,p.bytes,p.reason,p.error';
     if (id !== undefined) return this.store.get(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE p.session=? AND s.deleted_at=''`, id) || null;
-    return { enabled: this.enabled, liveEnabled:this.liveEnabled, live:{...this.liveState,active:!!this.active?.live}, items: this.store.all(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' ORDER BY s.created DESC,p.session`) };
+    return { cache:cacheWarningSnapshot(this.store,this.media.renderCache?.snapshot()), enabled: this.enabled, liveEnabled:this.liveEnabled, live:{...this.liveState,active:!!this.active?.live}, items: this.store.all(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' ORDER BY s.created DESC,p.session`) };
   }
   discover(first = false) {
     if (this.closed) return;
@@ -90,7 +94,7 @@ export class BackgroundPreparation {
   reconcileExports() { return this.reconciliation.tick(); }
   available(id) { return !this.closed && !this.blocked.has(id) && !this.changing.has(id) && !this.store.deletions?.has(id) && !!this.store.session(id); }
   waitRows(reason, preserveActive = false) {
-    this.store.run("UPDATE preparation_jobs SET status='waiting',reason=?,updated=? WHERE paused=0 AND status IN ('queued','preparing','waiting') AND (status!='waiting' OR reason!=?) AND session!=?", reason, this.stamp(), reason, preserveActive ? this.active?.id || '' : '');
+    this.store.run("UPDATE preparation_jobs SET status='waiting',reason=?,updated=? WHERE paused=0 AND status IN ('queued','preparing','waiting') AND reason NOT IN ('capacity','disk','space','space-check') AND (status!='waiting' OR reason!=?) AND session!=?", reason, this.stamp(), reason, preserveActive ? this.active?.id || '' : '');
   }
   interrupt(reason, id) {
     const active = this.active;
@@ -247,7 +251,7 @@ export class BackgroundPreparation {
         // it parked until an explicit retry, otherwise another material can
         // evict its blocks and start an endless overnight rebuild cycle.
         const retry = error.capacity === true ? Number.MAX_SAFE_INTEGER : this.now() + 30000;
-        this.store.run("UPDATE preparation_jobs SET status='waiting',reason='space',error=?,next_retry=?,updated=? WHERE session=? AND generation=?", error.message || '磁盘空间不足，后台预处理已暂停。', retry, this.stamp(), active.id, active.generation);
+        this.store.run("UPDATE preparation_jobs SET status='waiting',reason=?,error=?,next_retry=?,updated=? WHERE session=? AND generation=?", error.spaceReason || (error.capacity?'capacity':'space'), error.message || '磁盘空间不足，后台预处理已暂停。', retry, this.stamp(), active.id, active.generation);
       } else {
         outcome='failure';
         // Unexpected renderer/storage errors require an explicit retry or a
@@ -321,7 +325,7 @@ export class BackgroundPreparation {
     try {
       const capacity = this.row(id)?.next_retry === Number.MAX_SAFE_INTEGER;
       this.store.run("UPDATE preparation_jobs SET generation=generation+1,status=CASE WHEN paused=1 THEN 'paused' ELSE ? END,prepared_seconds=0,bytes=0,reason=CASE WHEN paused=1 THEN 'user' ELSE ? END,error=CASE WHEN ? THEN error ELSE '' END,next_retry=?,live_next_source_seconds=NULL,updated=? WHERE session=?",
-        capacity ? 'waiting' : 'queued', capacity ? 'space' : '', +capacity, capacity ? Number.MAX_SAFE_INTEGER : 0, this.stamp(), id);
+        capacity ? 'waiting' : 'queued', capacity ? 'capacity' : '', +capacity, capacity ? Number.MAX_SAFE_INTEGER : 0, this.stamp(), id);
       await this.interrupt('foreground', id);
       if (!this.closed && this.store.session(id)) await this.media.invalidatePreparation?.(id);
     } finally {

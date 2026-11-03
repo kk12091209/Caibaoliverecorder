@@ -1,30 +1,38 @@
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue';
-import { windowPercent } from '../timeline-signals.js';
+import { ui } from '../../shared/ui-copy.js';
+
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { windowPercent,edgeVelocity,panWindow } from '../timeline-signals.js';
 import { formatVideoTime } from '../video-time.js';
 
-const props=defineProps({kind:String,time:Number,from:Number,to:Number,min:{type:Number,default:0},max:Number,fps:{type:Number,default:30},disabled:Boolean});
-const emit=defineEmits(['change','commit','start','end']);
+const props=defineProps({kind:String,time:Number,from:Number,to:Number,min:{type:Number,default:0},max:Number,duration:Number,fps:{type:Number,default:30},disabled:Boolean});
+const emit=defineEmits(['change','commit','start','end','pan']);
 const handle=ref(null),dragging=ref(false);
-let drag=null;
-const label=computed(()=>props.kind==='start'?'起点':'终点');
-const percent=computed(()=>windowPercent(props.time,props.from,props.to));
+let drag=null,frame=0;
+const label=computed(()=>props.kind==='start'?ui.common.起点:ui.common.终点);
+const percent=computed(()=>Math.max(0,Math.min(100,windowPercent(props.time,props.from,props.to))));
 const bounds=()=>({min:Math.max(0,props.min),max:Math.max(props.min,props.max)});
 function change(time){const {min,max}=bounds();const value=Math.max(min,Math.min(max,Math.round(time*1000)/1000));emit('change',value);return value;}
 function down(event){
   if(props.disabled||event.button!==0)return;
   const rect=handle.value.parentElement.getBoundingClientRect();if(!(rect.width>0&&props.to>props.from))return;
-  drag={pointer:event.pointerId,x:event.clientX,time:props.time,original:props.time,scale:(props.to-props.from)/rect.width,from:props.from,to:props.to};
-  dragging.value=true;handle.value.setPointerCapture(event.pointerId);handle.value.focus({preventScroll:true});emit('start');
+  drag={pointer:event.pointerId,x:event.clientX,time:props.time,original:props.time,scale:(props.to-props.from)/rect.width,from:props.from,to:props.to,clientX:event.clientX,last:performance.now()};
+  dragging.value=true;handle.value.setPointerCapture(event.pointerId);handle.value.focus({preventScroll:true});emit('start');frame=requestAnimationFrame(tick);
 }
 function move(event){
   if(drag?.pointer!==event.pointerId)return;
   const time=drag.time+(event.clientX-drag.x)*drag.scale*(event.shiftKey?.1:1);
-  drag.x=event.clientX;drag.time=change(Math.max(drag.from,Math.min(drag.to,time)));
+  drag.x=event.clientX;drag.clientX=event.clientX;drag.time=change(Math.max(props.from,Math.min(props.to,time)));
 }
+function tick(now){
+  if(!drag)return;const rect=handle.value.parentElement.getBoundingClientRect(),dt=Math.min(.05,(now-drag.last)/1000);drag.last=now;
+  const velocity=edgeVelocity(drag.clientX-rect.left,rect.width,props.to-props.from),next=panWindow(props.duration,{from:props.from,to:props.to},props.from+velocity*dt),delta=next.from-props.from;
+  if(delta){const before=drag.time;drag.time=change(drag.time+delta);if(drag.time!==before)emit('pan',props.from+drag.time-before);}frame=requestAnimationFrame(tick);
+}
+function blur(){if(drag)finish({pointerId:drag.pointer},true);}
 function finish(event,cancel=false){
   if(!drag||event.pointerId!==drag.pointer)return;
-  const current=drag;drag=null;dragging.value=false;
+  const current=drag;drag=null;cancelAnimationFrame(frame);dragging.value=false;
   if(cancel)change(current.original);else emit('commit',current.time);
   if(handle.value?.hasPointerCapture(current.pointer))handle.value.releasePointerCapture(current.pointer);
   emit('end');
@@ -40,11 +48,12 @@ function key(event){
   else return;
   event.preventDefault();emit('commit',change(time));
 }
-onBeforeUnmount(()=>{if(drag){drag=null;emit('end');}});
+onMounted(()=>window.addEventListener('blur',blur));
+onBeforeUnmount(()=>{window.removeEventListener('blur',blur);blur();cancelAnimationFrame(frame);});
 </script>
 
 <template>
-  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+'标记'" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatVideoTime(time)" :aria-disabled="disabled" :title="label+' '+formatVideoTime(time)+'；拖动调整，Shift 小幅拖动，方向键逐帧微调'" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
+  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+ui.timeline.标记" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatVideoTime(time)" :aria-disabled="disabled" :title="label+' '+formatVideoTime(time)+ui.timeline.标记拖动提示" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
     <span :style="{'--label-shift':`max(0px, calc(80px - ${percent}cqw))`}">{{ kind==='start'?'I':'O' }} {{ label }}</span>
   </div>
 </template>

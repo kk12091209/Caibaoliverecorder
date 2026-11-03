@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {ref,computed,watch,onMounted,onBeforeUnmount} from 'vue';
 import {giftCards,giftGeometry,giftPrice} from '../../shared/gifts.js';
 import GiftIcon from './GiftIcon.vue';
@@ -14,5 +16,5 @@ watch(()=>[props.video,props.video?.videoWidth,props.loading],resize);
 onMounted(()=>{observer=new ResizeObserver(resize);observer.observe(surface.value.parentElement);resize();});
 onBeforeUnmount(()=>observer?.disconnect());
 </script>
-<template><div ref="surface" class="gift-surface" :style="{left:size.left+'px',top:size.top+'px',width:size.width+'px',height:size.height+'px'}" aria-label="画面礼物"><div v-for="(gift,lane) in cards" :key="gift.id" class="gift-card" :style="cardStyle(lane)"><GiftIcon :gift="gift" :style="{width:geometry(lane).icon+'px',height:geometry(lane).icon+'px'}"/><div><strong>{{ gift.user }}</strong><span>{{ gift.name }} × {{ gift.count }} · {{ giftPrice(gift) }}</span></div></div></div></template>
+<template><div ref="surface" class="gift-surface" :style="{left:size.left+'px',top:size.top+'px',width:size.width+'px',height:size.height+'px'}" :aria-label="ui.gifts.画面礼物"><div v-for="(gift,lane) in cards" :key="gift.id" class="gift-card" :style="cardStyle(lane)"><GiftIcon :gift="gift" :style="{width:geometry(lane).icon+'px',height:geometry(lane).icon+'px'}"/><div><strong>{{ gift.user }}</strong><span>{{ gift.name }} × {{ gift.count }} · {{ giftPrice(gift) }}</span></div></div></div></template>
 <style scoped>.gift-surface{position:absolute;pointer-events:none;overflow:hidden;z-index:5}.gift-card{position:absolute;box-sizing:border-box;display:flex;align-items:center;background:#372535ce;border-radius:6px;color:white;line-height:1.3}.gift-card>div{min-width:0;display:grid;gap:3px}.gift-card strong,.gift-card span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gift-card strong{font-weight:600}</style>

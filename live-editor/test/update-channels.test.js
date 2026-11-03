@@ -1,3 +1,4 @@
+import { ui } from '../shared/ui-copy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -113,13 +114,13 @@ test('校验绑定发布密钥、版本、架构和固定目标，拒绝恶意�
   }
 });
 test('菜包宇宙链接在 Windows、Mac 桌面桥和浏览器中打开固定官网', async () => {
-  const source = (await fs.readFile(new URL('../src/desktop.js', import.meta.url), 'utf8')).replace(/export /g, '');
+  const source = (await fs.readFile(new URL('../src/desktop.js', import.meta.url), 'utf8')).replace("import { ui } from '../shared/ui-copy.js';", '').replace(/export /g, '');
   for (const platform of ['windows', 'mac', 'browser']) {
     const messages = [], opened = [];
     const window = { addEventListener() {}, open: (...args) => opened.push(args) };
     if (platform === 'windows') window.chrome = { webview: { addEventListener() {}, postMessage: value => messages.push(value) } };
     if (platform === 'mac') window.webkit = { messageHandlers: { caibo: { postMessage: value => messages.push(value) } } };
-    vm.runInNewContext(source + '\nopenStudioPage();', { window, setTimeout, clearTimeout });
+    vm.runInNewContext(source + '\nopenStudioPage();', { ui, window, setTimeout, clearTimeout });
     if (platform === 'browser') assert.equal(opened[0][0], 'https://www.caibao.media/');
     else { assert.equal(messages[0].action, 'openExternal'); assert.equal(messages[0].url, 'https://www.caibao.media/'); assert.equal(opened.length, 0); }
   }

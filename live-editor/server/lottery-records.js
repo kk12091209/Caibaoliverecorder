@@ -1,3 +1,4 @@
+import {cursorFilter} from './feed-cursor.js';
 import {createHash} from 'node:crypto';
 import {LOTTERY_USER,validateLotteryNote} from '../shared/lottery-records.js';
 
@@ -62,10 +63,11 @@ const publicRecord=row=>row&&({id:row.id,session:row.session,type:'lottery',user
   phrase:row.phrase,note:row.note,text:row.note||row.phrase||'天选开奖',revision:row.revision,state:row.state,expectedWinners:row.expected,
   winners:JSON.parse(row.winners),winnerCount:JSON.parse(row.winners).length,participants:row.participants,timeKind:row.time_kind,exportable:false});
 export function lotteryRecord(store,session,id){return publicRecord(store.get('SELECT * FROM lottery_records WHERE session=? AND id=?',session,id));}
-export function lotteryMessages(store,session,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,at}={}){
+export function lotteryMessages(store,session,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,at,page}={}){
   const args=[session,from,to,`%${search}%`,`%${search}%`];
   const query="SELECT * FROM lottery_records WHERE session=? AND time>=? AND time<=? AND state!='ongoing' AND (CASE WHEN note!='' THEN note ELSE phrase END LIKE ? OR '天选时刻' LIKE ?)";
-  const rows=Number.isFinite(at)?store.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit):store.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
+  const paged=query+cursorFilter('l',page,args);
+  const rows=page?store.all(paged+` ORDER BY time ${page.direction==='before'?'DESC':'ASC'},id ${page.direction==='before'?'DESC':'ASC'} LIMIT ?`,...args,limit):Number.isFinite(at)?store.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit):store.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
   return rows.map(row=>{const {winners,...summary}=publicRecord(row);return summary;});
 }
 export function saveLotteryNote(store,session,id,input){

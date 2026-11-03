@@ -1,3 +1,4 @@
+import { ui } from './ui-copy.js';
 export const DANMAKU_SIZE_STEPS = Object.freeze([0.4, 0.6, 0.8, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]);
 export const DANMAKU_SPEED_STEPS = Object.freeze(Array.from({ length: 16 }, (_, index) => (index + 5) / 10));
 export const MIN_DANMAKU_AREA_HEIGHT = 1 / 3;
@@ -6,15 +7,15 @@ export const DANMAKU_STYLE_SETTING = 'danmaku-style';
 
 export function validateDanmakuStyle(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['size', 'opacity', 'speed', 'fps', 'areaTop', 'areaHeight'].includes(key)) || !DANMAKU_SIZE_STEPS.includes(value.size) || !Number.isInteger(value.opacity) || value.opacity < 0 || value.opacity > 100) {
-    throw new Error('请选择有效的弹幕字号档位和 0～100% 的透明度。');
+    throw new Error(ui.danmakuStyle.弹幕大小透明度无效);
   }
   // Existing settings and queued jobs predate speed / frame-rate selection.
   const speed = value.speed === undefined ? 1 : value.speed, fps = value.fps === undefined ? 60 : value.fps;
-  if (!DANMAKU_SPEED_STEPS.includes(speed) || ![30, 60].includes(fps)) throw new Error('弹幕速度须为 0.5～2.0（步长 0.1），帧率须为 30 或 60 帧。');
+  if (!DANMAKU_SPEED_STEPS.includes(speed) || ![30, 60].includes(fps)) throw new Error(ui.danmakuStyle.弹幕速度帧率无效);
   // Older settings and queued exports continue to use the full frame.
   const areaTop = value.areaTop === undefined ? 0 : value.areaTop, areaHeight = value.areaHeight === undefined ? 1 : value.areaHeight;
   if (!Number.isFinite(areaTop) || !Number.isFinite(areaHeight) || areaTop < 0 || areaHeight < MIN_DANMAKU_AREA_HEIGHT || areaHeight > 1 || areaTop + areaHeight > 1) {
-    throw new Error('弹幕展示区域高度须为画面的三分之一至全屏，且不能超出画面。');
+    throw new Error(ui.danmakuStyle.弹幕区域无效);
   }
   return { size: value.size, opacity: value.opacity, speed, fps, areaTop, areaHeight };
 }

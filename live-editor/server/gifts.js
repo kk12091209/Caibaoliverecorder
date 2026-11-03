@@ -1,3 +1,4 @@
+import {cursorFilter} from './feed-cursor.js';
 import {createHash} from 'node:crypto';
 import {giftEligible,normalizedGiftStyle,giftDescription,giftGeometry,GIFT_SECONDS} from '../shared/gifts.js';
 import {isGiftEvent} from '../shared/lottery-records.js';
@@ -39,7 +40,7 @@ export function saveGift(store,g){
     total_price=CASE WHEN excluded.count>=gift_events.count THEN COALESCE(excluded.total_price,gift_events.total_price) ELSE gift_events.total_price END,
     icon=CASE WHEN excluded.icon!='' THEN excluded.icon ELSE gift_events.icon END`,g.id,g.session,g.source,g.time,g.platform,g.type,g.user,g.name,g.giftId,g.count,g.totalPrice,g.currency,g.icon).changes;
 }
-export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,style,at}={}){
+export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,style,at,page}={}){
   style=normalizedGiftStyle(style);
   const args=[id,from,to,`%${search}%`,`%${search}%`,style.minBilibili,style.minDouyin];
   const query=`SELECT id,session,source,time,platform,type,user,name,gift_id AS giftId,count,total_price AS totalPrice,currency,icon
@@ -47,7 +48,8 @@ export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search=
     AND ((platform='bilibili' AND (?=0 OR total_price>=?)) OR (platform='douyin' AND (?=0 OR total_price>=?)))`;
   // Bind the same minimum twice without interpolating user input into SQL.
   args.splice(5,2,style.minBilibili,style.minBilibili,style.minDouyin*10,style.minDouyin*10);
-  const rows=Number.isFinite(at)?store.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit):store.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
+  const paged=query+cursorFilter('g',page,args);
+  const rows=page?store.all(paged+` ORDER BY time ${page.direction==='before'?'DESC':'ASC'},id ${page.direction==='before'?'DESC':'ASC'} LIMIT ?`,...args,limit):Number.isFinite(at)?store.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit):store.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
   return rows.map(g=>({...g,text:giftDescription(g),color:'16766069',iconUrl:g.icon?`/api/gift-icons/${createHash('sha256').update(g.icon).digest('hex')}.png`:''}));
 }
 const assTime=t=>{t=Math.max(0,t);return `${Math.floor(t/3600)}:${String(Math.floor(t/60)%60).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`;};

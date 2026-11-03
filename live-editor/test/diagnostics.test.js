@@ -127,3 +127,10 @@ test('connection failure keeps only known stages, safe categories, numeric codes
  assert.match(text,/接口保护正在等待恢复.*0\.0 秒/);
  for(const secret of ['synthetic-api-body-secret','synthetic-socket-secret','private-phase-secret','private-category-secret'])assert.ok(!text.includes(secret));
 });
+
+test('未开播房间省略常规弹幕连接日志，故障每五分钟汇总且录制故障保留',async t=>{
+ const f=await fixture(t),stream=new PassThrough();f.log.rooms([{roomId:42,platform:'bilibili',streaming:false,recording:false}],{biliOnline:true});f.log.attach(stream,'B站核心');
+ for(let i=0;i<30;i++)stream.write('[INF] [DanmakuLifecycle] room=42 event=connecting\n[INF] [DanmakuLifecycle] room=42 event=authenticated\n[WRN] [DanmakuLifecycle] room=42 event=heartbeat-timeout\n');
+ f.advance(300000);stream.write('[WRN] [DanmakuLifecycle] room=42 event=heartbeat-timeout\n[WRN] 录制进度异常：视频时间停止推进\n');stream.end();await new Promise(resolve=>stream.once('end',resolve));await f.log.pending;
+ const text=await f.read('2026-10-06');assert.doesNotMatch(text,/正在连接弹幕服务器|弹幕认证通过/);assert.match(text,/过去 5 分钟 31 次/);assert.match(text,/视频时间停止推进/);
+});

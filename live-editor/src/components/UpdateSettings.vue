@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import { computed, ref } from 'vue';
 import { Download, RefreshCw, LoaderCircle } from 'lucide-vue-next';
 import { api } from '../api.js';
@@ -9,7 +11,7 @@ const busy=ref(false),message=ref(''),error=ref('');
 const update=computed(()=>props.state||{});
 const working=computed(()=>busy.value||['checking','downloading','installing'].includes(update.value.status));
 const percent=computed(()=>Math.min(100,Math.floor((update.value.received||0)/(update.value.candidate?.size||1)*100)));
-const status=computed(()=>({idle:'启动后会自动检查，也可手动检查。',checking:'正在检查更新…',current:'已是最新版本。',available:'发现可用更新',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验。',installing:'正在准备安装，完成后自动重新打开…',error:'暂时无法检查更新。'})[update.value.status]||'正在连接更新服务…');
+const status=computed(()=>({idle:ui.updates.启动后会自动检查也可手动检查,checking:ui.updates.正在检查更新,current:ui.updates.已是最新版本,available:ui.updates.发现可用更新,downloading:ui.updates.正在下载安装包,ready:ui.updates.安装包已下载并通过校验,installing:ui.updates.正在准备安装完成后自动重新打开,error:ui.updates.暂时无法检查更新})[update.value.status]||ui.updates.正在连接更新服务);
 async function action(name,input={}){
   if(busy.value)return;busy.value=true;error.value='';message.value='';
   try{emit('changed',await api('updates/'+name,input));}catch(e){error.value=e.message;}finally{busy.value=false;}
@@ -18,31 +20,31 @@ async function action(name,input={}){
 </script>
 
 <template>
-  <section class="update-settings" aria-label="软件更新">
-    <div class="update-heading"><strong>软件更新</strong><span>当前 {{ update.current?.version || '0.2.2' }}</span></div>
-    <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>自动检查更新并提醒</label>
-    <p class="muted">启动后自动检查，运行期间每天检查。发现新版本会弹窗提醒，由你确认更新，不会强制中断录制或导出。</p>
-    <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>检查更新</button><small v-if="update.checkedAt">上次检查 {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
+  <section class="update-settings" :aria-label="ui.common.软件更新">
+    <div class="update-heading"><strong>{{ ui.common.软件更新 }}</strong><span>{{ ui.updates.当前 }} {{ update.current?.version || '0.2.2' }}</span></div>
+    <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>{{ ui.updates.自动检查更新并提醒 }}</label>
+    <p class="muted">{{ ui.updates.发现新版本时提醒不中断录制或导出 }}</p>
+    <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>{{ ui.updates.检查更新 }}</button><small v-if="update.checkedAt">{{ ui.updates.上次检查 }} {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
     <p role="status">{{ status }}</p>
     <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
       <strong>{{ update.candidate.version }}</strong>
-      <p v-if="update.ignored" class="muted">已设置下次版本更新再提示；仍可在这里更新当前版本。</p>
+      <p v-if="update.ignored" class="muted">{{ ui.updates.延后更新提醒说明 }}</p>
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
-      <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" aria-label="更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">取消下载</button></template>
+      <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" :aria-label="ui.updates.更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">{{ ui.updates.取消下载 }}</button></template>
       <div v-else class="update-actions">
-        <button v-if="update.status==='ready'" class="button primary small" :disabled="working||update.autoInstall||!isDesktop" @click="action('apply')"><Download :size="14"/>{{ update.autoInstall?'等待空闲时更新…':'更新并重启' }}</button>
-        <button v-else class="button primary small" :disabled="working" @click="action('download',{key:update.candidate.key,autoInstall:isDesktop})"><Download :size="14"/>{{ isDesktop?'更新并重启':'下载更新' }}（{{ (update.candidate.size/1048576).toFixed(1) }} MB）</button>
-        <button v-if="update.autoInstall" class="button subtle small" :disabled="busy" @click="action('cancel')">取消自动更新</button><button v-else class="button subtle small" :disabled="working" @click="action('defer')">稍后提醒</button>
+        <button v-if="update.status==='ready'" class="button primary small" :disabled="working||update.autoInstall||!isDesktop" @click="action('apply')"><Download :size="14"/>{{ update.autoInstall?ui.updates.等待空闲时更新:ui.updates.更新并重启 }}</button>
+        <button v-else class="button primary small" :disabled="working" @click="action('download',{key:update.candidate.key,autoInstall:isDesktop})"><Download :size="14"/>{{ isDesktop?ui.updates.更新并重启:ui.updates.下载更新 }}（{{ (update.candidate.size/1048576).toFixed(1) }} MB）</button>
+        <button v-if="update.autoInstall" class="button subtle small" :disabled="busy" @click="action('cancel')">{{ ui.updates.取消自动更新 }}</button><button v-else class="button subtle small" :disabled="working" @click="action('defer')">{{ ui.updates.稍后提醒 }}</button>
       </div>
-      <p v-if="update.status==='ready'" class="muted">下载完成后，软件会在空闲时自动安装并重新打开。录像、导出视频和设置保留。</p>
+      <p v-if="update.status==='ready'" class="muted">{{ ui.updates.空闲时自动安装并重启录像和设置保留 }}</p>
       <p v-if="update.status==='ready'&&update.installBlocked" class="inline-warning">{{ update.installBlocked }}</p>
-      <p v-if="update.status==='ready'&&!isDesktop" class="muted">请回到桌面应用打开安装包。</p>
+      <p v-if="update.status==='ready'&&!isDesktop" class="muted">{{ ui.updates.请回到桌面应用打开安装包 }}</p>
     </div>
     <p v-if="error||update.error" class="inline-warning" role="alert">{{ error||update.error }}</p>
-    <p v-if="update.retryAt" class="muted" role="status">更新服务预计在 {{ new Date(update.retryAt).toLocaleString() }} 后允许重试。</p>
+    <p v-if="update.retryAt" class="muted" role="status">{{ ui.updates.更新服务预计在 }} {{ new Date(update.retryAt).toLocaleString() }} {{ ui.updates.后允许重试 }}</p>
     <p v-if="message" role="status">{{ message }}</p>
-    <button v-if="update.hasCache" class="text-button" :disabled="working" @click="action('clear')">清理已下载的安装包</button>
+    <button v-if="update.hasCache" class="text-button" :disabled="working" @click="action('clear')">{{ ui.updates.清理已下载的安装包 }}</button>
   </section>
 </template>
 

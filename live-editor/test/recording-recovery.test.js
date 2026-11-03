@@ -100,3 +100,9 @@ test('原始录制模式通过每次新的写盘统计确认推进',async t=>{
   for(let ms=0;ms<120000;ms+=2000){rooms[0].ioStats={diskBytesWritten:1000,endTime:String(ms)};await tick(ms);}
   assert.deepEqual(controls(),[]);
 });
+
+test('兜底等待停止时主播已下播，不重新启动录制',async t=>{
+  const {rooms,tick,controls}=fixture(t);await tick(0);await tick(30000);
+  rooms[0].recording=false;rooms[0].streaming=false;await tick(32000);
+  assert.deepEqual(controls().map(c=>c.route),['room/42/stop']);
+});

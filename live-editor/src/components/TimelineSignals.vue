@@ -1,11 +1,13 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {ref,computed,watch,onMounted,onBeforeUnmount} from 'vue';
 import {aggregateAudio,aggregateDensity,audioStateLabel,densityStateLabel,timeAtPixel,windowPercent} from '../timeline-signals.js';
 
 const props=defineProps({kind:{type:String,default:'audio'},audio:Object,density:Object,from:{type:Number,default:0},to:{type:Number,default:0},dataFrom:{type:Number,default:0},dataTo:{type:Number,default:0},position:{type:Number,default:0},selected:Boolean,loading:Boolean,error:String,disabled:Boolean});
 const emit=defineEmits(['seek']);
 const host=ref(null),canvas=ref(null),width=ref(0);let observer,frame=0;
-const label=computed(()=>props.kind==='audio'?audioStateLabel(props.audio,{selected:props.selected,loading:props.loading,error:props.error}):'弹幕密度');
+const label=computed(()=>props.kind==='audio'?audioStateLabel(props.audio,{selected:props.selected,loading:props.loading,error:props.error}):ui.timeline.弹幕密度);
 const densityHint=computed(()=>densityStateLabel(props.density,{selected:props.selected,error:props.error}));
 const cursor=computed(()=>props.position>=props.from&&props.position<=props.to?windowPercent(props.position,props.from,props.to):null);
 const currentValue=computed(()=>Math.min(props.to,Math.max(props.from,props.position)));
@@ -54,7 +56,7 @@ onBeforeUnmount(()=>{observer?.disconnect();if(frame)cancelAnimationFrame(frame)
 </script>
 
 <template>
-  <div ref="host" :class="['timeline-signal','signal-'+kind,{disabled}]" :role="kind==='density'?'slider':undefined" :tabindex="kind==='density'&&!disabled?0:undefined" :aria-label="kind==='density'?'弹幕密度定位':label" :aria-disabled="kind==='density'?disabled:undefined" :aria-valuemin="kind==='density'?from:undefined" :aria-valuemax="kind==='density'?to:undefined" :aria-valuenow="kind==='density'?currentValue:undefined" :title="kind==='density'?'有效弹幕越密集，柱形越高；点击定位画面':error||label" @click="kind==='density'&&seek($event)" @keydown="kind==='density'&&keySeek($event)">
+  <div ref="host" :class="['timeline-signal','signal-'+kind,{disabled}]" :role="kind==='density'?'slider':undefined" :tabindex="kind==='density'&&!disabled?0:undefined" :aria-label="kind==='density'?ui.timeline.弹幕密度定位:label" :aria-disabled="kind==='density'?disabled:undefined" :aria-valuemin="kind==='density'?from:undefined" :aria-valuemax="kind==='density'?to:undefined" :aria-valuenow="kind==='density'?currentValue:undefined" :title="kind==='density'?ui.timeline.有效弹幕越密集柱形越高点击定位画面:error||label" @click="kind==='density'&&seek($event)" @keydown="kind==='density'&&keySeek($event)">
     <canvas ref="canvas" aria-hidden="true"/>
     <span class="signal-caption">{{ label }}</span><span v-if="kind==='density'&&densityHint" class="signal-hint">{{ densityHint }}</span>
     <i v-if="kind==='density'&&cursor!==null" class="signal-cursor" :style="{left:cursor+'%'}"/>

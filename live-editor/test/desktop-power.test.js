@@ -1,3 +1,4 @@
+import { ui } from '../shared/ui-copy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -7,9 +8,9 @@ async function fixture(mac=true){
   const sent=[],listeners=new Map(),timers=new Map();let count=0;
   const window={addEventListener:(event,fn)=>listeners.set(event,fn)};
   if(mac)window.webkit={messageHandlers:{caibo:{postMessage:message=>sent.push(message)}}};
-  const context=vm.createContext({window,Map,Error,Promise,setTimeout:fn=>{timers.set(++count,fn);return count;},clearTimeout:id=>timers.delete(id)});
+  const context=vm.createContext({ui,window,Map,Error,Promise,setTimeout:fn=>{timers.set(++count,fn);return count;},clearTimeout:id=>timers.delete(id)});
   const source=await fs.readFile(new URL('../src/desktop.js',import.meta.url),'utf8');
-  vm.runInContext(source.replaceAll('export ','')+'\nthis.power={getPowerStatus,openPowerSettings,isMacDesktop};',context);
+  vm.runInContext(source.replace("import { ui } from '../shared/ui-copy.js';", '').replaceAll('export ','')+'\nthis.power={getPowerStatus,openPowerSettings,isMacDesktop};',context);
   return {api:context.power,sent,timers,reply:data=>listeners.get('caibo-native')({detail:data})};
 }
 test('休眠桥接只发送固定动作，用对应回复更新状态，打开设置不伪造开启结果',async()=>{

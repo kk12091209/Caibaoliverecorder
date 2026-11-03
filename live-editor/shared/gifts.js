@@ -1,3 +1,4 @@
+import { ui } from './ui-copy.js';
 import {isGiftEvent} from './lottery-records.js';
 export const GIFT_SETTING='gift-style';
 export const DEFAULT_GIFT_STYLE=Object.freeze({preview:false,export:false,minBilibili:0,minDouyin:0,currency:'CNY'});
@@ -5,7 +6,7 @@ export function validateGiftStyle(value){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!Object.hasOwn(DEFAULT_GIFT_STYLE,k))||
     typeof value.preview!=='boolean'||typeof value.export!=='boolean'||
     value.currency!==undefined&&value.currency!=='CNY'||
-    !['minBilibili','minDouyin'].every(k=>Number.isFinite(value[k])&&value[k]>=0&&value[k]<=1000000000))throw new Error('请选择礼物显示方式，并填写有效的最低金额。');
+    !['minBilibili','minDouyin'].every(k=>Number.isFinite(value[k])&&value[k]>=0&&value[k]<=1000000000))throw new Error(ui.gifts.礼物筛选无效);
   // Earlier local settings used Douyin coins. Preserve the same threshold value.
   return {preview:value.preview,export:value.export,minBilibili:value.minBilibili,minDouyin:value.currency===undefined?value.minDouyin/10:value.minDouyin,currency:'CNY'};
 }
@@ -18,7 +19,7 @@ export function giftEligible(gift,style){
 }
 export const giftYuan=gift=>gift.totalPrice===null||!Number.isFinite(gift.totalPrice)?null:gift.platform==='douyin'?gift.totalPrice/10:gift.totalPrice;
 export function giftPrice(gift){
-  const yuan=giftYuan(gift);if(yuan===null)return '金额未知';
+  const yuan=giftYuan(gift);if(yuan===null)return ui.gifts.金额未知;
   return `¥${Number(yuan.toFixed(3))}`;
 }
 export const giftDescription=gift=>`${gift.user} · ${gift.name} × ${gift.count} · ${giftPrice(gift)}`;

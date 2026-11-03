@@ -655,6 +655,7 @@ svg { flex-shrink: 0; }
 .danmaku-options label { display: flex; align-items: center; gap: 6px; }
 .danmaku-options input { width: 14px; height: 14px; }
 .danmaku-list { overflow: auto; flex: 1; scrollbar-width: thin; scrollbar-color: #e0a8b6 transparent; padding-bottom: 8px; }
+.message-browser { display: flex; flex: 1; min-height: 0; }
 .danmaku-row {
   display: flex;
   align-items: center;
@@ -1143,3 +1144,14 @@ svg { flex-shrink: 0; }
 .sender-filter{margin:0 14px 8px;padding:9px 10px;background:#ff7d9210;border:1px solid var(--line);border-radius:8px;font-size:12px;display:flex;flex-wrap:wrap;gap:7px;align-items:center}.sender-filter>span{flex:1;min-width:0;overflow-wrap:anywhere}.sender-filter small{width:100%;color:#875c28;line-height:1.5}.sender-filter .text-button{font-size:11px;white-space:nowrap}.danmaku-row.highlighted{border-left:3px solid var(--rose);padding-left:5px}.highlight-mark{color:var(--rose-dark)}.danmaku-row .message-more{color:var(--muted);font-size:22px;opacity:1;flex-shrink:0}
 
 .anchor-help{font-size:11px;line-height:1.6;opacity:.75;margin:8px 0 12px}.capture-badges{display:flex;gap:4px;margin:4px 0}.capture-badge{display:inline-block;border:1px solid currentColor;border-radius:4px;padding:1px 5px;font-size:10px;line-height:1.5;font-weight:normal}.session-item small{overflow-wrap:anywhere}
+
+.cache-settings { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff5; }
+.cache-settings p { margin: 0 0 8px; }
+.cache-settings label { display: flex; align-items: center; gap: 12px; }
+.cache-settings input[type="number"] { width: 100px; }
+.cache-settings .checkbox { gap: 8px; margin-bottom: 10px; }
+.cache-settings input[type="checkbox"] { width: auto; }
+.cache-settings .cache-path { overflow-wrap: anywhere; font-size: 11px; margin-top: 8px; }
+
+.message-follow-control { display: flex; align-items: center; gap: 5px; }
+.message-follow-resume { width: 20px; height: 20px; min-width: 20px; padding: 0; }

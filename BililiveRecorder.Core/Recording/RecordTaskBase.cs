@@ -111,7 +111,9 @@ namespace BililiveRecorder.Core.Recording
             this.logger.Information("连接直播服务器 {Host} 录制画质 {Qn} ({QnDescription})", this.streamHost, codecQn, qnDesc);
             this.logger.Debug("直播流地址 {Url}", fullUrl);
 
-            var stream = await this.GetStreamAsync(fullUrl: fullUrl, timeout: (int)this.room.RoomConfig.TimingStreamConnect).ConfigureAwait(false);
+            Stream stream;
+            try { stream = await this.GetStreamAsync(fullUrl: fullUrl, timeout: (int)this.room.RoomConfig.TimingStreamConnect).ConfigureAwait(false); }
+            catch (Exception) when (!this.ct.IsCancellationRequested) { this.MarkStreamRouteFailed(); throw; }
 
             this.ioStatsLastTrigger = DateTimeOffset.UtcNow;
             this.progressClock.Restart();
@@ -141,6 +143,12 @@ namespace BililiveRecorder.Core.Recording
 
             this.StartRecordingLoop(stream);
         }
+
+        protected void MarkStreamRouteFailed()
+        {
+            if (this.selectedRouteHost is { Length: > 0 } host) StreamRouteHealth.Shared.Failed(this.room.RoomConfig.RoomId, host, DateTimeOffset.UtcNow);
+        }
+        private string? selectedRouteHost;
 
         protected abstract void StartRecordingLoop(Stream stream);
 
@@ -178,6 +186,7 @@ namespace BililiveRecorder.Core.Recording
             if (!this.timeoutTriggered && stalled is not null)
             {
                 this.timeoutTriggered = true;
+                this.MarkStreamRouteFailed();
                 this.logger.Warning("录制进度异常：{Reason}；主动断开以重新连接", stalled);
                 this.RequestStop();
             }
@@ -357,18 +366,16 @@ namespace BililiveRecorder.Core.Recording
                 throw new Exception("no supported stream url for " + selectedCodecQn);
 
             if (item.CurrentQn != selectedCodecQn.Qn)
-                this.logger.Warning("返回的直播流地址的画质是 {CurrentQn} 而不是请求的 {SelectedQn}", item.CurrentQn, selectedCodecQn);
+                this.logger.Information("平台提供画质 {CurrentQn}，请求画质 {SelectedQn}；继续录制平台实际提供的画质，不因此重启", item.CurrentQn, selectedCodecQn);
 
             var url_infos = item.UrlInfos;
             if (url_infos is null || url_infos.Length == 0)
                 throw new Exception("no url_info");
 
-            // https:// xy0x0x0x0xy.mcdn.bilivideo.cn:486
-            var url_infos_without_mcdn = url_infos.Where(x => !x.Host.Contains(".mcdn.")).ToArray();
-
-            var url_info = url_infos_without_mcdn.Length != 0
-                ? url_infos_without_mcdn[this.random.Next(url_infos_without_mcdn.Length)]
-                : url_infos[this.random.Next(url_infos.Length)];
+            // Refreshing the API supplies fresh URLs; avoid a recently failed host
+            // without changing quality or restarting a healthy recording.
+            this.selectedRouteHost = StreamRouteHealth.Shared.Select(roomid, url_infos.Select(x => x.Host), DateTimeOffset.UtcNow);
+            var url_info = url_infos.First(x => x.Host == this.selectedRouteHost);
 
             var fullUrl = url_info.Host + item.BaseUrl + url_info.Extra;
 

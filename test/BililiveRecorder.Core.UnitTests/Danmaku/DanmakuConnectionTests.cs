@@ -89,7 +89,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             internal readonly Sink Sink = new Sink();
             internal readonly Api Api = new Api();
             internal readonly Queue<Transport> Transports = new Queue<Transport>();
-            internal readonly List<bool> States = new List<bool>();
+            internal readonly System.Collections.Concurrent.ConcurrentQueue<bool> States = new();
             internal readonly DanmakuClient Client;
             internal long Now;
             internal Fixture(RuntimeCookie? cookie = null, int timeoutMs = 1000)
@@ -98,7 +98,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
                     (_, _) => this.Transports.Dequeue(), () => Interlocked.Read(ref this.Now),
                     authenticationTimeout: TimeSpan.FromMilliseconds(timeoutMs), heartbeatInterval: TimeSpan.FromMilliseconds(30),
                     heartbeatTimeout: TimeSpan.FromMilliseconds(90), automaticHeartbeat: false);
-                this.Client.StatusChanged += (_, e) => { lock (this.States) this.States.Add(e.Connected); };
+                this.Client.StatusChanged += (_, e) => { this.States.Enqueue(e.Connected); };
             }
             internal Task Connect() => this.Client.ConnectAsync(25034104, DanmakuTransportMode.Wss, null, AllowedAddressFamily.System, CancellationToken.None);
             public void Dispose() => this.Client.Dispose();
@@ -155,7 +155,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
         }
 
         [Fact]
-        public async Task RepeatedApiErrorsCanKeepRequestsPausedAfterTheProviderRecoversAsync()
+        public async Task RepeatedDanmakuApiErrorsPauseOnlyDanmakuRequestsAsync()
         {
             var provider = new Api { Failure = new BilibiliApiResponseCodeNotZeroException(-352, "synthetic-body-secret") };
             var policies = new PollyPolicy();
@@ -165,7 +165,9 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
                 for (var attempt = 0; attempt < 3; attempt++)
                     await Assert.ThrowsAsync<BilibiliApiResponseCodeNotZeroException>(() => client.GetDanmakuServerAsync(1852631778));
                 Assert.Equal(6, provider.Requests);
-                Assert.Equal(Polly.CircuitBreaker.CircuitState.Open, policies.RequestFailedCircuitBreakerPolicy.CircuitState);
+                Assert.Equal(Polly.CircuitBreaker.CircuitState.Closed, policies.RequestFailedCircuitBreakerPolicy.CircuitState);
+                await policies.Get<Polly.IAsyncPolicy>(PolicyNames.PolicyRoomInfoApiRequestAsync).ExecuteAsync(() => Task.CompletedTask);
+                await policies.Get<Polly.IAsyncPolicy>(PolicyNames.PolicyStreamApiRequestAsync).ExecuteAsync(() => Task.CompletedTask);
                 provider.Failure = null;
                 await Assert.ThrowsAsync<Polly.CircuitBreaker.BrokenCircuitException>(() => client.GetDanmakuServerAsync(1852631778));
                 Assert.Equal(6, provider.Requests); // No new provider call until the protection period expires.
@@ -259,7 +261,7 @@ namespace BililiveRecorder.Core.UnitTests.Danmaku
             using var f = new Fixture(); var first = new Transport(); f.Transports.Enqueue(first); await f.Connect();
             first.FailPing = true; f.Now = 30; await f.Client.HeartbeatTickAsync(); Assert.False(f.Client.Connected);
             var next = new Transport(); f.Transports.Enqueue(next); await f.Connect(); await next.Input.Writer.CompleteAsync();
-            await Until(() => !f.Client.Connected); Assert.Equal(new[] { true, false, true, false }, f.States);
+            await Until(() => !f.Client.Connected && f.States.Count == 4); Assert.Equal(new[] { true, false, true, false }, f.States.ToArray());
             Assert.Contains("event=send-failed", f.Sink.Text); Assert.Contains("event=remote-closed", f.Sink.Text); Assert.DoesNotContain("synthetic-send-secret", f.Sink.Text);
         }
 

@@ -1,3 +1,4 @@
+import {cursorFilter} from './feed-cursor.js';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,6 +43,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS danmaku(id TEXT PRIMARY KEY, session TEXT REFERENCES sessions(id), source TEXT,
         time REAL, user TEXT, text TEXT, type TEXT, color TEXT);
       CREATE INDEX IF NOT EXISTS dm_time ON danmaku(session,time);
+      CREATE INDEX IF NOT EXISTS dm_page ON danmaku(session,time,id);
       CREATE INDEX IF NOT EXISTS dm_session ON danmaku(session);
       CREATE TABLE IF NOT EXISTS danmaku_filters(message TEXT PRIMARY KEY REFERENCES danmaku(id), reason TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS danmaku_density(session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -231,7 +233,7 @@ export class Store {
     this.run('INSERT INTO edits VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET revision=excluded.revision,data=excluded.data', id, current.revision + 1, JSON.stringify(data));
     return { revision: current.revision + 1, ...data };
   }
-  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at, sender) {
+  messages(id, from = 0, to = Number.MAX_SAFE_INTEGER, search = '', limit = 300, filterLottery = this.edit(id).filterLottery !== false, at, sender, page) {
     this.chatRules.sync(id);
     const lottery = filterLottery ? " AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason='lottery')" : '';
     const patches=this.edit(id).messageEdits||{},hasPatches=Object.keys(patches).length>0;
@@ -242,9 +244,10 @@ export class Store {
     if(sender?.mode==='name'){filter=' AND danmaku.user=?';args.push(sender.name);}
     if(sender?.mode==='approx'){filter=' AND substr(danmaku.user,1,length(?))=? AND substr(danmaku.user,-length(?))=?';args.push(sender.prefix,sender.prefix,sender.suffix,sender.suffix);}
     const fields=hasPatches?`danmaku.id,danmaku.session,danmaku.source,danmaku.time,${user} AS user,${text} AS text,danmaku.type,danmaku.color,danmaku.user AS originalUser,danmaku.text AS originalText,(p.id IS NOT NULL) AS edited`:'danmaku.*';
-    const query=`SELECT ${fields},(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku ${hasPatches?'LEFT JOIN message_patches p ON p.id=danmaku.id ':''}WHERE danmaku.session=? AND danmaku.type='d' AND danmaku.time>=? AND danmaku.time<=? AND (${text} LIKE ? OR ${user} LIKE ?) AND NOT is_sticker_placeholder(danmaku.text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))` + lottery+filter;
+    const query=`SELECT ${fields},(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku ${hasPatches?'LEFT JOIN message_patches p ON p.id=danmaku.id ':''}WHERE danmaku.session=? AND danmaku.type='d' AND danmaku.time>=? AND danmaku.time<=? AND (${text} LIKE ? OR ${user} LIKE ?) AND NOT is_sticker_placeholder(danmaku.text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))` + lottery+filter+cursorFilter('d',page,args,'danmaku');
     // Keep the current playback position inside a dense list, then restore
     // chronological order. Search and non-following callers keep their order.
+    if(page)return this.all(prefix+query+` ORDER BY danmaku.time ${page.direction==='before'?'DESC':'ASC'},danmaku.id ${page.direction==='before'?'DESC':'ASC'} LIMIT ?`,...args,limit);
     if(Number.isFinite(at))return this.all(prefix+'SELECT * FROM ('+query+' ORDER BY ABS(danmaku.time-?),danmaku.time,danmaku.id LIMIT ?) ORDER BY time,id',...args,at,limit);
     return this.all(prefix+query+' ORDER BY danmaku.time,danmaku.id LIMIT ?',...args,limit);
   }

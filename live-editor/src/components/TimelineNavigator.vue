@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {computed,ref,watch,onMounted,onBeforeUnmount} from 'vue';
 import {formatVideoTime as format} from '../video-time.js';
 
@@ -11,7 +13,7 @@ const thumbWidth=computed(()=>Math.min(trackWidth.value,Math.max(28,props.durati
 const travel=computed(()=>Math.max(0,trackWidth.value-thumbWidth.value));
 const movable=computed(()=>!props.disabled&&maxFrom.value>.001&&travel.value>0);
 const thumbStyle=computed(()=>({left:(maxFrom.value>0?Math.max(0,Math.min(1,props.from/maxFrom.value))*travel.value:0)+'px',width:thumbWidth.value+'px'}));
-const description=computed(()=>`显示 ${format(props.from)} 至 ${format(props.to)}，共 ${format(props.duration)}`);
+const description=computed(()=>ui.timeline.可见时间范围(format(props.from), format(props.to), format(props.duration)));
 function pan(from){emit('pan',Math.max(0,Math.min(maxFrom.value,from)));}
 function pointerDown(event){
   if(!movable.value||event.button!==0||drag)return;
@@ -44,9 +46,8 @@ onBeforeUnmount(()=>{observer?.disconnect();window.removeEventListener('blur',en
 
 <template>
   <div class="timeline-navigator" :class="{dragging,disabled:!movable}">
-    <div ref="track" class="timeline-nav-track" role="scrollbar" aria-label="时间轴横向查看" aria-orientation="horizontal" aria-controls="timeline-tracks" :tabindex="movable?0:-1" :aria-disabled="!movable" :aria-valuemin="0" :aria-valuemax="maxFrom" :aria-valuenow="from" :aria-valuetext="description" :title="movable?'拖动或点击横向查看，不改变播放位置；方向键微移，PageUp / PageDown 翻页': '放大时间轴后，可在这里横向拖动查看'" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd" @lostpointercapture="pointerEnd" @keydown.stop="keyPan" @keyup.stop="endKeyboard" @blur="endInteraction">
+    <div ref="track" class="timeline-nav-track" role="scrollbar" :aria-label="ui.timeline.时间轴横向查看" aria-orientation="horizontal" aria-controls="timeline-tracks" :tabindex="movable?0:-1" :aria-disabled="!movable" :aria-valuemin="0" :aria-valuemax="maxFrom" :aria-valuenow="from" :aria-valuetext="description" :title="movable?ui.timeline.时间轴横向导航提示: ui.timeline.放大时间轴后可在这里横向拖动查看" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd" @lostpointercapture="pointerEnd" @keydown.stop="keyPan" @keyup.stop="endKeyboard" @blur="endInteraction">
       <div class="timeline-nav-thumb" :style="thumbStyle"><span/></div>
-      <span v-if="!movable&&!disabled" class="timeline-nav-hint">放大后可左右拖动</span>
     </div>
   </div>
 </template>

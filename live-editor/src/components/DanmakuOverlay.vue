@@ -194,7 +194,7 @@ watch([()=>props.style?.size,()=>props.style?.opacity,()=>props.style?.speed,()=
 watch(() => props.style?.fps, () => {resetClock();requestPaint();});
 watch(() => props.video, bind);
 watch(() => props.messages, () => rebuild());
-watch(()=>[props.highlighted,props.highlightStyle],()=>{sprites.clear();rebuild(true);});
+watch([()=>props.highlighted,()=>JSON.stringify(props.highlightStyle)],()=>{sprites.clear();rebuild(true);});
 watch(()=>props.messageEdits,()=>{sprites.clear();rebuild(true);});
 watch(() => [props.base, props.enabled, props.loading], () => { cancelVideoFrame(); resetClock(); requestPaint(); queueVideoFrame(); });
 watch(() => props.excluded, requestPaint);

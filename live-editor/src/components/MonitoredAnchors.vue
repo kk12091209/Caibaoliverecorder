@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {X,CornerDownRight,LoaderCircle} from 'lucide-vue-next';
 import {roomAvailable,roomStatus} from '../room-status.js';
 defineProps({anchors:{type:Array,default:()=>[]},recorder:{type:Object,required:true},busy:{type:Array,default:()=>[]}});
@@ -6,24 +8,24 @@ defineEmits(['action','remove']);
 const rawStatus=anchor=>anchor.legacy?roomStatus(anchor):anchor.state||'';
 function status(anchor){
   const value=rawStatus(anchor);
-  if(/正在恢复|重试|正在重连/.test(value))return '正在恢复录制';
-  if(/上限/.test(value))return '已达时长上限';
-  if(/待确认|疑似|失联/.test(value))return anchor.recording?'录制中 · 待确认':'等待恢复';
-  if(anchor.recording)return anchor.kind==='guest'?'连麦录制中':'直播录制中';
-  return anchor.enabled?'监控中':'已停止';
+  if(/正在恢复|重试|正在重连/.test(value))return ui.anchors.正在恢复录制;
+  if(/上限/.test(value))return ui.anchors.已达时长上限;
+  if(/待确认|疑似|失联/.test(value))return anchor.recording?ui.anchors.录制中待确认:ui.anchors.等待恢复;
+  if(anchor.recording)return anchor.kind==='guest'?ui.anchors.连麦录制中:ui.anchors.直播录制中;
+  return anchor.enabled?ui.anchors.监控中:ui.common.已停止;
 }
 const warning=anchor=>anchor.error||anchor.chatError||(/待确认|疑似|失联|上限|正在恢复|重试|正在重连/.test(rawStatus(anchor))?rawStatus(anchor):'');
-const identity=anchor=>(anchor.platform==='douyin'?'抖音':'B站')+(anchor.ownWebRid?' · 本人直播间 '+anchor.ownWebRid:'');
+const identity=anchor=>(anchor.platform==='douyin'?ui.common.抖音:ui.common.B站)+(anchor.ownWebRid?ui.anchors.本人直播间+anchor.ownWebRid:'');
 </script>
 <template>
-  <div v-if="!anchors.length" class="rail-empty">粘贴直播间或抖音名片<br/>添加后自动监控这位主播</div>
-  <article v-for="anchor in anchors" :key="anchor.key" class="monitored-anchor" :data-recording="anchor.recording" :aria-label="'监控主播：'+anchor.name">
-    <div class="anchor-heading"><strong :title="anchor.name">{{ anchor.name||'主播' }}</strong><button class="anchor-remove" :aria-label="'移除监控：'+anchor.name" title="移除监控主播" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" @click="$emit('remove',anchor)"><X :size="14" aria-hidden="true"/></button></div>
+  <div v-if="!anchors.length" class="rail-empty">{{ ui.anchors.粘贴直播间或抖音名片 }}</div>
+  <article v-for="anchor in anchors" :key="anchor.key" class="monitored-anchor" :data-recording="anchor.recording" :aria-label="ui.anchors.监控主播+anchor.name">
+    <div class="anchor-heading"><strong :title="anchor.name">{{ anchor.name||ui.anchors.主播 }}</strong><button class="anchor-remove" :aria-label="ui.anchors.移除监控+anchor.name" :title="ui.common.移除监控主播" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" @click="$emit('remove',anchor)"><X :size="14" aria-hidden="true"/></button></div>
     <div class="anchor-summary">
-      <div class="anchor-state"><span class="anchor-platform" :title="identity(anchor)">{{ anchor.platform==='douyin'?'抖音':'B站' }}</span><span class="anchor-status" role="status" :title="rawStatus(anchor)"><i :class="{'is-recording':anchor.recording,'is-enabled':anchor.enabled}" aria-hidden="true"/>{{ status(anchor) }}</span></div>
-      <button class="anchor-toggle" :class="{'is-stopped':!anchor.enabled}" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" :aria-label="(anchor.enabled?'停止监控：':'开始监控：')+anchor.name" @click="$emit('action',anchor,anchor.enabled?'stop':'start')"><LoaderCircle v-if="busy.includes(anchor.key)" :size="12" class="spin" aria-hidden="true"/><span>{{ anchor.enabled?'停止':'开始' }}</span></button>
+      <div class="anchor-state"><span class="anchor-platform" :title="identity(anchor)">{{ anchor.platform==='douyin'?ui.common.抖音:ui.common.B站 }}</span><span class="anchor-status" role="status" :title="rawStatus(anchor)"><i :class="{'is-recording':anchor.recording,'is-enabled':anchor.enabled}" aria-hidden="true"/>{{ status(anchor) }}</span></div>
+      <button class="anchor-toggle" :class="{'is-stopped':!anchor.enabled}" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" :aria-label="(anchor.enabled?ui.anchors.停止监控:ui.anchors.开始监控)+anchor.name" @click="$emit('action',anchor,anchor.enabled?'stop':'start')"><LoaderCircle v-if="busy.includes(anchor.key)" :size="12" class="spin" aria-hidden="true"/><span>{{ anchor.enabled?ui.anchors.停止:ui.anchors.开始 }}</span></button>
     </div>
-    <div v-if="anchor.kind==='guest'&&anchor.host" class="anchor-destination" :title="'连麦至 '+anchor.host+' 的直播间'"><CornerDownRight :size="13" aria-hidden="true"/><span>连麦至 <strong>{{ anchor.host }}</strong></span></div>
+    <div v-if="anchor.kind==='guest'&&anchor.host" class="anchor-destination" :title="ui.anchors.连麦至+anchor.host+ui.anchors.的直播间"><CornerDownRight :size="13" aria-hidden="true"/><span>{{ ui.anchors.连麦至连麦至 }} <strong>{{ anchor.host }}</strong></span></div>
     <p v-if="warning(anchor)" class="anchor-warning" role="status">{{ warning(anchor) }}</p>
   </article>
 </template>

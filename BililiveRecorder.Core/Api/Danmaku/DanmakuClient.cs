@@ -67,8 +67,10 @@ namespace BililiveRecorder.Core.Api.Danmaku
             {
                 if (Interlocked.Exchange(ref this.stopped, 1) == 0)
                 {
-                    this.Authentication.TrySetCanceled();
                     this.Lifetime.Cancel();
+                    // Publish the cancellation reason before waking the
+                    // handshake; otherwise it can be misreported as a timeout.
+                    this.Authentication.TrySetCanceled();
                     this.Lifetime.Dispose();
                 }
                 this.StopTransport();

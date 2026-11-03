@@ -171,6 +171,7 @@ namespace BililiveRecorder.Core.Recording
 
         private async Task RecordingLoopAsync()
         {
+            var stage = "读取直播流";
             try
             {
                 if (this.reader is null) return;
@@ -178,6 +179,7 @@ namespace BililiveRecorder.Core.Recording
 
                 while (!this.ct.IsCancellationRequested)
                 {
+                    stage = "读取直播流";
                     var group = await this.reader.ReadGroupAsync(this.ct).ConfigureAwait(false);
 
                     if (group is null)
@@ -203,6 +205,7 @@ namespace BililiveRecorder.Core.Recording
                             if (tag.Type == TagType.Audio) audioTimestamp = Math.Max(audioTimestamp, tag.Timestamp);
                         }
                     }
+                    stage = "写入录制文件";
                     this.ioDiskStopwatch.Restart();
                     var bytesWritten = await this.writer.WriteAsync(this.context).ConfigureAwait(false);
                     this.ioDiskStopwatch.Stop();
@@ -237,7 +240,8 @@ namespace BililiveRecorder.Core.Recording
             }
             catch (IOException ex)
             {
-                this.logger.Warning(ex, "录制时发生IO错误");
+                if (stage == "读取直播流" && !this.ct.IsCancellationRequested) this.MarkStreamRouteFailed();
+                this.logger.Warning(ex, "录制时发生IO错误；阶段 {Stage}；系统错误码 {ErrorCode}；保留已写入文件", stage, ex.HResult);
             }
             catch (Exception ex)
             {

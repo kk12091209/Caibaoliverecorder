@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {computed,ref} from 'vue';
 import {adjustDanmakuArea,MIN_DANMAKU_AREA_HEIGHT} from '../../shared/danmaku-style.js';
 
@@ -41,9 +43,9 @@ function keyboard(event,action){
 <template>
   <div ref="surface" class="area-selector" :class="{'is-dragging':drag,'is-disabled':disabled}">
     <div class="area-frame" :style="frameStyle" :data-area-top="areaTop" :data-area-height="areaHeight">
-      <button type="button" class="area-move" role="slider" aria-label="弹幕展示区域位置" aria-orientation="vertical" :aria-valuemin="0" :aria-valuemax="percent(1-areaHeight)" :aria-valuenow="percent(areaTop)" :aria-valuetext="'顶部 '+percent(areaTop)+'%，高度 '+percent(areaHeight)+'%'" :disabled="disabled" title="按住拖动，或用上下方向键调整位置" @pointerdown="start($event,'move')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'move')"><span>拖动调整位置</span></button>
-      <button type="button" class="area-handle top" role="slider" aria-label="弹幕展示区域上边界" aria-orientation="vertical" :aria-valuemin="0" :aria-valuemax="percent(areaTop+areaHeight-MIN_DANMAKU_AREA_HEIGHT)" :aria-valuenow="percent(areaTop)" :disabled="disabled" title="拖动上边界调整高度，或使用上下方向键" @pointerdown="start($event,'top')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'top')"><span></span></button>
-      <button type="button" class="area-handle bottom" role="slider" aria-label="弹幕展示区域下边界" aria-orientation="vertical" :aria-valuemin="percent(areaTop+MIN_DANMAKU_AREA_HEIGHT)" :aria-valuemax="100" :aria-valuenow="percent(areaTop+areaHeight)" :disabled="disabled" title="拖动下边界调整高度，或使用上下方向键" @pointerdown="start($event,'bottom')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'bottom')"><span></span></button>
+      <button type="button" class="area-move" role="slider" :aria-label="ui.danmakuArea.弹幕展示区域位置" aria-orientation="vertical" :aria-valuemin="0" :aria-valuemax="percent(1-areaHeight)" :aria-valuenow="percent(areaTop)" :aria-valuetext="ui.danmakuArea.顶部+percent(areaTop)+ui.danmakuArea.高度+percent(areaHeight)+'%'" :disabled="disabled" :title="ui.danmakuArea.按住拖动或用上下方向键调整位置" @pointerdown="start($event,'move')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'move')"><span>{{ ui.danmakuArea.拖动调整位置 }}</span></button>
+      <button type="button" class="area-handle top" role="slider" :aria-label="ui.danmakuArea.弹幕展示区域上边界" aria-orientation="vertical" :aria-valuemin="0" :aria-valuemax="percent(areaTop+areaHeight-MIN_DANMAKU_AREA_HEIGHT)" :aria-valuenow="percent(areaTop)" :disabled="disabled" :title="ui.danmakuArea.拖动上边界调整高度或使用上下方向键" @pointerdown="start($event,'top')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'top')"><span></span></button>
+      <button type="button" class="area-handle bottom" role="slider" :aria-label="ui.danmakuArea.弹幕展示区域下边界" aria-orientation="vertical" :aria-valuemin="percent(areaTop+MIN_DANMAKU_AREA_HEIGHT)" :aria-valuemax="100" :aria-valuenow="percent(areaTop+areaHeight)" :disabled="disabled" :title="ui.danmakuArea.拖动下边界调整高度或使用上下方向键" @pointerdown="start($event,'bottom')" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @keydown="keyboard($event,'bottom')"><span></span></button>
     </div>
   </div>
 </template>

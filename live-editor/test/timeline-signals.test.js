@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {followWindow,edgeVelocity,signalFetchWindow} from '../src/timeline-signals.js';
 import assert from 'node:assert/strict';
 import {signalWindow,viewWindow,panWindow,zoomWindow,windowPercent,visibleRange,timeAtPixel,aggregateAudio,aggregateDensity,audioStateLabel,densityStateLabel} from '../src/timeline-signals.js';
 
@@ -111,4 +112,16 @@ test('labels distinguish unprepared data, no audio, silence, and density buildin
   assert.equal(densityStateLabel({status:'error',bins:[0]},selected),'密度暂不可用');
   assert.equal(densityStateLabel({status:'ready',bins:[0,0]},selected),'暂无有效弹幕');
   assert.equal(densityStateLabel({status:'ready',bins:[0,1]},selected),'');
+});
+
+test('局部时间轴跟随保持播放点可见，边缘拖动可跨越窗口且信号请求使用稳定分块',()=>{
+  let window={from:300,to:420};
+  assert.deepEqual(followWindow(7200,window,350),window);
+  window=followWindow(7200,window,410);assert.equal(window.from,320);assert.equal((410-window.from)/(window.to-window.from),.75);
+  window=followWindow(7200,window,600);assert.ok(window.from<=600&&window.to>=600);
+  assert.deepEqual(followWindow(7200,window,7199),{from:7080,to:7200});
+  assert.equal(followWindow(7200,null,600),null);
+  assert.ok(edgeVelocity(1000,1000,120)>0);assert.ok(edgeVelocity(-10,1000,120)<0);assert.equal(edgeVelocity(500,1000,120),0);
+  assert.deepEqual(signalFetchWindow(7200,{from:300,to:420}),signalFetchWindow(7200,{from:310,to:430}));
+  const fetch=signalFetchWindow(7200,{from:7190,to:7200});assert.ok(fetch.from<=7190&&fetch.to===7200);
 });

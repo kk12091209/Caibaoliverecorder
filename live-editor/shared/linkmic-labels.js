@@ -1,3 +1,4 @@
+import { ui } from './ui-copy.js';
 import { containedVideoFrame } from './video-geometry.js';
 
 // Coordinates are relative to the encoded video, including its own padding.
@@ -13,7 +14,7 @@ export function participantName(person) {
   const name=labelText(person.name);
   if(name)return name;
   if(person.id)return `ID ${person.id}`;
-  return person.linkId?`连麦 ${person.linkId}`:'';
+  return person.linkId?ui.linkmic.连麦编号(person.linkId):'';
 }
 export function labelGeometry(person,width,height,sourceWidth=width,sourceHeight=height) {
   if(!validRect(person)||![width,height,sourceWidth,sourceHeight].every(n=>Number.isFinite(n)&&n>0))return null;

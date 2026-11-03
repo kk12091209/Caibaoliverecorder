@@ -1,3 +1,4 @@
+import { ui } from '../shared/ui-copy.js';
 const finite=(value,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
 const unit=value=>Math.min(1,Math.max(0,finite(value)));
 
@@ -36,6 +37,24 @@ export function visibleRange(range,from,to) {
 }
 export function timeAtPixel(x,width,from,to) {return from+unit(width>0?x/width:0)*Math.max(0,to-from);}
 
+export function followWindow(duration,window,position,force=false) {
+  if(!window)return null;
+  const view=viewWindow(duration,window),span=view.to-view.from;
+  if(!force&&position>=view.from+span*.15&&position<=view.from+span*.8)return view;
+  return panWindow(duration,view,position-span*.75);
+}
+export function edgeVelocity(x,width,span) {
+  const edge=Math.min(40,width/5);
+  if(!(edge>0&&span>0))return 0;
+  return x<edge?-Math.min(1,(edge-x)/edge)*span*.4:x>width-edge?Math.min(1,(x-width+edge)/edge)*span*.4:0;
+}
+// Stable aligned windows prevent decoding/re-fetching on every following frame.
+export function signalFetchWindow(duration,window) {
+  const {from,to}=viewWindow(duration,window),span=Math.max(1,to-from),block=Math.max(30,span);
+  const start=Math.max(0,Math.floor(from/block)*block-block);
+  return {from:start,to:Math.min(duration,start+block*4)};
+}
+
 function groups(bins,width) {
   if(!Array.isArray(bins)||!bins.length)return [];
   const columns=Math.max(1,Math.min(bins.length,4096,Math.floor(finite(width,1))));
@@ -52,21 +71,21 @@ export function aggregateAudio(bins,width) {
 }
 export function aggregateDensity(bins,width) {return groups(bins,width).map(group=>group.reduce((sum,value)=>sum+Math.max(0,finite(value)),0));}
 export function audioStateLabel(audio,{selected=false,loading=false,error=''}={}) {
-  if(!selected)return '选择素材后显示波形';
-  if(error)return '波形暂不可用';
-  if(audio?.status==='no_audio'||audio?.hasAudio===false)return '无音轨';
+  if(!selected)return ui.timeline.选择素材后显示波形;
+  if(error)return ui.timeline.波形暂不可用;
+  if(audio?.status==='no_audio'||audio?.hasAudio===false)return ui.timeline.无音轨;
   const bins=Array.isArray(audio?.bins)?audio.bins:[];
-  if(!bins.length)return loading||!audio?'波形准备中…':audio.status==='unavailable'?'波形无法读取':'波形准备中…';
-  if(bins.every(bin=>bin?.state==='unavailable'))return '波形无法读取';
-  if(bins.some(bin=>bin?.state==='pending')||audio.status==='pending')return bins.some(bin=>bin?.state==='ready')?'波形生成中…':'波形准备中…';
-  if(bins.some(bin=>bin?.state==='unavailable'))return '音频波形 · 部分区间无法读取';
-  if(bins.every(bin=>bin?.state==='silent'))return '音频静音';
-  return '音频波形';
+  if(!bins.length)return loading||!audio?ui.timeline.波形准备中:audio.status==='unavailable'?ui.timeline.波形无法读取:ui.timeline.波形准备中;
+  if(bins.every(bin=>bin?.state==='unavailable'))return ui.timeline.波形无法读取;
+  if(bins.some(bin=>bin?.state==='pending')||audio.status==='pending')return bins.some(bin=>bin?.state==='ready')?ui.timeline.波形生成中:ui.timeline.波形准备中;
+  if(bins.some(bin=>bin?.state==='unavailable'))return ui.timeline.音频波形部分区间无法读取;
+  if(bins.every(bin=>bin?.state==='silent'))return ui.timeline.音频静音;
+  return ui.timeline.音频波形;
 }
 export function densityStateLabel(density,{selected=false,error=''}={}) {
-  if(!selected)return '选择素材后显示';
-  if(error||density?.status==='error')return '密度暂不可用';
-  if(density?.status==='building')return '密度统计中…';
-  if(!Array.isArray(density?.bins))return '准备中…';
-  return density.bins.some(value=>value>0)?'':'暂无有效弹幕';
+  if(!selected)return ui.timeline.选择素材后显示;
+  if(error||density?.status==='error')return ui.timeline.密度暂不可用;
+  if(density?.status==='building')return ui.timeline.密度统计中;
+  if(!Array.isArray(density?.bins))return ui.timeline.准备中;
+  return density.bins.some(value=>value>0)?'':ui.timeline.暂无有效弹幕;
 }

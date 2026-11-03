@@ -1,14 +1,15 @@
+import { ui } from './ui-copy.js';
 export const RECORDING_STYLE_SETTING='recording-style';
 export const CAMERA_POSITIONS=Object.freeze([
-  {value:'bottom-left',label:'左下角'}, {value:'bottom-right',label:'右下角'},
-  {value:'top-left',label:'左上角'}, {value:'top-right',label:'右上角'},
-  {value:'original',label:'保留原画面'}
+  {value:'bottom-left',label:ui.common.左下角}, {value:'bottom-right',label:ui.common.右下角},
+  {value:'top-left',label:ui.common.左上角}, {value:'top-right',label:ui.common.右上角},
+  {value:'original',label:ui.recordingStyle.保留原画面}
 ]);
 export const DEFAULT_RECORDING_STYLE=Object.freeze({cameraPosition:'bottom-left',cameraSize:24});
 export function validateRecordingStyle(value) {
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['cameraPosition','cameraSize'].includes(k))||
     !CAMERA_POSITIONS.some(p=>p.value===value.cameraPosition)||!Number.isInteger(value.cameraSize)||value.cameraSize<10||value.cameraSize>40)
-    throw new Error('请选择有效的摄像头位置和大小（10%–40%）。');
+    throw new Error(ui.recordingStyle.摄像头样式无效);
   return {cameraPosition:value.cameraPosition,cameraSize:value.cameraSize};
 }
 export function normalizedRecordingStyle(value) {try{return validateRecordingStyle(value);}catch{return {...DEFAULT_RECORDING_STYLE};}}

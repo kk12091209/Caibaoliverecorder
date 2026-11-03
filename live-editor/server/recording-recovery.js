@@ -18,13 +18,14 @@ export class RecordingRecovery {
     if(!raw.recording&&!raw.streaming){this.forget(id);return null;}
     const stats=raw.recordingStats,io=raw.ioStats;
     const sample={bytes:Number(stats?.totalOutputBytes)||0,time:Number(stats?.sessionMaxTimestamp)||0,
-      disk:Number(io?.diskBytesWritten)||0,ioEnd:io?.endTime};
+      disk:Number(io?.diskBytesWritten)||0,network:Number(io?.networkBytesDownloaded)||0,ioEnd:io?.endTime};
     if(!state){state={id,last:now,attempt:-Infinity,phase:'watching',sample,health:null};this.rooms.set(id,state);}
     else {
       const previous=state.sample;
       // Counter resets (new recording task) alone do not prove recovery.
       const progressed=raw.recording&&(sample.bytes>previous.bytes&&sample.time>previous.time ||
         sample.bytes===0&&sample.time===0&&sample.disk>0&&sample.ioEnd&&sample.ioEnd!==previous.ioEnd);
+      state.reason=sample.ioEnd&&sample.ioEnd!==previous.ioEnd?(sample.network>0?(sample.disk>0?'音视频时间未推进':'收到网络数据，但文件未继续写入'):'未收到新的直播数据'):'有效录制进度暂未推进';
       state.sample=sample;
       if(progressed){
         if(state.incident!==undefined)this.report(id,`有效录制已恢复；距最后观察到推进约 ${Math.round((now-state.incident)/1000)} 秒（含监控采样间隔）`);
@@ -37,7 +38,7 @@ export class RecordingRecovery {
   }
   updateHealth(state,now) {
     const idle=now-state.last;
-    if(idle>=8000&&state.incident===undefined){state.incident=state.last;this.report(state.id,'有效录制进度暂未推进，正在监测恢复','警告');}
+    if(idle>=8000&&state.incident===undefined){state.incident=state.last;this.report(state.id,`${state.reason||'有效录制进度暂未推进'}，正在监测恢复`,'警告');}
     const phase=state.phase;
     state.health=phase==='stopping'?{state:'recovering',message:now-state.attempt>=10000?'等待旧录制安全停止 · 正在恢复':'录制异常 · 正在重连'}
       :phase==='verifying'?{state:'recovering',message:'正在恢复 · 等待有效录制'}
@@ -46,7 +47,7 @@ export class RecordingRecovery {
   }
   action(id,raw) {
     const state=this.rooms.get(id),now=this.now();if(!state)return null;
-    if(state.phase==='stopping'&&!raw.recording)return 'start';
+    if(state.phase==='stopping'&&!raw.recording){if(!raw.streaming){this.forget(id);return null;}return 'start';}
     if(now-state.last<30000||now-state.attempt<30000)return null;
     return raw.recording?'stop':raw.streaming?'start':null;
   }

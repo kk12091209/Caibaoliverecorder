@@ -80,11 +80,13 @@ async function completeMp4(file, bytes) {
 }
 
 export class RenderCache {
-  constructor(dataRoot, { minFreeBytes = 2 * GiB, maxBytes = 20 * GiB, pendingTtlMs = 120000, maxPendingBytes = 256 * 1024 ** 2, statfs = directory => fs.statfs(directory, { bigint: true }), now = Date.now } = {}) {
+  constructor(dataRoot, { minFreeBytes = 2 * GiB, maxBytes = Infinity, pendingTtlMs = 120000, maxPendingBytes = 256 * 1024 ** 2, statfs = directory => fs.statfs(directory, { bigint: true }), now = Date.now } = {}) {
     if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw error('PREP_PATH', '缓存数据目录必须使用完整路径。');
-    if (![minFreeBytes, maxBytes, maxPendingBytes, pendingTtlMs].every(value => Number.isFinite(value) && value >= 0)) throw error('PREP_SPACE', '缓存容量设置无效。');
+    // Production has no cache quota. A finite budget remains available to
+    // isolated consumers/tests; physical free space is always checked.
+    if (![minFreeBytes, maxPendingBytes, pendingTtlMs].every(value => Number.isFinite(value) && value >= 0) || !(maxBytes === Infinity || Number.isFinite(maxBytes) && maxBytes >= 0)) throw error('PREP_SPACE', '缓存容量设置无效。');
     this.root = path.join(path.resolve(dataRoot), 'render-cache', 'v1'); this.minFreeBytes = minFreeBytes; this.maxBytes = maxBytes; this.statfs = statfs; this.now = now;
-    this.entries = new Map(); this.revision = 0; this.loaded = new Set(); this.loading = new Map(); this.building = new Map(); this.blocked = new Set(); this.waiters = new Set(); this.closed = false; this.reserved = 0; this.spaceQueue = Promise.resolve();
+    this.entries = new Map(); this.revision = 0; this.loaded = new Set(); this.loading = new Map(); this.building = new Map(); this.blocked = new Set(); this.waiters = new Set(); this.closed = false; this.reserved = 0; this.spaceQueue = Promise.resolve(); this.inventoryReady = false;
     this.pending = new Map(); this.pendingCleanup = new Set(); this.pendingQueue=Promise.resolve(); this.pendingTtlMs = pendingTtlMs; this.maxPendingBytes = maxPendingBytes;
   }
   getKey(spec) { return renderCacheKey(spec); }
@@ -153,8 +155,9 @@ export class RenderCache {
     this.loading.set(id, operation); return operation;
   }
   async loadAll() {
-    let sessions; try { await plainDirectory(this.root); sessions = await fs.readdir(this.root); } catch (failure) { if (failure.code === 'ENOENT') return; throw failure; }
+    let sessions; try { await plainDirectory(this.root); sessions = await fs.readdir(this.root); } catch (failure) { if (failure.code === 'ENOENT') { this.inventoryReady = true; return; } throw failure; }
     for (const id of sessions.filter(name => ID.test(name))) await this.loadSession(id);
+    this.inventoryReady = true;
   }
   lease(entry) {
     if (entry.deleting) return null;
@@ -197,8 +200,12 @@ export class RenderCache {
   async freeSpace(expected = 0) {
     try {
       const stat = await this.statfs(this.root), available = BigInt(stat.bavail) * BigInt(stat.bsize);
-      if (available < BigInt(Math.ceil(this.minFreeBytes + expected))) throw error('PREP_SPACE', '磁盘空间不足，后台预处理已暂停。');
-    } catch (failure) { if (failure.code === 'PREP_SPACE') throw failure; throw error('PREP_SPACE', '暂时无法确认可用磁盘空间，后台预处理已暂停。'); }
+      this.space = {availableBytes:Number(available),checkedAt:this.now(),requiredBytes:this.minFreeBytes+expected};
+      if (available < BigInt(Math.ceil(this.minFreeBytes + expected))) throw Object.assign(error('PREP_SPACE', '缓存所在磁盘的可用空间不足，后台预处理已暂停。'),{spaceReason:'disk'});
+    } catch (failure) { if (failure.code === 'PREP_SPACE') throw failure; this.space={checkedAt:this.now(),checkError:failure.code||'UNKNOWN'};throw Object.assign(error('PREP_SPACE', '暂时无法读取缓存所在磁盘的可用空间，稍后重试。'),{spaceReason:'space-check'}); }
+  }
+  snapshot() {
+    return {path:this.root,usedBytes:[...this.entries.values()].reduce((sum,entry)=>sum+entry.bytes,0),inventoryReady:this.inventoryReady,reservedBytes:this.reserved,maxBytes:Number.isFinite(this.maxBytes)?this.maxBytes:null,minFreeBytes:this.minFreeBytes,...this.space};
   }
   async reserveSpace(bytes) {
     let resolve; const previous = this.spaceQueue; this.spaceQueue = new Promise(done => { resolve = done; }); await previous;
@@ -207,7 +214,7 @@ export class RenderCache {
       const used = [...this.entries.values()].reduce((sum, entry) => sum + entry.bytes, 0);
       if (used + this.reserved + bytes > this.maxBytes) await this.prune({ targetBytes: Math.max(0, this.maxBytes - this.reserved - bytes) });
       const remaining = [...this.entries.values()].reduce((sum, entry) => sum + entry.bytes, 0);
-      if (remaining + this.reserved + bytes > this.maxBytes) throw Object.assign(error('PREP_SPACE', '预处理缓存已达到容量限制，已暂停自动重试；仍可继续编辑和导出。'), { capacity: true });
+      if (remaining + this.reserved + bytes > this.maxBytes) throw Object.assign(error('PREP_SPACE', '预处理缓存已达到软件容量上限，可清理缓存或调高上限后重试。'), { capacity: true,spaceReason:'capacity' });
       await this.freeSpace(this.reserved + bytes); this.reserved += bytes;
     } finally { resolve(); }
   }

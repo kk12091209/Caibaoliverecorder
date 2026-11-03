@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { labelsAt, labelGeometry } from '../../shared/linkmic-labels.js';
 
@@ -46,7 +48,7 @@ onBeforeUnmount(()=>{disposed=true;request?.abort();clearInterval(timer);observe
 </script>
 
 <template>
-  <div ref="surface" class="linkmic-overlay" aria-label="连麦主播名牌">
+  <div ref="surface" class="linkmic-overlay" :aria-label="ui.linkmic.连麦主播名牌">
     <div v-for="(label,index) in geometry" :key="index" class="linkmic-tile" :class="{'linkmic-audio':label.audioOnly}" :style="styleFor(label)">
       <img v-if="label.audioOnly&&label.avatar" class="linkmic-avatar" :src="label.avatar" alt="" :style="avatarStyle(label)">
       <span class="linkmic-name" :style="textStyle(label)">{{ label.text }}</span>

@@ -48,6 +48,21 @@ check('已完成 MP4 才能命中，身份和字节保持一致，新的 RenderC
   reused.release();
 });
 
+check('完整盘点结束后才标记统计就绪，部分加载和盘点失败不会误报空缓存', async () => {
+  const f=await fixture('inventory-ready'),key=spec();
+  const created=await build(f.cache,key);created.release();
+  const restarted=new RenderCache(f.data,f.settings);
+  assert.equal(restarted.snapshot().inventoryReady,false);
+  const original=restarted.loadSession.bind(restarted),gate=deferred();
+  restarted.loadSession=async id=>{await gate.promise;await original(id);};
+  const loading=restarted.loadAll();await nextTurn();
+  assert.equal(restarted.snapshot().inventoryReady,false);gate.resolve();await loading;
+  assert.equal(restarted.snapshot().inventoryReady,true);assert.equal(restarted.snapshot().usedBytes,minimalMp4.length);
+  const broken=new RenderCache(f.data,f.settings);broken.loadSession=async()=>{throw new Error('unreadable cache');};
+  await assert.rejects(broken.loadAll(),/unreadable cache/);assert.equal(broken.snapshot().inventoryReady,false);
+  const empty=await fixture('inventory-empty');await empty.cache.loadAll();assert.equal(empty.cache.snapshot().inventoryReady,true);
+});
+
 check('cache key 取决于实际输入、ASS、profile、时间块和版本，变化不能命中旧内容', async () => {
   const f = await fixture('keys'), key = spec();
   const original = await build(f.cache, key); original.release();
@@ -302,6 +317,21 @@ check('软预算淘汰最旧的未 leased 缓存，不能为新构建移除仍�
   await missing(old.file); await fs.access(pinned.file); await fs.access(recent.file);
   assert.equal(await hashFile(pinned.file), digest(minimalMp4));
   recent.release(); pinned.release();
+});
+
+check('默认无容量上限：超过旧预算的构建继续，保留已有缓存且不触发自动清理', async () => {
+  const f = await fixture('unlimited-default');
+  assert.equal(f.cache.maxBytes, Infinity);
+  let pruning = 0;
+  f.cache.prune = async () => { pruning++; throw new Error('must not auto-prune'); };
+  const old = await build(f.cache, spec()); old.release();
+  const large = await build(f.cache, spec(), { estimatedBytes: 60 * GiB }); large.release();
+  await fs.access(old.file); await fs.access(large.file);
+  assert.equal(pruning, 0); assert.equal(f.cache.reserved, 0);
+  assert.equal(f.cache.entries.size, 2);
+  f.cache.statfs = async () => ({bavail: GiB, bsize: 1});
+  await assert.rejects(build(f.cache, spec()), error => error.code === 'PREP_SPACE' && error.spaceReason === 'disk');
+  await fs.access(old.file); await fs.access(large.file);
 });
 
 check('源内容在 producer 期间变化时 verifySource 必须阻止最终提交', async () => {

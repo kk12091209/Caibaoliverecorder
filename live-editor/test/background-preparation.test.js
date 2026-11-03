@@ -167,14 +167,14 @@ test('缓存容量上限等待手动重试，不因其他素材完成或重启�
     return done;
   };
   scheduler.enqueue('a'); scheduler.enqueue('b'); await scheduler.tick(); await scheduler.tick();
-  assert.equal(scheduler.status('a').reason, 'space');
+  assert.equal(scheduler.status('a').reason, 'capacity');
   assert.equal(store.get('SELECT next_retry FROM preparation_jobs WHERE session=?', 'a').next_retry, Number.MAX_SAFE_INTEGER);
   await scheduler.tick(); assert.equal(scheduler.status('b').status, 'ready');
   state.now += 86400000; await scheduler.tick(); assert.deepEqual(state.calls, ['a', 'a', 'b']);
   const next = await restart(); await next.setEnabled(false); await next.setEnabled(true); await next.tick();
   assert.deepEqual(state.calls, ['a', 'a', 'b']);
   await next.invalidate('a'); await next.tick();
-  assert.equal(next.status('a').reason, 'space'); assert.deepEqual(state.calls, ['a', 'a', 'b']);
+  assert.equal(next.status('a').reason, 'capacity'); assert.deepEqual(state.calls, ['a', 'a', 'b']);
   next.resume('a'); await next.tick(); assert.equal(next.status('a').status, 'ready');
   assert.deepEqual(state.calls, ['a', 'a', 'b', 'a']);
 });

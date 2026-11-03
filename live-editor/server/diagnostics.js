@@ -35,7 +35,7 @@ export class DailyDiagnostics{
   constructor(root,{now=Date.now,io=fs,version='unknown',maxBytes=LOG_MAX_BYTES,retentionDays=LOG_RETENTION_DAYS}={}){
     Object.assign(this,{now,io,version,maxBytes,retentionDays});
     this.directory=path.join(root,'logs');this.stateFile=path.join(this.directory,'.daily-state.json');
-    this.pending=Promise.resolve();this.queued=0;this.dropped=0;this.repeat=new Map();this.observed=new Map();this.desktops=new Map();
+    this.pending=Promise.resolve();this.queued=0;this.dropped=0;this.repeat=new Map();this.observed=new Map();this.desktops=new Map();this.roomStates=new Map();this.offlineChat=new Map();
     this.secrets=new Set();this.lastError='';this.closed=false;this.day=logDay(now());this.started=now();this.counts={events:0,warnings:0,errors:0};
   }
   protectSecret(value){if(typeof value==='string'&&value.length>=8&&this.secrets.size<16)this.secrets.add(value);}
@@ -125,6 +125,7 @@ export class DailyDiagnostics{
     this.observed.set(key,message);this.record('状态变化',message,{level});
   }
   rooms(rooms,context){
+    this.roomStates=new Map(rooms.filter(room=>room.platform!=='douyin').map(room=>[String(room.roomId),context?.biliOnline===false?undefined:room.streaming===true||room.recording===true]));
     const keep=new Set();
     for(const room of rooms.slice(0,64)){
       const id=`room:${room.platform||'bilibili'}:${room.roomId}`;keep.add(id);
@@ -157,12 +158,29 @@ export class DailyDiagnostics{
       // Retain only known state fields. The rest of a core line may contain
       // protocol payloads; do not promote arbitrary informational output.
       if(event&&Object.hasOwn(lifecycle,event[2])){
+        if(this.roomStates.get(event[1])===false&&event[2]!=='credentials-changed'){
+          if(!info.has(event[2])){
+            const key=event[1]+':'+event[2],old=this.offlineChat.get(key)||{count:0,at:this.now()};old.count++;
+            if(this.now()-old.at>=300000){this.record('B站待播监控',`房间 ${event[1]}：${lifecycle[event[2]]}；过去 5 分钟 ${old.count} 次，已限频重试`,{level:'警告'});old.count=0;old.at=this.now();}
+            if(this.offlineChat.size>=128&&!this.offlineChat.has(key))this.offlineChat.delete(this.offlineChat.keys().next().value);
+            this.offlineChat.set(key,old);
+          }
+          line='';return;
+        }
+
         const detail=/\bstage=([a-z-]+) kind=([a-z-]+) elapsed_ms=(\d{1,10})(?:\s|$)/.exec(line);
         const known=event[2]==='connect-failed'&&detail&&Object.hasOwn(stages,detail[1])&&Object.hasOwn(kinds,detail[2]);
         const context=known?`；阶段：${stages[detail[1]]}；原因：${kinds[detail[2]]}；本次耗时 ${(Number(detail[3])/1000).toFixed(1)} 秒`:'';
         this.record('B站弹幕',`房间 ${event[1]}：${lifecycle[event[2]]}${event[3]===undefined?'':`（代码 ${event[3]}）`}${context}`,{level:info.has(event[2])?'信息':'警告'});
       }
-      else if(/\b(?:warn|error|fatal|exception|WRN|ERR|FTL)\b|失败|异常|错误/i.test(line))this.record(component,line,{level:'警告'});
+      else if(/\b(?:warn|error|fatal|exception|WRN|ERR|FTL)\b|失败|异常|错误/i.test(line)){
+        const offlineRoom=/\] \[(\d{1,10})\] .*连接弹幕服务器时出错/.exec(line);
+        if(offlineRoom&&this.roomStates.get(offlineRoom[1])===false){line='';return;}
+        // A compact identity coalesces changing elapsed times/stack traces.
+        const important=/录制进度异常|录制时发生IO错误|磁盘.*(?:不足|满)|ENOSPC|有效录制.*恢复/.test(line);
+        const text=line.replace(/^\[\d{2}:\d{2}:\d{2} [^\]]+\]\s*/, '').replace(/([0-9]+(?:\.[0-9]+)?) 秒/g,'若干秒');
+        this.record(component,important?line:text,{level:'警告',important});
+      }
       line='';
     };
     const consume=text=>{const fragments=text.split('\n');for(let n=0;n<fragments.length;n++){line+=fragments[n].slice(0,Math.max(0,4096-line.length));if(n<fragments.length-1)emit();}};

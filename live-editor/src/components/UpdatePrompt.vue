@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { Download, LoaderCircle, X } from 'lucide-vue-next';
 import { api } from '../api.js';
@@ -30,7 +32,7 @@ async function install(){
   const key=candidate.value.key;busy.value=true;error.value='';
   try{
     const value=await api(update.value.status==='ready'&&isDesktop?'updates/apply':'updates/download',update.value.status==='ready'&&isDesktop?{key}:{key,autoInstall:isDesktop});
-    remember(key);emit('changed',value);emit('started',isDesktop?'正在准备更新，下载并校验后将在空闲时安装并重新打开。':'已开始下载更新，可在软件更新中查看进度。');
+    remember(key);emit('changed',value);emit('started',isDesktop?ui.updates.更新准备提示:ui.updates.更新下载已开始);
     if(!isDesktop)emit('manage');
   }catch(e){error.value=e.message;}
   finally{busy.value=false;}
@@ -50,16 +52,16 @@ onBeforeUnmount(()=>{if(previousFocus?.isConnected)previousFocus.focus();});
 <template>
   <div v-if="visible" class="modal-backdrop update-prompt-backdrop" @keydown.stop="onKey">
     <section ref="dialog" class="modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description" tabindex="-1">
-      <button class="icon-button update-prompt-close" type="button" aria-label="关闭更新提醒" :disabled="busy" @click="close"><X :size="17"/></button>
-      <span class="update-eyebrow">软件更新</span>
-      <h2 id="update-prompt-title">发现新版本 {{ candidate.version }}</h2>
-      <p id="update-prompt-description">当前版本 {{ update.current?.version }} · 新版本 {{ candidate.version }}</p>
-      <div class="update-notes"><strong>更新内容</strong><ul v-if="candidate.notes?.length"><li v-for="(note,index) in candidate.notes" :key="index">{{ note }}</li></ul><p v-else>优化使用体验与稳定性。</p></div>
-      <p class="muted">{{ isDesktop?'更新包下载并通过校验后，软件会在空闲时更新并重新打开，录像和设置会保留。':'可在此下载更新包，请在桌面软件中完成安装。' }}</p>
+      <button class="icon-button update-prompt-close" type="button" :aria-label="ui.updates.关闭更新提醒" :disabled="busy" @click="close"><X :size="17"/></button>
+      <span class="update-eyebrow">{{ ui.common.软件更新 }}</span>
+      <h2 id="update-prompt-title">{{ ui.updates.发现新版本 }} {{ candidate.version }}</h2>
+      <p id="update-prompt-description">{{ ui.updates.当前版本 }} {{ update.current?.version }} {{ ui.updates.新版本 }} {{ candidate.version }}</p>
+      <div class="update-notes"><strong>{{ ui.updates.更新内容 }}</strong><ul v-if="candidate.notes?.length"><li v-for="(note,index) in candidate.notes" :key="index">{{ note }}</li></ul><p v-else>{{ ui.updates.优化使用体验与稳定性 }}</p></div>
+      <p class="muted">{{ isDesktop?ui.updates.空闲时安装并重启录像和设置保留:ui.updates.浏览器下载安装说明 }}</p>
       <p v-if="update.installBlocked" class="muted">{{ update.installBlocked }}</p>
       <p v-if="error" class="inline-warning" role="alert">{{ error }}</p>
-      <label class="checkbox update-ignore"><input v-model="ignore" type="checkbox" :disabled="busy"/>下次版本更新再提示</label>
-      <div class="update-prompt-actions"><button class="button" type="button" :disabled="busy" @click="close">关闭</button><button class="button primary update-now" type="button" :disabled="busy" @click="install"><LoaderCircle v-if="busy" :size="16" class="spin"/><Download v-else :size="16"/>立即更新</button></div>
+      <label class="checkbox update-ignore"><input v-model="ignore" type="checkbox" :disabled="busy"/>{{ ui.updates.下次版本更新再提示 }}</label>
+      <div class="update-prompt-actions"><button class="button" type="button" :disabled="busy" @click="close">{{ ui.common.关闭 }}</button><button class="button primary update-now" type="button" :disabled="busy" @click="install"><LoaderCircle v-if="busy" :size="16" class="spin"/><Download v-else :size="16"/>{{ ui.updates.立即更新 }}</button></div>
     </section>
   </div>
 </template>

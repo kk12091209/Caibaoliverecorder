@@ -1,4 +1,6 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import { computed, ref } from 'vue';
 import { api } from '../api.js';
 import { CAMERA_POSITIONS, normalizedRecordingStyle } from '../../shared/recording-style.js';
@@ -32,38 +34,36 @@ async function save(){
 </script>
 
 <template>
-  <section class="recording-style-editor" aria-label="录制样式" @input="saved=false" @change="saved=false">
-    <p class="muted">所有直播间共用一套样式，识别到独立摄像头时自动使用。</p>
-    <div class="recording-style-demo" :class="{'keep-original':original}" aria-label="摄像头位置示意图">
-      <div class="demo-game"><span>主画面</span><div class="demo-grid"/></div>
+  <section class="recording-style-editor" :aria-label="ui.common.录制样式" @input="saved=false" @change="saved=false">
+    <div class="recording-style-demo" :class="{'keep-original':original}" :aria-label="ui.recordingStyle.摄像头位置示意图">
+      <div class="demo-game"><span>{{ ui.recordingStyle.主画面 }}</span><div class="demo-grid"/></div>
       <TimestampText v-if="timestamp" class="demo-timestamp" label="2026-10-25 18:30:00" :variant="timestampStyle" :position="timestampPosition" :style="timestampDemoPosition"/>
-      <div class="demo-camera" :style="demoStyle"><span>摄像头</span></div>
+      <div class="demo-camera" :style="demoStyle"><span>{{ ui.recordingStyle.摄像头 }}</span></div>
     </div>
-    <small class="demo-caption">位置示意 · 真实摄像头保持原有比例</small>
     <div class="timestamp-options">
-      <label class="checkbox timestamp-choice"><input v-model="timestamp" type="checkbox" :disabled="busy"/>时间戳</label>
+      <label class="checkbox timestamp-choice"><input v-model="timestamp" type="checkbox" :disabled="busy"/>{{ ui.recordingStyle.时间戳 }}</label>
       <div v-if="timestamp" class="timestamp-controls">
-        <label class="timestamp-style-choice"><span>时间戳样式</span><select v-model="timestampStyle" :disabled="busy"><option v-for="choice in TIMESTAMP_STYLES" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
-        <label class="timestamp-style-choice"><span>时间戳位置</span><select v-model="timestampPosition" :disabled="busy"><option v-for="choice in TIMESTAMP_POSITIONS" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
+        <label class="timestamp-style-choice"><span>{{ ui.recordingStyle.时间戳样式 }}</span><select v-model="timestampStyle" :disabled="busy"><option v-for="choice in TIMESTAMP_STYLES" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
+        <label class="timestamp-style-choice"><span>{{ ui.recordingStyle.时间戳位置 }}</span><select v-model="timestampPosition" :disabled="busy"><option v-for="choice in TIMESTAMP_POSITIONS" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
       </div>
     </div>
-    <p class="muted">显示录制时间（北京时间），默认关闭、位置默认左上角。与摄像头位置独立，选到同一角时按所选位置显示。仅用于本地观看，导出不包含时间戳。</p>
-    <fieldset class="gift-settings" :disabled="busy"><legend>礼物与上舰</legend>
-      <label class="checkbox"><input v-model="gifts.preview" type="checkbox"/>展示礼物（默认关闭）</label>
-      <label class="checkbox"><input v-model="gifts.export" type="checkbox"/>弹幕版导出默认展示礼物（默认关闭）</label>
-      <div class="gift-price-fields"><label>B 站最低单次金额（元）<input v-model.number="gifts.minBilibili" type="number" min="0" max="1000000000" step="0.01" aria-label="B站礼物最低金额"/></label><label>抖音最低单次金额（元）<input v-model.number="gifts.minDouyin" type="number" min="0" max="1000000000" step="0.01" aria-label="抖音礼物最低金额"/></label></div>
-      <p class="muted">统一按人民币折算价值筛选，抖音按 10 抖币 = 1 元计算，不含充值渠道额外费用。按单次送礼合计，连击累计不重复计数。0 表示全部显示，金额未知的礼物仅在最低金额为 0 时显示。舰长、提督、总督单独标注。只改变展示，不删除记录。</p>
-      <p class="muted">预览和导出独立控制。纯净版不叠加礼物；导出窗口可为本次弹幕版单独勾选。旧素材没有采集的礼物无法补回。</p>
+    <p class="muted">{{ ui.recordingStyle.北京时间仅用于预览不随视频导出 }}</p>
+    <fieldset class="gift-settings" :disabled="busy"><legend>{{ ui.recordingStyle.礼物与上舰 }}</legend>
+      <label class="checkbox"><input v-model="gifts.preview" type="checkbox"/>{{ ui.common.展示礼物 }}</label>
+      <label class="checkbox"><input v-model="gifts.export" type="checkbox"/>{{ ui.recordingStyle.弹幕版导出默认展示礼物 }}</label>
+      <div class="gift-price-fields"><label>{{ ui.recordingStyle.B站最低单次金额元 }}<input v-model.number="gifts.minBilibili" type="number" min="0" max="1000000000" step="0.01" :aria-label="ui.recordingStyle.B站礼物最低金额"/></label><label>{{ ui.recordingStyle.抖音最低单次金额元 }}<input v-model.number="gifts.minDouyin" type="number" min="0" max="1000000000" step="0.01" :aria-label="ui.recordingStyle.抖音礼物最低金额"/></label></div>
+      <p class="muted">{{ ui.recordingStyle.礼物金额说明 }}</p>
+      <p class="muted">{{ ui.recordingStyle.预览与导出分别设置纯净版不显示礼物 }}</p>
     </fieldset>
-    <fieldset class="camera-position" :disabled="busy"><legend>独立摄像头位置</legend>
+    <fieldset class="camera-position" :disabled="busy"><legend>{{ ui.recordingStyle.独立摄像头位置 }}</legend>
       <div class="camera-choices"><label v-for="choice in CAMERA_POSITIONS" :key="choice.value" :class="{selected:draft.cameraPosition===choice.value}"><input v-model="draft.cameraPosition" type="radio" name="camera-position" :value="choice.value"/>{{ choice.label }}</label></div>
     </fieldset>
-    <label class="camera-size"><span>摄像头大小 <output>{{ draft.cameraSize }}%</output></span><input v-model.number="draft.cameraSize" type="range" min="10" max="40" step="1" aria-label="摄像头大小" :disabled="busy||original"/></label>
-    <p class="muted">预览、纯净版和弹幕版导出使用相同的位置。未识别到独立摄像头时保留原画面；已嵌入主画面的摄像头无法单独移动。</p>
-    <p class="muted">原始录像保留。调整摄像头样式后，相关预处理内容需要重新生成；已创建的导出任务继续使用创建时的样式。</p>
+    <label class="camera-size"><span>{{ ui.recordingStyle.摄像头大小 }} <output>{{ draft.cameraSize }}%</output></span><input v-model.number="draft.cameraSize" type="range" min="10" max="40" step="1" :aria-label="ui.recordingStyle.摄像头大小" :disabled="busy||original"/></label>
+    <p class="muted">{{ ui.recordingStyle.摄像头调整范围 }}</p>
+    <p class="muted">{{ ui.common.样式生效范围 }}</p>
     <p v-if="error" class="inline-warning" role="alert">{{ error }}</p>
-    <p class="recording-save-state" role="status">{{ busy?'正在保存…':saved?'录制样式已保存':'调整后点击保存样式' }}</p>
-    <div class="recording-style-actions"><button class="button" :disabled="busy" @click="emit('close')">返回设置</button><button class="button primary" :disabled="busy" @click="save">{{ busy?'正在保存…':'保存样式' }}</button></div>
+    <p v-if="busy||saved" class="recording-save-state" role="status">{{ busy?ui.common.正在保存:saved?ui.recordingStyle.录制样式已保存:'' }}</p>
+    <div class="recording-style-actions"><button class="button" :disabled="busy" @click="emit('close')">{{ ui.common.返回设置 }}</button><button class="button primary" :disabled="busy" @click="save">{{ busy?ui.common.正在保存:ui.common.保存样式 }}</button></div>
   </section>
 </template>
 

@@ -1,7 +1,9 @@
 <script setup>
+import { ui } from '../../shared/ui-copy.js';
+
 import {ref,onMounted,onBeforeUnmount} from 'vue';
 import {X} from 'lucide-vue-next';
-defineProps({closeLabel:{type:String,default:'关闭提示'}});
+defineProps({closeLabel:{type:String,default:ui.notices.关闭提示}});
 const emit=defineEmits(['dismiss']),card=ref(null),visible=ref(true);
 function dismiss(){if(!visible.value)return;visible.value=false;emit('dismiss');}
 function outside(event){if(visible.value&&card.value&&!event.composedPath().includes(card.value))dismiss();}
