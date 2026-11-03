@@ -51,13 +51,16 @@ test('旧缓存上限仅迁移为提醒大小，旧容量等待自动解除，�
  const seed=new Store(data);seed.setting('preparationCacheGiB',25);seed.close();
  const options={data,projectRoot:root,port:0,noRecorder:true,preparation:false,compact:false,automaticClean:false,ffmpeg:'must-not-launch',ffprobe:'must-not-launch'};
  const first=await createApp(options);await first.startupRecovery;first.ingestor.stop();await first.preparation.close();
- for(const [id,reason,paused] of [['quota','capacity',0],['paused','capacity',1],['disk','disk',0]]){
+ for(const [id,reason,paused,retry] of [['quota','capacity',0,Number.MAX_SAFE_INTEGER],['paused','capacity',1,Number.MAX_SAFE_INTEGER],['disk','disk',0,Number.MAX_SAFE_INTEGER],['legacy-quota','space',0,Number.MAX_SAFE_INTEGER],['legacy-paused','space',1,Number.MAX_SAFE_INTEGER],['legacy-disk','space',0,123456789]]){
   first.store.createSession({id,status:'finished'});
-  first.store.run("INSERT INTO preparation_jobs(session,status,reason,paused,next_retry) VALUES(?,'waiting',?,?,?)",id,reason,paused,Number.MAX_SAFE_INTEGER);
+  first.store.run("INSERT INTO preparation_jobs(session,status,reason,paused,next_retry) VALUES(?,'waiting',?,?,?)",id,reason,paused,retry);
  }
  await first.close();
  const app=await createApp(options);await app.startupRecovery;app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
  assert.equal(app.media.renderCache.maxBytes,Infinity);assert.equal(app.preparation.snapshot().cache.warningGiB,25);
  assert.equal(app.preparation.row('quota').next_retry,0);assert.equal(app.preparation.row('quota').status,'queued');assert.equal(app.preparation.row('quota').reason,'');
  assert.equal(app.preparation.row('paused').paused,1);assert.equal(app.preparation.row('disk').reason,'disk');
+ assert.equal(app.preparation.row('legacy-quota').next_retry,0);assert.equal(app.preparation.row('legacy-quota').status,'queued');assert.equal(app.preparation.row('legacy-quota').reason,'');
+ assert.equal(app.preparation.row('legacy-paused').paused,1);assert.equal(app.preparation.row('legacy-paused').next_retry,Number.MAX_SAFE_INTEGER);
+ assert.equal(app.preparation.row('legacy-disk').reason,'space');assert.equal(app.preparation.row('legacy-disk').next_retry,123456789);
 });

@@ -39,7 +39,9 @@ export class BackgroundPreparation {
     store.run("UPDATE preparation_jobs SET status=CASE WHEN paused=1 THEN 'paused' ELSE 'queued' END,reason=CASE WHEN paused=1 THEN 'user' ELSE '' END WHERE status='preparing'");
     // Retired quota waits must not strand old jobs after upgrading. Explicit
     // user pauses and real disk-space waits retain their existing behavior.
-    if (media.renderCache?.maxBytes === Infinity) store.run("UPDATE preparation_jobs SET status=?,reason=?,error='',next_retry=0,live_next_source_seconds=NULL WHERE paused=0 AND status IN ('waiting','queued') AND reason='capacity'", this.enabled ? 'queued' : 'waiting', this.enabled ? '' : 'disabled');
+    // 0.3.7 used the generic 'space' reason with an infinite retry deadline
+    // for quota waits. A real disk-space wait has a finite retry deadline.
+    if (media.renderCache?.maxBytes === Infinity) store.run("UPDATE preparation_jobs SET status=?,reason=?,error='',next_retry=0,live_next_source_seconds=NULL WHERE paused=0 AND status IN ('waiting','queued') AND (reason='capacity' OR (reason='space' AND next_retry=?))", this.enabled ? 'queued' : 'waiting', this.enabled ? '' : 'disabled', Number.MAX_SAFE_INTEGER);
     const first = store.setting('backgroundPreparationBaselineEstablished') !== true;
     store.transaction(() => {
       this.discover(first);
