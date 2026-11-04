@@ -47,6 +47,8 @@ cp LICENSE THIRD_PARTY_NOTICES.md "$RESOURCES/licenses/"
 cp .tools/runtime/node-v24.12.0-darwin-arm64/LICENSE "$RESOURCES/licenses/Node-LICENSE.txt"
 cp live-editor/package-lock.json "$RESOURCES/licenses/editor-dependencies.json"
 cp live-editor/desktop-macos/THIRD_PARTY.md "$RESOURCES/licenses/Mac-THIRD-PARTY.md"
+mkdir -p "$RESOURCES/licenses/product-notices"
+cp live-editor/docs/licenses/*.txt "$RESOURCES/licenses/product-notices/"
 for package in vue lucide-vue-next; do
   license=$(find "live-editor/node_modules/$package" -maxdepth 1 -iname '*license*' -type f -print -quit)
   [[ -n "$license" ]] && cp "$license" "$RESOURCES/licenses/$package-LICENSE.txt"

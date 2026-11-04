@@ -7,6 +7,8 @@ import {createApp,fetch} from './helpers/authenticated-app.js';
 import {Media} from '../server/media.js';
 import {FLV_HEADER,Ingestor} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';
+import {EventEmitter} from 'node:events';
+import {DouyinChat} from '../server/douyin-chat.js';
 
 test('HTTP auto-detects Douyin; namespaced actions preserve numeric Bilibili rooms and leak no guest secrets',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'douyin-api-test-'));
@@ -32,4 +34,20 @@ test('finished Douyin recording enters existing background preparation without a
  app.ingestor.stop();while(app.ingestor.busy)await new Promise(resolve=>setTimeout(resolve,5));await new Ingestor(app.store).tick();
  const deadline=Date.now()+4000;while(!prepared.includes(session.id)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(app.store.session(session.id).status,'finished');assert.ok(prepared.includes(session.id));assert.equal(app.store.get('SELECT count(*) n FROM jobs').n,0);
+});
+
+test('the state API exposes observed chat health without credentials or message payloads',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'douyin-chat-state-api-')),worker=new EventEmitter();
+ worker.postMessage=message=>{if(message.type==='stop')queueMicrotask(()=>worker.emit('message',{type:'stopped',key:message.key}));};worker.terminate=async()=>worker.emit('exit',0);
+ const chat=new DouyinChat({createWorker:()=>worker});
+ const app=await createApp({noRecorder:true,preparation:false,compact:false,data:root,port:0,ffmpeg:'not-executed',ffprobe:'not-executed',douyin:{chat}});
+ t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+ app.recorder.douyin.started=true;
+ const room=app.recorder.douyin.entry({webRid:'123'});room.recording=true;room.sourceId='source';room.metadata={cookie:'private-cookie',userUniqueId:'private-user'};app.recorder.douyin.entries.set('123',room);
+ chat.start('source',{cookie:'private-cookie',userUniqueId:'private-user'},{write:async()=>{}});
+ const read=async()=>{const response=await fetch(`http://127.0.0.1:${app.port}/api/state`);assert.equal(response.status,200);const value=await response.json();assert.doesNotMatch(JSON.stringify(value),/private-/);return value.rooms.find(room=>room.platform==='douyin').chatStatus;};
+ assert.equal((await read()).connection,'connecting');
+ worker.emit('message',{type:'status',key:'source',status:'connected'});assert.equal((await read()).written,false);
+ worker.emit('message',{type:'batch',key:'source',id:1,messages:[{text:'private-message'}]});
+ const status=await read();assert.equal(status.connection,'connected');assert.equal(status.written,true);assert.ok(Number.isFinite(status.lastWrittenAt));
 });

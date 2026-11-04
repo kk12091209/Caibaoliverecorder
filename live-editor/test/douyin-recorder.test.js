@@ -9,6 +9,9 @@ import {Store} from '../server/store.js';
 import {Ingestor,FLV_HEADER,tags,timestamp} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';
 import {MultiPlatformRecorder} from '../server/multi-platform-recorder.js';
+import {EventEmitter} from 'node:events';
+import {DouyinChat} from '../server/douyin-chat.js';
+import {recorderStatusDetails} from '../src/recorder-status.js';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check){for(let n=0;n<200;n++){if(check())return;await delay(5);}assert.fail('operation did not settle');}
 const encoded=()=>Buffer.concat([FLV_HEADER,flvTag(9,123000,24,{header:true}),flvTag(8,123000,8,{header:true}),flvTag(9,123000,24,{key:true}),flvTag(8,123020,8),flvTag(9,124000,24,{key:true}),flvTag(9,125000,24,{key:true})]);
@@ -39,6 +42,38 @@ test('Douyin recorder logs safe connection diagnostics and first persistence wit
  notify('first-frame',{stage:'receive'});assert.equal(f.recorder.rooms[0].chatError,'');notify('first-write',{stage:'write'});
  const lines=events.filter(([source])=>source==='抖音弹幕').map(([,line])=>line).join('\n');
  assert.match(lines,/WebSocket 握手.*代码 403.*3\.0 秒后重试/);assert.match(lines,/首个有效数据包/);assert.match(lines,/写入原始记录/);assert.doesNotMatch(lines,/private-cookie/);
+});
+test('actual chat writes reach the room snapshot and UI, survive reconnects and do not carry into the next capture',async t=>{
+ const workers=[],chat=new DouyinChat({createWorker:()=>{
+  const worker=new EventEmitter();workers.push(worker);
+  worker.postMessage=message=>{if(message.type==='stop')queueMicrotask(()=>worker.emit('message',{type:'stopped',key:message.key}));};
+  worker.terminate=async()=>worker.emit('exit',0);return worker;
+ }});
+ const f=await fixture(t,{chat});f.recorder.start();await f.recorder.add({webRid:'123'},true);
+ await until(()=>f.recorder.rooms[0]?.recording&&chat.clients.size===1);
+ const key=[...chat.clients.keys()][0],worker=workers.at(-1);
+ const label=()=>recorderStatusDetails({douyinOnline:true},f.recorder.rooms)[1].rooms[0].chat;
+ assert.equal(label(),'待确认');
+ worker.emit('message',{type:'status',key,status:'connected'});assert.equal(label(),'已连接');
+ worker.emit('message',{type:'status',key,status:'first-comment'});assert.equal(label(),'已连接');
+ worker.emit('message',{type:'batch',key,id:1,density:[],messages:[{id:'observed-1',text:'上报测试',user:'观众',time:.5,color:'16777215'}]});
+ await until(()=>chat.snapshot(key)?.written);assert.equal(label(),'已连接');
+ const session=f.store.sessions()[0],source=f.store.sources(session.id)[0];assert.match(await fs.readFile(source.xml,'utf8'),/上报测试/);
+ worker.emit('message',{type:'status',key,status:'retry',stage:'receive',reason:'close'});assert.equal(label(),'未连接');
+ assert.equal(f.recorder.rooms[0].recording,true);assert.equal(f.state.streams,1,'chat reconnect does not restart video');
+ for(const status of ['connecting','connected'])worker.emit('message',{type:'status',key,status});assert.equal(label(),'已连接');
+ worker.emit('message',{type:'batch',key,id:2,density:[],messages:[{id:'observed-2',text:'重连后的弹幕',user:'观众',time:1,color:'16777215'}]});
+ await until(()=>chat.snapshot(key)?.written);assert.equal(label(),'已连接');
+ const client=chat.clients.get(key),persist=client.write;client.write=async()=>{throw Error('simulated disk failure');};
+ worker.emit('message',{type:'batch',key,id:3,density:[],messages:[{id:'failed',text:'无法写入的测试弹幕',user:'观众',time:1.1,color:'16777215'}]});
+ await until(()=>chat.snapshot(key)?.writeFailed);assert.equal(label(),'已连接');assert.match(f.recorder.rooms[0].chatError,/保存失败/);assert.equal(f.recorder.rooms[0].recording,true);
+ client.write=persist;worker.emit('message',{type:'batch',key,id:4,density:[],messages:[{id:'recovered',text:'恢复写入的弹幕',user:'观众',time:1.2,color:'16777215'}]});
+ await until(()=>!chat.snapshot(key)?.writeFailed);assert.equal(label(),'已连接');assert.equal(f.recorder.rooms[0].chatError,'');
+ await f.recorder.stopRoom('123');assert.equal(f.recorder.rooms[0].chatStatus,null);assert.equal(chat.snapshot(key),null);
+ const video=await fs.readFile(source.path),before=tags(encoded().subarray(13)).items,after=tags(video.subarray(13)).items;
+ assert.equal(video.length,encoded().length);for(let i=0;i<before.length;i++)assert.deepEqual(after[i].tag.subarray(11),before[i].tag.subarray(11));
+ await f.recorder.startRoom('123');await until(()=>chat.clients.size===1);assert.notEqual([...chat.clients.keys()][0],key);
+ assert.equal(f.recorder.rooms[0].chatStatus.connection,'connecting');assert.equal(f.recorder.rooms[0].chatStatus.written,false);
 });
 test('Douyin records in its own originals namespace, indexes continuous chunks and drains final chat on stop',async t=>{
  const f=await fixture(t);f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);

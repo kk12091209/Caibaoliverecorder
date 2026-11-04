@@ -69,12 +69,12 @@ onBeforeUnmount(()=>{disposed=true;clearInterval(timer);window.removeEventListen
 </template>
 
 <style scoped>
-.power-settings{border:1px solid var(--line);border-radius:10px;padding:14px;margin:16px 0;font-size:13px;color:var(--text);}
+.power-settings{border:1px solid var(--line);border-radius:var(--radius-card);padding:14px;margin:16px 0;font-size:13px;color:var(--text);}
 .power-heading,.power-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;}
 .power-heading{align-items:center;flex-wrap:wrap;margin-bottom:6px;}
 .power-row{padding:12px 0;border-bottom:1px solid var(--line);}
 .power-row>div{min-width:0;flex:1;}.power-row p,.power-guide p{margin:7px 0;line-height:1.65;overflow-wrap:anywhere;}.power-row p,.power-footnote{color:var(--muted);}
-.power-badge{flex-shrink:0;font-size:12px;border:1px solid var(--line);border-radius:20px;padding:4px 8px;white-space:nowrap;}
+.power-badge{flex-shrink:0;font-size:12px;border:1px solid var(--line);border-radius:var(--radius-card);padding:4px 8px;white-space:nowrap;}
 .power-badge.good{color:#285d38;background:#edf7ee;border-color:#b9d6bf;}.power-badge.warning{color:#89500c;background:#fff6e4;border-color:#e5c795;}
 .power-guide-button{margin:12px 0;}.power-guide{padding:0 0 12px;}.power-footnote{display:block;line-height:1.6;}
 @media(max-width:480px){.power-row{flex-wrap:wrap;}.power-row>div{flex-basis:100%;}.power-heading .button{font-size:12px;}}

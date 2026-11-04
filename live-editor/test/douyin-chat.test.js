@@ -48,3 +48,47 @@ test('worker reasons reach the recorder, first persisted batch follows disk comp
  assert.doesNotMatch(JSON.stringify(events),/private/);fake.emit('error',new Error('private-worker-error'));assert.deepEqual(events.at(-1),['retry',{stage:'worker',reason:'worker-exit',retryMs:2000}]);
  await chat.close();
 });
+
+test('room snapshots follow disk completion, retain write failures across reconnects and clear them on recovered writes',async()=>{
+ const fake=worker(),chat=new DouyinChat({createWorker:()=>fake}),statuses=[];let release;
+ try{
+  chat.start('source',{cookie:'private-cookie'}, {write:async message=>{if(message.id===1)await new Promise(resolve=>release=resolve);if(message.id===2)throw Error('private-disk-error');},status:value=>statuses.push(value)});
+  assert.equal(chat.snapshot('source').connection,'connecting');assert.equal(chat.snapshot('missing'),null);
+  fake.emit('message',{type:'status',key:'source',status:'connected'});
+  fake.emit('message',{type:'status',key:'source',status:'first-comment'});
+  fake.emit('message',{type:'batch',key:'source',id:1,messages:[{text:'private-comment'}]});await turn();
+  assert.equal(chat.snapshot('source').received,true);assert.equal(chat.snapshot('source').written,false);assert.equal(fake.sent.some(m=>m.type==='ack'),false);
+  release();await turn();assert.equal(chat.snapshot('source').written,true);assert.ok(fake.sent.some(m=>m.type==='ack'&&m.id===1));
+  fake.emit('message',{type:'batch',key:'source',id:2,messages:[{text:'private-comment'}]});await turn();assert.equal(chat.snapshot('source').writeFailed,true);
+  for(const status of ['retry','connecting','connected','first-frame'])fake.emit('message',{type:'status',key:'source',status});
+  assert.equal(chat.snapshot('source').written,false);assert.equal(chat.snapshot('source').writeFailed,true);
+  fake.emit('message',{type:'batch',key:'source',id:3,messages:[]});await turn();assert.equal(chat.snapshot('source').writeFailed,true);
+  fake.emit('message',{type:'batch',key:'source',id:4,messages:[{text:'recovered'}]});await turn();assert.equal(chat.snapshot('source').written,true);assert.equal(chat.snapshot('source').writeFailed,false);
+  assert.equal(statuses.filter(value=>value==='first-write').length,2,'recovered persistence clears the existing recorder warning once');
+  assert.doesNotMatch(JSON.stringify(chat.snapshot('source')),/private/);
+  fake.emit('error',Error('worker crashed'));assert.equal(chat.snapshot('source').connection,'retrying');assert.equal(chat.snapshot('source').written,false);
+ }finally{release?.();await chat.close();}
+});
+test('an old pending write cannot mark a new connection as collecting, and stopping never reopens its state',async()=>{
+ const fake=worker(),chat=new DouyinChat({createWorker:()=>fake});let release;
+ try{
+  chat.start('source',{}, {write:async message=>{if(message.id===1)await new Promise(resolve=>release=resolve);}});
+  fake.emit('message',{type:'status',key:'source',status:'connected'});
+  fake.emit('message',{type:'batch',key:'source',id:1,messages:[{text:'old connection'}]});await turn();
+  for(const status of ['retry','connecting','connected'])fake.emit('message',{type:'status',key:'source',status});
+  release();await turn();assert.equal(chat.snapshot('source').written,false);
+  fake.emit('message',{type:'batch',key:'source',id:2,messages:[{text:'new connection'}]});await turn();assert.equal(chat.snapshot('source').written,true);
+  const stopping=chat.stop('source');assert.equal(chat.snapshot('source').connection,'stopped');
+  fake.emit('message',{type:'status',key:'source',status:'connected'});assert.equal(chat.snapshot('source').connection,'stopped');await stopping;assert.equal(chat.snapshot('source'),null);
+ }finally{release?.();await chat.close();}
+});
+test('snapshots are isolated per source and a startup failure does not invent a connection',async()=>{
+ const fake=worker(),chat=new DouyinChat({createWorker:()=>fake});
+ try{
+  chat.start('a',{}, {write:async()=>{}});chat.start('b',{}, {write:async()=>{}});
+  fake.emit('message',{type:'status',key:'a',status:'connected'});assert.equal(chat.snapshot('a').connected,true);assert.equal(chat.snapshot('b').connection,'connecting');
+  const snapshot=chat.snapshot('a');snapshot.written=true;assert.equal(chat.snapshot('a').written,false);
+ }finally{await chat.close();}
+ const broken=new DouyinChat({createWorker:()=>{throw Error('startup failed');}});
+ assert.throws(()=>broken.start('source',{}, {write:async()=>{}}),/startup failed/);assert.equal(broken.snapshot('source').connection,'unknown');await broken.close();
+});

@@ -31,6 +31,36 @@ export class DouyinChatSignals {
   first(state){if(!['first-frame','first-comment','first-gift','message-invalid'].includes(state)||this.seen.has(state))return;this.seen.add(state);if(this.connected)this.send(state,{stage:state==='first-frame'?'receive':'decode'});else this.pending.push(state);}
   retry(error,retryMs){this.send('retry',{...chatFailure(error),retryMs});this.connected=false;this.pending=[];}
 }
+
+// Observes the existing transport and completed writes; never drives either.
+export class DouyinChatHealth {
+  constructor({now=Date.now}={}){
+    this.now=now;this.connection='unknown';this.epoch=0;this.received=false;this.written=false;this.writeFailed=false;this.lastReceivedAt=null;this.lastWrittenAt=null;
+  }
+  get snapshot(){return {connection:this.connection,connected:this.connection==='connected',received:this.received,written:this.written,writeFailed:this.writeFailed,lastReceivedAt:this.lastReceivedAt,lastWrittenAt:this.lastWrittenAt};}
+  started(){if(this.connection==='unknown')this.connecting();}
+  connecting(){if(this.connection==='stopped')return;this.epoch++;this.connection='connecting';this.received=false;this.written=false;}
+  update(status){
+    if(this.connection==='stopped')return;
+    if(status==='connecting')this.connecting();
+    else if(status==='connected'){
+      if(this.connection!=='connected'){this.received=false;this.written=false;}
+      this.connection='connected';
+    }else if(['first-comment','first-gift'].includes(status)&&this.connection==='connected'){
+      this.received=true;this.lastReceivedAt=this.now();
+    }else if(status==='retry'){
+      this.epoch++;this.connection='retrying';this.received=false;this.written=false;
+    }else if(status==='write-failed')this.failedWrite();
+    else if(status==='stopped')this.stop();
+  }
+  completedWrite(epoch){
+    if(this.connection==='stopped')return;
+    this.writeFailed=false;this.lastWrittenAt=this.now();
+    if(epoch===this.epoch&&this.connection==='connected')this.written=true;
+  }
+  failedWrite(){if(this.connection!=='stopped')this.writeFailed=true;}
+  stop(){this.epoch++;this.connection='stopped';this.received=false;this.written=false;}
+}
 export function chatStatusMessage(room,status,detail={}){
   const event=safeChatStatus(status,detail);if(!event||!/^\d{1,20}$/.test(String(room)))return null;
   const labels={connecting:'正在连接弹幕服务器',connected:'连接已建立，等待平台数据','first-frame':'已收到首个有效数据包','first-comment':'已收到首条普通弹幕','first-gift':'已收到首条礼物记录','first-write':'首批弹幕或礼物已写入原始记录','message-invalid':'忽略格式异常的消息',retry:'弹幕连接重试中','write-failed':'弹幕保存失败',stopped:'弹幕采集已停止'};

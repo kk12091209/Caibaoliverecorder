@@ -25,7 +25,7 @@ async function action(name,input={}){
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>{{ ui.updates.自动检查更新并提醒 }}</label>
     <p class="muted">{{ ui.updates.发现新版本时提醒不中断录制或导出 }}</p>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>{{ ui.updates.检查更新 }}</button><small v-if="update.checkedAt">{{ ui.updates.上次检查 }} {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
-    <p role="status">{{ status }}</p>
+    <p v-if="update.status!=='idle'" role="status">{{ status }}</p>
     <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
       <strong>{{ update.candidate.version }}</strong>
@@ -49,7 +49,7 @@ async function action(name,input={}){
 </template>
 
 <style scoped>
-.update-settings{border:1px solid var(--line);border-radius:10px;padding:14px;margin:16px 0;color:var(--text);font-size:13px;}
+.update-settings{border:1px solid var(--line);border-radius:var(--radius-card);padding:14px;margin:16px 0;color:var(--text);font-size:13px;}
 .update-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
 .update-heading span,.update-actions small{color:var(--muted);font-size:12px;}
 .update-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;}

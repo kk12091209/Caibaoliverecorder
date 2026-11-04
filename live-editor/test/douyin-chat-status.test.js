@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DouyinChatSignals,chatFailure,douyinChatError,safeChatStatus,chatStatusMessage} from '../server/douyin-chat-status.js';
+import {DouyinChatSignals,DouyinChatHealth,chatFailure,douyinChatError,safeChatStatus,chatStatusMessage} from '../server/douyin-chat-status.js';
 
 test('first data and comment events remain ordered even when upgrade includes data, and quiet connections are not reported as comments',()=>{
  let now=0;const events=[],signals=new DouyinChatSignals(e=>events.push(e),{now:()=>now});
@@ -22,4 +22,29 @@ test('network, timeout, TLS and worker failures have bounded categories; untrust
  assert.equal(safeChatStatus('private-secret'),null);assert.equal(chatStatusMessage('private-secret','retry'),null);
  assert.deepEqual(safeChatStatus('connected',null),{status:'connected'});
  const events=[],signals=new DouyinChatSignals(e=>events.push(e));signals.begin();signals.established();for(let i=0;i<100;i++)signals.first('message-invalid');assert.equal(events.filter(e=>e.status==='message-invalid').length,1);
+});
+
+test('observed connection, decoded records and completed writes are distinct, with no quiet-room timeout',()=>{
+ let now=1;const health=new DouyinChatHealth({now:()=>now});
+ assert.equal(health.snapshot.connection,'unknown');health.started();assert.equal(health.snapshot.connection,'connecting');
+ health.update('connected');health.update('first-frame');health.update('first-write');
+ assert.equal(health.snapshot.connected,true);assert.equal(health.snapshot.received,false);assert.equal(health.snapshot.written,false);
+ now=86400000;assert.equal(health.snapshot.connection,'connected','silence alone is not a disconnection');
+ health.update('first-comment');assert.equal(health.snapshot.received,true);assert.equal(health.snapshot.written,false);
+ now++;health.completedWrite(health.epoch);assert.equal(health.snapshot.written,true);assert.equal(health.snapshot.lastWrittenAt,now);
+ const snapshot=health.snapshot;snapshot.connection='stopped';assert.equal(health.snapshot.connection,'connected');
+});
+test('reconnection invalidates old capture evidence and late writes cannot restore it',()=>{
+ const health=new DouyinChatHealth();health.started();health.update('connected');const oldEpoch=health.epoch;
+ health.completedWrite(oldEpoch);health.update('retry');assert.equal(health.snapshot.connected,false);assert.equal(health.snapshot.written,false);
+ health.update('connecting');health.update('connected');health.completedWrite(oldEpoch);
+ assert.equal(health.snapshot.connection,'connected');assert.equal(health.snapshot.written,false);
+ health.update('first-gift');assert.equal(health.snapshot.received,true);health.completedWrite(health.epoch);assert.equal(health.snapshot.written,true);
+});
+test('only a successful write clears a write failure; connection events and late stop callbacks do not',()=>{
+ const health=new DouyinChatHealth();health.started();health.update('connected');health.failedWrite();
+ for(const status of ['retry','connecting','connected','first-frame','first-comment'])health.update(status);
+ assert.equal(health.snapshot.writeFailed,true);health.completedWrite(health.epoch);assert.equal(health.snapshot.writeFailed,false);
+ health.stop();for(const status of ['connecting','connected','first-comment','retry'])health.update(status);health.completedWrite(health.epoch);
+ assert.equal(health.snapshot.connection,'stopped');assert.equal(health.snapshot.written,false);
 });
