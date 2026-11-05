@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 import {Store} from '../server/store.js';
 import {CompactStorage} from '../server/compact-storage.js';
 import {fingerprint,sourceReaderCount} from '../server/storage-files.js';
@@ -25,8 +26,17 @@ async function fixture(t,mode,options={}){
 async function metadataChange(f,mode){
  const files=mode==='direct'?[f.file]:f.store.all('SELECT path FROM chunks WHERE source=?',f.source.id).map(x=>x.path);
  for(const file of files){
-  const before=await fs.stat(file,{bigint:true});await fs.chmod(file,Number(before.mode&0o777n)^0o200);await fs.chmod(file,Number(before.mode&0o777n));
-  const after=await fs.stat(file,{bigint:true});assert.ok(metadataOnlyChange(after,fingerprint(before)),'fixture must change only file status metadata');
+  const before=await fs.stat(file,{bigint:true});let after;
+  // Windows file-time updates can share a clock tick. Retry only the fixture
+  // operation until it has actually produced a distinct status timestamp.
+  for(let attempt=0;attempt<5;attempt++){
+   await fs.chmod(file,Number(before.mode&0o777n)^0o200);await fs.chmod(file,Number(before.mode&0o777n));
+   after=await fs.stat(file,{bigint:true});
+   for(const name of ['dev','ino','size','mtimeNs'])assert.equal(after[name],before[name],`fixture changed ${name}`);
+   if(after.ctimeNs!==before.ctimeNs)break;
+   await delay(20);
+  }
+  assert.ok(metadataOnlyChange(after,fingerprint(before)),'fixture must change only file status metadata');
  }
 }
 for(const mode of ['chunks','direct']){
