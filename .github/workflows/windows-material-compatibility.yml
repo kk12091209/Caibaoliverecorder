@@ -1,0 +1,27 @@
+name: Windows material restart compatibility
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  material:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+      - name: Probe real native ACL across recording and restart
+        shell: pwsh
+        env:
+          CAIBO_MATERIAL_REPORT: material-restart.json
+        run: |
+          node live-editor/scripts/probe-material-restart.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Material restart probe failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-material-restart
+          path: material-restart.json
+          if-no-files-found: ignore
