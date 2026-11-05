@@ -11,7 +11,7 @@ import {transportFixture,sourceStream,collect} from '../test/helpers/source-stre
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const reports=[];
 for(const mode of ['chunks','direct']){
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo restart 兼容-'));let store,storage;
+ const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'caibo restart 兼容-'));let store,storage;
  try{
   await protectDataDirectory(root);
   const f=await transportFixture(root,{seconds:8,start:0,videoBytes:128});store=f.store;
