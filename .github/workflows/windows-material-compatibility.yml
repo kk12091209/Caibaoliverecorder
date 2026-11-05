@@ -18,9 +18,16 @@ jobs:
         shell: pwsh
         env:
           CAIBO_MATERIAL_REPORT: material-restart.json
+          CAIBO_REQUIRE_READABLE: 1
         run: |
           node live-editor/scripts/probe-material-restart.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Material restart probe failed' }
+      - name: Test metadata compatibility and exact media boundaries
+        shell: pwsh
+        run: |
+          . ./live-editor/scripts/dev-env.ps1
+          node --test live-editor/test/source-metadata-compatibility.test.js live-editor/test/source-range-identity.test.js live-editor/test/source-stream-batching.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Metadata compatibility regressions failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

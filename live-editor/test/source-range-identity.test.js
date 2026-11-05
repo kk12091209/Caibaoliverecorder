@@ -103,6 +103,11 @@ test('换编码头前先封口，旧区间仍用旧头，跨epoch不可提前处
   assert.deepEqual(direct,live);
   const directHeaders=tags(direct.subarray(13)).items.filter(({tag})=>tag[0]===9&&tag[12]===0).map(({tag})=>timestamp(tag));
   assert.deepEqual(directHeaders,headers);
+  // Replaying an old Windows recording after an ACL-only status change
+  // must preserve codec epochs, headers and seek bytes as well.
+  const stat=await fs.stat(fixture.file);await fs.chmod(fixture.file,(stat.mode&0o777)^0o200);await fs.chmod(fixture.file,stat.mode&0o777);
+  assert.deepEqual((await collect(sourceStream(store,source.id,0,17))).bytes,direct);
+  assert.equal(await stableSourceFingerprint(store,source,14,17),changedBefore);
 });
 
 test('仅重复sequence header的时间戳变化不创建不同编码epoch，旧素材保守fallback',async t=>{

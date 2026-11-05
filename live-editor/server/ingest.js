@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { acquireReader, checkedFile, fingerprint, originalTags, isMedia, isCodecHeader } from './storage-files.js';
 import { chatRate, isLongChat } from './chat-rules.js';
-import {mediaDigest,keyframesDigest,codecHeaderSignature,readSealedChunk,verifyDirectKeyframes} from './source-range-identity.js';
+import {mediaDigest,keyframesDigest,codecHeaderSignature,readSealedChunk,verifyDirectKeyframes,metadataOnlyChange,verifiedDirectChunks} from './source-range-identity.js';
 import {timestamp, RecordingClock} from './flv-clock.js';
 import {giftFromXml,saveGift} from './gifts.js';
 import {senderFromXml,saveSender} from './senders.js';
@@ -235,7 +235,7 @@ export class Ingestor {
 export async function* sourceStream(store, sourceId, from, to, { follow = false, signal, wholeSource = false } = {}) {
   let source = store.get('SELECT * FROM sources WHERE id=?', sourceId);
   if(!source||!store.session(source.session))throw new Error('素材不存在或已经删除。');
-  const reader=acquireReader(store,sourceId);let original;
+  const reader=acquireReader(store,sourceId);let original,recovered;
   try {
   const key = store.get('SELECT * FROM keyframes WHERE source=? AND time<=? ORDER BY time DESC LIMIT 1', sourceId, from) || store.get('SELECT * FROM keyframes WHERE source=? ORDER BY time LIMIT 1', sourceId);
   if (!key) throw new Error('正在等待可解码的关键帧。');
@@ -249,10 +249,16 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
     absolute=store.get('SELECT raw_offset FROM direct_keyframes WHERE source=? AND seq=? AND chunk_offset=?',sourceId,key.seq,key.offset)?.raw_offset;
     if(!Number.isSafeInteger(absolute)||absolute<13)throw new Error('完整原片的定位索引缺失，请检查素材。');
     const stat=await checkedFile(path.join(store.root,'originals'),source.path);
-    if(fingerprint(stat)!==reader.storage.fingerprint)throw new Error('完整原片在整理后发生变化，无法安全读取，请恢复原文件。');
+    if(fingerprint(stat)!==reader.storage.fingerprint){
+      if(!metadataOnlyChange(stat,reader.storage.fingerprint))throw new Error('完整原片在整理后发生变化，无法安全读取，请恢复原文件。');
+      const last=store.get('SELECT seq FROM chunks WHERE source=? AND start<=? ORDER BY seq DESC LIMIT 1',sourceId,to+.1);
+      recovered=verifiedDirectChunks(store,source,key.seq,last?.seq??key.seq,{signal});
+    }
     if(wholeSource)absolute=13;
-    original=await fs.open(source.path,'r');
-    if(fingerprint(await original.stat({bigint:true}))!==reader.storage.fingerprint)throw new Error('完整原片在打开时发生变化，请恢复原文件。');
+    if(!recovered){
+      original=await fs.open(source.path,'r');
+      if(fingerprint(await original.stat({bigint:true}))!==reader.storage.fingerprint)throw new Error('完整原片在打开时发生变化，请恢复原文件。');
+    }
   }
   yield FLV_HEADER;
   let header = JSON.parse(store.get('SELECT header FROM chunk_identities WHERE source=? AND seq=?',sourceId,key.seq)?.header||source.header);
@@ -284,7 +290,9 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
       await new Promise(resolve => setTimeout(resolve, 120)); continue;
     }
     if(chunk.start>to+.1)return;
-    const sealed=await readSealedChunk(store,chunk),data=sealed.data,part=first&&!wholeSource?data.subarray(key.offset):data;
+    const sealed=recovered?(await recovered.next()).value:await readSealedChunk(store,chunk);
+    if(!sealed||recovered&&sealed.chunk.seq!==chunk.seq)throw new Error('完整原片的片段验证记录不完整，无法安全读取。');
+    const data=sealed.data,part=first&&!wholeSource?data.subarray(key.offset):data;
     if(sealed.header&&codecHeaderSignature(sealed.header)!==codecHeaderSignature(header)) {
       for(const name of ['video','audio'])if(sealed.header[name]&&codecHeaderSignature({[name]:sealed.header[name]})!==codecHeaderSignature({[name]:header[name]})) {
         const tag=Buffer.from(sealed.header[name],'base64');
@@ -320,7 +328,7 @@ export async function* sourceStream(store, sourceId, from, to, { follow = false,
     if (batchEnd > batchStart && !signal?.aborted) yield part.subarray(batchStart, batchEnd);
     first = false; seq++;
   }
-  } finally {try{await original?.close();}finally{reader.release();}}
+  } finally {try{await recovered?.return();}finally{try{await original?.close();}finally{reader.release();}}}
 }
 
 export function seekBase(store, sourceId, time) {

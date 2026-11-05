@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
@@ -35,3 +36,5 @@ for(const mode of ['chunks','direct']){
 }
 console.log(JSON.stringify({reports},null,2));
 if(process.env.CAIBO_MATERIAL_REPORT)await fs.writeFile(process.env.CAIBO_MATERIAL_REPORT,JSON.stringify({reports},null,2)+'\n');
+
+if(process.env.CAIBO_REQUIRE_READABLE==='1')for(const r of reports){assert.equal(r.originalUnchanged,true);assert.equal(r.playbackMatches,true,JSON.stringify(r));assert.equal(r.error,undefined);assert.equal(r.rangeError,undefined);}
