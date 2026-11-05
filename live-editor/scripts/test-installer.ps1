@@ -162,9 +162,30 @@ db.close();
         foreach($file in $preserved){Assert-Installer ([IO.File]::ReadAllText((Join-Path $target $file)) -eq 'private synthetic fixture') ('Automatic update changed user data: '+$file)}
         # The helper relaunches the installed desktop. Maintenance closes only
         # this synthetic, idle installation before the uninstall checks below.
-        Start-Sleep -Seconds 3
+        # A cold WebView/backend can legitimately still be recovering after
+        # three seconds. Wait for the real, authenticated idle state before
+        # testing maintenance; its busy refusal remains a required safeguard.
+        $relaunchReady=$false
+        $relaunchStatus=$null
+        $idleSamples=0
+        for($i=0;$i -lt 150;$i++) {
+            try {
+                $currentEndpoint=Read-Endpoint
+                $currentStatus=Invoke-RestMethod -Uri ($currentEndpoint.origin+'/internal/desktop') -Headers @{'X-Caibo-Instance'=$currentEndpoint.token} -TimeoutSec 2
+                $relaunchStatus=[ordered]@{pid=$currentEndpoint.pid;busy=$currentStatus.busy;reason=$currentStatus.reason;stopping=$currentStatus.stopping;pending=$currentStatus.pending}
+                if($currentStatus.instance -eq $currentEndpoint.instance -and !$currentStatus.busy -and !$currentStatus.stopping -and !$currentStatus.pending) { $idleSamples++ } else { $idleSamples=0 }
+                if($idleSamples -ge 2) { $relaunchReady=$true;break }
+            } catch { $idleSamples=0 }
+            Start-Sleep -Milliseconds 200
+        }
+        $relaunchReport=Join-Path $autoRoot 'verification.json'
+        [ordered]@{stage='automatic-update-relaunch';ready=$relaunchReady;status=$relaunchStatus} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $relaunchReport -Encoding UTF8
+        Assert-Installer $relaunchReady 'Restarted app did not become idle for the maintenance test.'
         $maintenance=Start-Process -FilePath (Join-Path $target '录播机.exe') -ArgumentList ('--prepare-maintenance "'+$target+'"') -PassThru -WindowStyle Hidden
-        Assert-Installer ($maintenance.WaitForExit(30000) -and $maintenance.ExitCode -eq 0) 'Restarted app did not safely close.'
+        $maintenanceExited=$maintenance.WaitForExit(35000)
+        $maintenanceCode=if($maintenanceExited){$maintenance.ExitCode}else{$null}
+        [ordered]@{stage='automatic-update-relaunch';ready=$true;status=$relaunchStatus;maintenanceExited=$maintenanceExited;maintenanceExitCode=$maintenanceCode} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $relaunchReport -Encoding UTF8
+        Assert-Installer ($maintenanceExited -and $maintenanceCode -eq 0) ('Restarted app did not safely close. Exit code: '+$maintenanceCode)
     } finally {
         $dummy.Refresh();if(!$dummy.HasExited){$dummy.Kill()};$dummy.Dispose()
         $helper.Refresh();if(!$helper.HasExited){$helper.Kill()};$helper.Dispose()
