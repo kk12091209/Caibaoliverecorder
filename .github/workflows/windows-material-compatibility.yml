@@ -1,6 +1,8 @@
 name: Windows material restart compatibility
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/windows-material-compat-039]
 permissions:
   contents: read
 jobs:
