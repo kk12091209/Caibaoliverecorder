@@ -1,14 +1,17 @@
-const GiB = 1024 ** 3;
-export const DEFAULT_CACHE_WARNING_GIB = 50;
-export const validCacheWarningGiB = value => Number.isSafeInteger(value) && value >= 1 && value <= 1048576;
+import {BYTES_PER_GB,BYTES_PER_GIB as GiB,MAX_CACHE_WARNING_GIB,cacheWarningInGiB} from '../shared/cache-warning-units.js';
+export const DEFAULT_CACHE_WARNING_GIB = cacheWarningInGiB(50);
+export const validCacheWarningGiB = value => Number.isSafeInteger(value) && value >= 1 && value <= MAX_CACHE_WARNING_GIB;
+
+// Older clients still submit integral GiB. GB inputs are converted to an
+// exact byte count, represented as a fractional GiB in the existing setting.
+export const validCacheWarningThreshold=value=>typeof value==='number'&&Number.isSafeInteger(value*GiB)&&value*GiB>=BYTES_PER_GB&&value<=MAX_CACHE_WARNING_GIB;
 
 export function cacheWarningSettings(store) {
   const saved = store.setting('preparationCacheWarningGiB');
-  // A previously chosen quota becomes a reminder only. The old implicit
-  // 20 GiB default was never stored and is replaced by the 50 GiB reminder.
+  // Preserve an explicitly saved quota as a reminder. Unset values use 50 GB.
   const legacy = store.setting('preparationCacheGiB');
   return {
-    warningGiB: validCacheWarningGiB(saved) ? saved : validCacheWarningGiB(legacy) ? legacy : DEFAULT_CACHE_WARNING_GIB,
+    warningGiB: validCacheWarningThreshold(saved) ? saved : validCacheWarningGiB(legacy) ? legacy : DEFAULT_CACHE_WARNING_GIB,
     warningEnabled: store.setting('preparationCacheWarningEnabled') !== false,
   };
 }
@@ -16,7 +19,7 @@ export function cacheWarningSettings(store) {
 function readCycle(store, thresholdGiB) {
   const saved = store.setting('preparationCacheWarningState');
   if (saved && Number.isSafeInteger(saved.cycle) && saved.cycle >= 0 &&
-      typeof saved.above === 'boolean' && typeof saved.acknowledged === 'boolean' && validCacheWarningGiB(saved.thresholdGiB)) return {...saved};
+      typeof saved.above === 'boolean' && typeof saved.acknowledged === 'boolean' && validCacheWarningThreshold(saved.thresholdGiB)) return {...saved};
   // Earlier local builds stored acknowledgement as a permanent opt-out.
   // Preserve it for the current accumulation period, not for future periods.
   const acknowledged = store.setting('preparationCacheWarningAcknowledged') === true;

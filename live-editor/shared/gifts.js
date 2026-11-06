@@ -24,8 +24,18 @@ export function giftPrice(gift){
 }
 export const giftDescription=gift=>`${gift.user} · ${gift.name} × ${gift.count} · ${giftPrice(gift)}`;
 export const GIFT_SECONDS=5;
-// The same three-card layout is used by the DOM preview and exported video.
-export function giftCards(events,time){return events.filter(g=>isGiftEvent(g)&&g.time<=time&&time<g.time+GIFT_SECONDS).slice(-3);}
+export const SUPER_CHAT_SECONDS = 10;
+export function giftCards(events, time) {
+  const active = events.filter(gift => {
+    if (gift.type !== 'sc' && !isGiftEvent(gift)) return false;
+    const duration = gift.type === 'sc' ? SUPER_CHAT_SECONDS : GIFT_SECONDS;
+    return gift.time <= time && time < gift.time + duration;
+  });
+  const superChats = active.filter(gift => gift.type === 'sc').slice(-3).reverse();
+  if (superChats.length === 3) return superChats;
+  const gifts = active.filter(isGiftEvent).slice(-(3 - superChats.length));
+  return [...superChats, ...gifts];
+}
 export function giftGeometry(width,height,lane=0){
   const scale=height/720,w=Math.min(width*.85,410*scale),h=64*scale,margin=16*scale;
   return {x:width-margin-w,y:margin+lane*(h+8*scale),w,h,size:19*scale,icon:42*scale,pad:10*scale};

@@ -12,7 +12,7 @@ export async function writeAll(file,bytes){bytes=Buffer.from(bytes);let offset=0
 export function chatXml(batch){
   return batch.messages.map(message=>`<d platform="douyin" p="${message.time.toFixed(3)},1,25,${xmlText(message.color)},0,0,0,0" user="${xmlText(message.user)}" uid="${xmlText(message.id)}"${message.senderId?` sender_id="${xmlText(message.senderId)}"`:''}>${xmlText(message.text)}</d>\n`).join('')+
     batch.density.map(bucket=>`<density ts="${bucket.second}" count="${bucket.count}" kept="${bucket.kept}"/>\n`).join('')+
-    (batch.gifts||[]).map(g=>`<gift platform="douyin" eventid="${xmlText(g.id)}" ts="${g.time.toFixed(3)}" user="${xmlText(g.user)}" giftid="${xmlText(g.giftId)}" giftname="${xmlText(g.name)}" giftcount="${g.count}"${g.totalPrice===null?'':` total_price="${g.totalPrice}"`} icon="${xmlText(g.icon)}"/>\n`).join('');
+    (batch.gifts||[]).map(g=>`<gift platform="douyin" eventid="${xmlText(g.id)}" ts="${g.time.toFixed(3)}" user="${xmlText(g.user)}"${g.senderId?` sender_id="${xmlText(g.senderId)}"`:''} giftid="${xmlText(g.giftId)}" giftname="${xmlText(g.name)}" giftcount="${g.count}"${g.totalPrice===null?'':` total_price="${g.totalPrice}"`} icon="${xmlText(g.icon)}"/>\n`).join('');
 }
 
 export class DouyinRecorder {

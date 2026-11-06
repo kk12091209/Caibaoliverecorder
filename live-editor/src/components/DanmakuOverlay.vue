@@ -1,19 +1,23 @@
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { layoutDanmaku, commentX, DanmakuTimeline, DANMAKU_FONT_SIZE } from '../danmaku-layout.js';
 import { DanmakuClock, DanmakuCache } from '../danmaku-clock.js';
 import { danmakuGeometry, danmakuDuration, normalizedDanmakuStyle } from '../../shared/danmaku-style.js';
 import { containedVideoFrame } from '../../shared/video-geometry.js';
 import {applyMessageEdit} from '../../shared/message-edits.js';
+import { normalizedHighlightStyle } from '../../shared/highlight-style.js';
 
 const props = defineProps({ video: Object, base: { type: Number, default: 0 }, messages: { type: Array, default: () => [] }, excluded: Object,highlighted:Object,highlightStyle:Object,messageEdits:Object, enabled: Boolean, loading: Boolean, font: Object, style: Object });
+const emit = defineEmits(['visible-danmaku']);
 const canvas = ref(null);
+const highlightAppearance = computed(() => normalizedHighlightStyle(props.highlightStyle));
 let font = `500 ${DANMAKU_FONT_SIZE}px "Microsoft YaHei", "Segoe UI", sans-serif`;
 const clock = new DanmakuClock(), timeline = new DanmakuTimeline();
 const measured = new DanmakuCache(2048), sprites = new DanmakuCache(20 * 1024 * 1024);
 const metricsEnabled = new URLSearchParams(location.search).get('qaMetrics') === '1';
 let context, observer, raf = 0, videoFrame = 0, width = 0, height = 0, scale = 1;
 let layout = new Map(), boundVideo, motionPreference, buffering = false, disposed = false;
+let visibleDanmaku = [];
 let spareBitmap;
 let geometry=danmakuGeometry(720,props.style);
 let lastPaint = 0, lastMediaTime = 0, nextFrameAt = 0;
@@ -38,9 +42,31 @@ function rebuild(reset = false) {
 
 function spriteKey(comment) {
   const color = '#' + ((Number.isFinite(comment.renderColor)?comment.renderColor:Number(comment.color)||16777215) & 0xffffff).toString(16).padStart(6, '0');
-  return color + ':'+(comment.fontSize??geometry.size)+':' + comment.text;
+  return color + ':' + (comment.fontSize ?? geometry.size) + ':' + Number(comment.highlighted === true) + ':' + comment.text;
 }
 const fontAt=size=>font.replace(`${geometry.size}px`,`${size}px`);
+function paintText(brush, comment, color, x, y) {
+  brush.font = fontAt(comment.fontSize ?? geometry.size);
+  brush.textBaseline = 'top';
+  brush.lineJoin = 'round';
+  if (comment.highlighted) {
+    const { color: selectedColor, scale: highlightScale } = highlightAppearance.value;
+    const glow = selectedColor ?? (highlightScale === 1 ? '#ffd2aa' : null);
+    if (glow) {
+      brush.lineWidth = 7.5;
+      brush.strokeStyle = glow + '44';
+      brush.strokeText(comment.text, x, y);
+    }
+  }
+  brush.lineWidth = 5.5;
+  brush.strokeStyle = 'rgba(23, 19, 21, .38)';
+  brush.strokeText(comment.text, x, y);
+  brush.lineWidth = 2.2;
+  brush.strokeStyle = 'rgba(17, 17, 17, .68)';
+  brush.strokeText(comment.text, x, y);
+  brush.fillStyle = color;
+  brush.fillText(comment.text, x, y);
+}
 function spriteFor(comment, protectedKeys) {
   const key = spriteKey(comment), color = key.slice(0,7);
   const cached = sprites.get(key);
@@ -50,9 +76,7 @@ function spriteFor(comment, protectedKeys) {
   bitmap.width = Math.ceil(cssWidth * scale); bitmap.height = Math.ceil(cssHeight * scale);
   const brush = bitmap.getContext('2d');
   brush.setTransform(scale, 0, 0, scale, 0, 0);
-  brush.font = fontAt(comment.fontSize??geometry.size); brush.textBaseline = 'top'; brush.lineJoin = 'round'; brush.lineWidth = 3;
-  brush.strokeStyle = '#111111'; brush.fillStyle = color;
-  brush.strokeText(comment.text, 4, 4); brush.fillText(comment.text, 4, 4);
+  paintText(brush, comment, color, 4, 4);
   stats.rasterMisses++;
   const sprite = sprites.set(key, { bitmap, width: bitmap.width / scale, height: bitmap.height / scale }, bitmap.width * bitmap.height * 4, protectedKeys);
   if (!sprites.entries.has(key)) spareBitmap = bitmap;
@@ -102,6 +126,12 @@ function reportMetrics(now, started, time, active) {
   stats = { frames: 0, drawMs: 0, maxDrawMs: 0, rasterMisses: 0, measuredMisses: 0, active: 0, lateFrames: 0, minClockStep: Infinity, maxClockStep: 0, since: now };
 }
 
+function syncVisibleDanmaku(ids = []) {
+  if (ids.length === visibleDanmaku.length && ids.every((id, index) => id === visibleDanmaku[index])) return;
+  visibleDanmaku = ids;
+  emit('visible-danmaku', new Set(ids));
+}
+
 function paint(now) {
   raf = 0;
   if (!context || disposed) return;
@@ -111,34 +141,39 @@ function paint(now) {
   const started = metricsEnabled ? performance.now() : 0;
   context.clearRect(0, 0, width, height);
   const player = boundVideo;
-  if (!props.enabled || props.loading || !player || player.readyState < 2 || document.hidden) return;
+  if (!props.enabled || props.loading || !player || player.readyState < 2 || document.hidden) {
+    syncVisibleDanmaku();
+    return;
+  }
   if (clock.running !== moving) resetClock();
   if (moving && !player.requestVideoFrameCallback) clock.sample(player.currentTime, now);
   const time = props.base + (moving ? clock.at(now) : player.currentTime);
   context.save();context.beginPath();context.rect(0,geometry.clipTop,width,geometry.clipBottom-geometry.clipTop);context.clip();context.globalAlpha=geometry.opacity;
   let active = 0;
-  const visible = [], protectedKeys = new Set();
+  const visible = [], protectedKeys = new Set(), visibleIds = [];
   for (const comment of timeline.at(time)) {
     if (props.excluded?.has(comment.id) || (motionPreference?.matches && time - comment.time > 4)) continue;
     const x = motionPreference?.matches ? 20 : commentX(comment, time, width);
     const paintedWidth = Math.ceil((Math.ceil(comment.paintWidth??comment.textWidth)+8)*scale)/scale;
     if (x - 4 >= width || x - 4 + paintedWidth <= 0) continue;
     visible.push({comment,x}); protectedKeys.add(spriteKey(comment));
+    if (geometry.opacity > 0) visibleIds.push(comment.id);
   }
   for (const {comment,x} of visible) {
     const size=comment.fontSize??geometry.size,pixelWidth=(Math.ceil(comment.paintWidth??comment.textWidth)+8)*scale,pixelHeight=(Math.ceil(size*1.8)+8)*scale;
     // Large base fonts combined with 3x highlights can exceed canvas limits.
     // Paint those few comments directly instead of allocating a huge sprite.
     if(pixelWidth*pixelHeight*4>20*1024*1024||pixelWidth>32760||pixelHeight>32760){
-      context.font=fontAt(size);context.textBaseline='top';context.lineJoin='round';context.lineWidth=3;
-      context.strokeStyle='#111111';context.fillStyle=spriteKey(comment).slice(0,7);
-      context.strokeText(comment.text,x,comment.y);context.fillText(comment.text,x,comment.y);active++;continue;
+      paintText(context, comment, spriteKey(comment).slice(0, 7), x, comment.y);
+      active++;
+      continue;
     }
     const sprite = spriteFor(comment, protectedKeys);
     context.drawImage(sprite.bitmap, x - 4, comment.y - 4, sprite.width, sprite.height);
     active++;
   }
   context.restore();
+  syncVisibleDanmaku(visibleIds);
   reportMetrics(now, started, time, active);
   if (moving) { queueVideoFrame(); raf = requestAnimationFrame(paint); }
 }
@@ -205,6 +240,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', visibilityChanged); bind(props.video); resize();
 });
 onBeforeUnmount(() => {
+  syncVisibleDanmaku();
   disposed = true; fontGeneration++;if(customFace)document.fonts.delete(customFace);bind(null); cancelAnimationFrame(raf); observer?.disconnect(); sprites.clear(); measured.clear(); spareBitmap = undefined;
   document.removeEventListener('visibilitychange', visibilityChanged); motionPreference?.removeEventListener('change', requestPaint);
 });

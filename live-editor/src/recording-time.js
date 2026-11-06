@@ -43,11 +43,13 @@ export function parseRecordingInput(value) {
   if(local===null)throw new Error(INVALID_INPUT);
   return local-OFFSET_MS;
 }
-export function toRecordingInput(epochMs) {
+const wholeSecond=epochMs=>Math.floor(epochMs/1000)*1000;
+export function toRecordingInput(epochMs,milliseconds=true) {
   if(!Number.isFinite(epochMs))throw new Error(INVALID_INPUT);
-  const date=new Date(Math.round(epochMs)+OFFSET_MS),year=date.getUTCFullYear();
+  const date=new Date((milliseconds?Math.round(epochMs):wholeSecond(epochMs))+OFFSET_MS),year=date.getUTCFullYear();
   if(!Number.isFinite(date.getTime())||year<1||year>9999)throw new Error(INVALID_INPUT);
-  return `${pad(year,4)}-${pad(date.getUTCMonth()+1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(),3)}`;
+  const time=`${pad(year,4)}-${pad(date.getUTCMonth()+1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+  return milliseconds?`${time}.${pad(date.getUTCMilliseconds(),3)}`:time;
 }
 function timeAtSpans(seconds,spans) {
   if(!Number.isFinite(seconds)||seconds<0)return null;
@@ -82,4 +84,14 @@ export function positionAtRecordingTime(epochMs,session,sources,duration=session
   if(!candidates.length)throw new Error(ui.recordingTime.录制空档无法定位);
   if(candidates.some(seconds=>Math.abs(seconds-candidates[0])>EPSILON_SECONDS))throw new Error(ui.recordingTime.录制时间存在歧义);
   return candidates[0];
+}
+
+// The field shows whole seconds; an existing mark still points to its frame.
+export function positionAtRecordingInput(value,session,sources,duration,exact) {
+  const time=parseRecordingInput(value);
+  const spans=spansFor(session,sources,duration),stamp=timeAtSpans(exact,spans);
+  if(stamp!==null&&time===wholeSecond(stamp))return exact;
+  // The first displayed second may begin before the first recorded frame.
+  const first=Math.min(...spans.map(span=>span.wall));
+  return positionAtRecordingTime(time===wholeSecond(first)?first:time,session,sources,duration);
 }

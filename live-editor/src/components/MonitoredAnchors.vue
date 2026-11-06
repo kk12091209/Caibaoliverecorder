@@ -3,6 +3,7 @@ import { ui } from '../../shared/ui-copy.js';
 
 import {X,LoaderCircle} from 'lucide-vue-next';
 import {roomAvailable,roomStatus} from '../room-status.js';
+import PlatformBadge from './PlatformBadge.vue';
 defineProps({anchors:{type:Array,default:()=>[]},recorder:{type:Object,required:true},busy:{type:Array,default:()=>[]}});
 defineEmits(['action','remove']);
 const rawStatus=anchor=>anchor.legacy?roomStatus(anchor):anchor.state||'';
@@ -19,7 +20,7 @@ const roomNumber=anchor=>anchor.ownWebRid||(anchor.platform==='douyin'?(anchor.l
 </script>
 <template>
   <article v-for="anchor in anchors" :key="anchor.key" class="monitored-anchor" :data-recording="anchor.recording" :aria-label="ui.anchors.监控主播+anchor.name">
-    <div class="anchor-heading"><span class="anchor-platform">{{ anchor.platform==='douyin'?ui.common.抖音:ui.common.B站 }}</span><strong :title="anchor.name">{{ anchor.name||ui.anchors.主播 }}</strong><button class="anchor-remove" :aria-label="ui.anchors.移除监控+anchor.name" :title="ui.common.移除监控主播" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" @click="$emit('remove',anchor)"><X :size="14" aria-hidden="true"/></button></div>
+    <div class="anchor-heading"><PlatformBadge :platform="anchor.platform" compact/><strong :title="anchor.name">{{ anchor.name||ui.anchors.主播 }}</strong><button class="anchor-remove" :aria-label="ui.anchors.移除监控+anchor.name" :title="ui.common.移除监控主播" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" @click="$emit('remove',anchor)"><X :size="14" aria-hidden="true"/></button></div>
     <div class="anchor-room">{{ ui.anchors.本人直播间 }}{{ roomNumber(anchor) }}</div>
     <div class="anchor-summary">
       <div class="anchor-state"><span class="anchor-status" role="status" :title="rawStatus(anchor)"><i :class="{'is-recording':anchor.recording,'is-enabled':anchor.enabled}" aria-hidden="true"/>{{ status(anchor) }}</span></div>
@@ -38,7 +39,6 @@ const roomNumber=anchor=>anchor.ownWebRid||(anchor.platform==='douyin'?(anchor.l
 .anchor-remove:hover{background:rgba(122,62,82,.08);color:var(--text)}
 .anchor-summary{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:5px;min-height:26px}
 .anchor-state{display:flex;flex-wrap:wrap;align-items:center;gap:5px 7px;min-width:0}
-.anchor-platform{font-size:10px;line-height:17px;padding:0 4px;border-radius:var(--radius-control);background:rgba(122,62,82,.06);color:var(--muted);white-space:nowrap}
 .anchor-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:18px;color:var(--muted)}
 .anchor-status i{width:5px;height:5px;flex-shrink:0;border-radius:50%;background:var(--faint);opacity:.6}
 .anchor-status i.is-enabled{background:var(--icon);opacity:1}.anchor-status i.is-recording{background:var(--danger);opacity:1}

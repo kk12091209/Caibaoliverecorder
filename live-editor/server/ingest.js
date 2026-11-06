@@ -177,12 +177,11 @@ export class Ingestor {
       const regex = /<(d|sc|gift|guard|density)\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/g;
       let match, consumed = 0; const messages = [], lotteryMessages = [], density = [],gifts=[],senders=[];
       while ((match = regex.exec(text))) {
-        // Advance past all complete events, but only index ordinary chat messages.
+        // Keep paid messages out of the ordinary chat quota and index.
         consumed = regex.lastIndex;
-        if(!['d','density','gift','guard'].includes(match[1]))continue;
         const attributes = {}; for (const attr of match[2].matchAll(/([\w-]+)="([^"]*)"/g)) attributes[attr[1]] = decodeXML(attr[2]);
-        if(match[1]==='gift'||match[1]==='guard'){
-          const offset=current.xmlpos+Buffer.byteLength(text.slice(0,match.index)),gift=giftFromXml(match[1],attributes,source,offset);
+        if(match[1]==='gift'||match[1]==='guard'||match[1]==='sc'){
+          const offset=current.xmlpos+Buffer.byteLength(text.slice(0,match.index)),gift=giftFromXml(match[1],attributes,source,offset,match[1]==='sc'?decodeXML(match[3]||''):'');
           if(gift)gifts.push(gift);continue;
         }
         if(match[1]==='density') {

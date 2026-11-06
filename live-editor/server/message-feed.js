@@ -7,6 +7,15 @@ export function messageFeed(store,id,{search='',sender=null,gifts=false,onlyGift
   const duration=messageTime(store.session(id)?.duration,store.session(id)?.duration);
   to??=duration;
   if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<0))throw new Error('弹幕列表时间范围无效。');
+  search=search.trim();
+  if(search){
+    from=0;
+    to=duration;
+    gifts=true;
+    onlyGifts=false;
+    sender=null;
+    style=undefined;
+  }
   from=messageTime(from,duration);to=messageTime(to,duration);
   if(at!==undefined)at=Math.max(from,Math.min(to,at));
   if(!['before','after'].includes(direction))throw new Error('列表翻页方向无效。');
@@ -16,7 +25,7 @@ export function messageFeed(store,id,{search='',sender=null,gifts=false,onlyGift
   const read=(page,count)=>{
     const options={from,to,search,style,limit:count,page};
     const rows=[...(!onlyGifts?store.messages(id,from,to,search,count,undefined,undefined,sender,page):[]),
-      ...(gifts&&!sender?[...giftMessages(store,id,options),...lotteryMessages(store,id,options)]:[])];
+      ...(gifts&&!sender?[...giftMessages(store,id,{...options,includeSuperChat:true}),...lotteryMessages(store,id,options)]:[])];
     rows.sort(compareFeed);
     return page.direction==='before'?rows.slice(-count):rows.slice(0,count);
   };

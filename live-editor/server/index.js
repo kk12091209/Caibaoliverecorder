@@ -15,7 +15,8 @@ import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
 import { MAX_FONT_BYTES } from './danmaku-font.js';
 import { BackgroundPreparation } from './background-preparation.js';
-import {validCacheWarningGiB,acknowledgeCacheWarning} from './preparation-cache-warning.js';
+import {validCacheWarningGiB,validCacheWarningThreshold,acknowledgeCacheWarning} from './preparation-cache-warning.js';
+import {validCacheWarningGB,cacheWarningInGiB} from '../shared/cache-warning-units.js';
 import {ui} from '../shared/ui-copy.js';
 import { LiveRecordingHealth } from './live-recording-health.js';
 import { LivePreparationPolicy } from './live-preparation-policy.js';
@@ -252,12 +253,14 @@ async function createManagedApp(options,runtime) {
 
       if(p==='/api/preparation/settings'&&req.method==='POST'){
         const input=await body(req);
-        if(!input||Array.isArray(input)||typeof input!=='object'||!Object.keys(input).length||Object.keys(input).some(key=>!['enabled','liveEnabled','cacheWarningGiB','cacheWarningEnabled'].includes(key)))throw new Error('预处理设置无效。');
+        if(!input||Array.isArray(input)||typeof input!=='object'||!Object.keys(input).length||Object.keys(input).some(key=>!['enabled','liveEnabled','cacheWarningGiB','cacheWarningGB','cacheWarningEnabled'].includes(key)))throw new Error('预处理设置无效。');
         if('enabled' in input&&typeof input.enabled!=='boolean')throw new Error('请选择是否开启录制完成后的自动预处理。');
         if('liveEnabled' in input&&typeof input.liveEnabled!=='boolean')throw new Error('请选择是否开启录制时的自动提前处理。');
-        if('cacheWarningGiB' in input&&!validCacheWarningGiB(input.cacheWarningGiB))throw new Error(ui.cacheWarning.阈值无效);
+        if('cacheWarningGiB' in input&&(!validCacheWarningGiB(input.cacheWarningGiB)||'cacheWarningGB' in input))throw new Error(ui.cacheWarning.阈值无效);
+        if('cacheWarningGB' in input&&!validCacheWarningGB(input.cacheWarningGB))throw new Error(ui.cacheWarning.阈值无效);
         if('cacheWarningEnabled' in input&&typeof input.cacheWarningEnabled!=='boolean')throw new Error(ui.cacheWarning.开关无效);
         if('cacheWarningGiB' in input)store.setting('preparationCacheWarningGiB',input.cacheWarningGiB);
+        if('cacheWarningGB' in input)store.setting('preparationCacheWarningGiB',cacheWarningInGiB(input.cacheWarningGB));
         if('cacheWarningEnabled' in input)store.setting('preparationCacheWarningEnabled',input.cacheWarningEnabled);
         if('enabled' in input)await preparation.setEnabled(input.enabled);
         if('liveEnabled' in input)await preparation.setLiveEnabled(input.liveEnabled);
@@ -265,7 +268,7 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/preparation/cache/acknowledge'&&req.method==='POST'){
         const input=await body(req);
-        if(!input||!Number.isSafeInteger(input.cycle)||input.cycle<1||!validCacheWarningGiB(input.thresholdGiB))throw new Error(ui.cacheWarning.确认无效);
+        if(!input||!Number.isSafeInteger(input.cycle)||input.cycle<1||!validCacheWarningThreshold(input.thresholdGiB))throw new Error(ui.cacheWarning.确认无效);
         await media.renderCache.loadAll();
         acknowledgeCacheWarning(store,media.renderCache.snapshot(),input);
         return json(res,preparation.snapshot());
@@ -412,7 +415,8 @@ async function createManagedApp(options,runtime) {
         const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
         const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
         if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('礼物时间范围无效。');
-        const events=giftMessages(store,id,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style:savedGiftStyle(store)});
+        const includeSuperChat = url.searchParams.get('includeSuperChat') === '1';
+        const events=giftMessages(store,id,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style:savedGiftStyle(store),includeSuperChat});
         void store.giftIcons.enrich(events).catch(()=>{});
         return json(res,events);
       }
@@ -421,8 +425,10 @@ async function createManagedApp(options,runtime) {
         const params=url.searchParams,at=params.has('at')?Number(params.get('at')):undefined;
         if(at!==undefined&&(!Number.isFinite(at)||at<0))throw new Error('列表定位时间无效。');
         const sender=validateSenderFilter(params.has('sender')?JSON.parse(params.get('sender')):null);
+        const search=(params.get('q')||'').trim().slice(0,200);
         await store.chatRules.prepare(id);await store.senders.prepare(id);
-        const page=messageFeed(store,id,{at,sender,from:params.has('from')?Number(params.get('from')):0,to:params.has('to')?Number(params.get('to')):undefined,search:(params.get('q')||'').slice(0,200),gifts:params.get('gifts')==='1',onlyGifts:params.get('onlyGifts')==='1',style:savedGiftStyle(store),
+        if(/^[1-9]\d{0,30}$/.test(search))await store.senders.prepare(id,true);
+        const page=messageFeed(store,id,{at,sender,from:params.has('from')?Number(params.get('from')):0,to:params.has('to')?Number(params.get('to')):undefined,search,gifts:params.get('gifts')==='1',onlyGifts:params.get('onlyGifts')==='1',
           cursor:params.has('cursor')?JSON.parse(params.get('cursor')):undefined,direction:params.get('direction')||'after'});
         void store.giftIcons.enrich(page.rows.filter(row=>row.type!=='d'&&row.type!=='lottery')).catch(()=>{});
         return json(res,page);

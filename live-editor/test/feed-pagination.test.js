@@ -7,6 +7,7 @@ import {Store} from '../server/store.js';
 import {messageFeed} from '../server/message-feed.js';
 import {compareFeed,feedKey} from '../server/feed-cursor.js';
 import {saveGift} from '../server/gifts.js';
+import {Ingestor} from '../server/ingest.js';
 import {messageWindow,messageTime} from '../shared/message-navigation.js';
 
 async function fixture(t,n=100000){const root=await fs.mkdtemp(path.join(os.tmpdir(),'feed-pages-')),store=new Store(root);store.createSession({id:'history',status:'finished'});store.run('UPDATE sessions SET duration=7200 WHERE id=?','history');store.transaction(()=>{for(let i=0;i<n;i++)store.run('INSERT INTO danmaku VALUES(?,?,NULL,?,?,?,?,?)',`m${String(i).padStart(6,'0')}`,'history',Math.floor(i/14),'观众'+i%5,'内容'+i,'d','16777215');});await store.chatRules.prepare('history');t.after(async()=>{store.close();await fs.rm(root,{recursive:true,force:true});});return store;}
@@ -63,4 +64,23 @@ test('任意时间定位可直达两小时末尾；异常弹幕时间和历史�
   assert.throws(()=>messageFeed(store,'history',{cursor:{time:1793650000,key:'d:x'}}));
   assert.equal(messageTime(Infinity,7200),0);assert.equal(messageTime(1793650000,7200),7200);
   assert.deepEqual({session:store.session('history'),sources:store.sources('history'),chunks:store.all('SELECT * FROM chunks')},before);
+});
+
+
+test('搜索覆盖当前窗口和礼物视图，旧礼物 UID 与弹幕按时间合并',async t=>{
+  const store=await fixture(t,0),source=store.addSource('history',path.join(store.root,'search.flv'),0);
+  const uid='12345678901234567';
+  await fs.writeFile(source.xml,`<i><d p="10,1,25,16777215,0,0,${uid},0" user="同一观众">普通弹幕提到醒目留言</d><gift ts="130" uid="${uid}" user="同一观众" giftname="小花" total_price="2"/><sc ts="150" uid="${uid}" user="同一观众" price="30">一条付费内容</sc></i>`);
+  await new Ingestor(store).readDanmaku(source);
+  store.run("INSERT INTO lottery_records(id,session,activity,room,time,first_seen,time_kind,phrase,state,last_live) VALUES('lottery-search','history','1',1,160,0,'draw','醒目留言抽奖','complete',0)");
+  // Simulate an existing recording indexed before gift sender IDs were stored.
+  store.run("UPDATE gift_events SET sender_uid=''");
+  await store.senders.prepare('history',true);
+  assert.deepEqual(messageFeed(store,'history').rows.map(row=>row.type),['d']);
+  assert.deepEqual(messageFeed(store,'history',{gifts:true,onlyGifts:true}).rows.map(row=>row.type),['gift','sc','lottery']);
+  const controls={gifts:false,onlyGifts:true,from:0,to:60,sender:{mode:'name',name:'其他观众'},style:{preview:true,export:false,minBilibili:100,minDouyin:0,currency:'CNY'}};
+  assert.deepEqual(messageFeed(store,'history',{...controls,search:'醒目留言'}).rows.map(row=>[row.type,row.time]),[['d',10],['sc',150],['lottery',160]]);
+  for(const search of [uid,'同一观众']){
+    assert.deepEqual(messageFeed(store,'history',{...controls,search}).rows.map(row=>[row.type,row.time]),[['d',10],['gift',130],['sc',150]]);
+  }
 });

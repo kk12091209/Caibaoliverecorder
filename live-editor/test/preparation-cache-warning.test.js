@@ -17,20 +17,39 @@ async function fixture(t) {
 
 test('确认只覆盖本轮；清理仍高于或等于阈值不重置，低于后再次达到才重新提醒',async t=>{
   const open=await fixture(t),store=open();
-  assert.equal(cacheWarningSnapshot(store,cache(49)).warningDue,false);
-  const first=cacheWarningSnapshot(store,cache(50));assert.equal(first.warningDue,true);
-  acknowledgeCacheWarning(store,cache(50),request(first));
-  for(const size of [100,51,50]){
-    const warning=cacheWarningSnapshot(store,cache(size));
+  const below = { usedBytes: 49_999_999_999, inventoryReady: true };
+  const at = { ...below, usedBytes: 50_000_000_000 };
+  assert.equal(cacheWarningSnapshot(store,below).warningDue,false);
+  const first=cacheWarningSnapshot(store,at);assert.equal(first.warningDue,true);
+  acknowledgeCacheWarning(store,at,request(first));
+  for(const sample of [cache(100),cache(51),at]){
+    const warning=cacheWarningSnapshot(store,sample);
     assert.equal(warning.warningDue,false);assert.equal(warning.warningEnabled,true);assert.equal(warning.warningCycle,first.warningCycle);
   }
-  assert.equal(cacheWarningSnapshot(store,cache(49)).warningAcknowledged,false);
-  const second=cacheWarningSnapshot(store,cache(50));
+  assert.equal(cacheWarningSnapshot(store,below).warningAcknowledged,false);
+  const second=cacheWarningSnapshot(store,at);
   assert.equal(second.warningDue,true);assert.equal(second.warningCycle,first.warningCycle+1);
-  acknowledgeCacheWarning(store,cache(50),request(first));
-  assert.equal(cacheWarningSnapshot(store,cache(50)).warningDue,true,'late acknowledgement must not silence the next period');
-  acknowledgeCacheWarning(store,cache(50),request(second));
+  acknowledgeCacheWarning(store,at,request(first));
+  assert.equal(cacheWarningSnapshot(store,at).warningDue,true,'late acknowledgement must not silence the next period');
+  acknowledgeCacheWarning(store,at,request(second));
   assert.equal(cacheWarningSnapshot(store,cache(60)).warningDue,false);
+});
+
+test('旧默认值的提醒记录不算用户设置，显式保存过的 50 GiB 仍按原值提醒', async t => {
+  const open = await fixture(t);
+  const store = open();
+  store.setting('preparationCacheWarningState', { cycle: 1, above: false, acknowledged: false, thresholdGiB: 50 });
+  const defaultUsage = { usedBytes: 50_000_000_000, inventoryReady: true };
+  assert.equal(cacheWarningSnapshot(store, defaultUsage).warningDue, true);
+  assert.equal(store.setting('preparationCacheWarningGiB'), undefined);
+
+  store.setting('preparationCacheWarningGiB', 50);
+  store.close();
+  const reopened = open();
+  const custom = cacheWarningSnapshot(reopened, defaultUsage);
+  assert.equal(custom.warningGiB, 50);
+  assert.equal(custom.warningDue, false);
+  assert.equal(cacheWarningSnapshot(reopened, cache(50)).warningDue, true);
 });
 
 test('重启统计完成前的零值不重置确认；完整统计确实低于阈值才重新启用',async t=>{

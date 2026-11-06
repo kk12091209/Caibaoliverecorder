@@ -239,12 +239,16 @@ export class Store {
     const patches=this.edit(id).messageEdits||{},hasPatches=Object.keys(patches).length>0;
     const prefix=hasPatches?"WITH message_patches AS MATERIALIZED (SELECT key AS id,json_extract(value,'$.user') AS user,json_extract(value,'$.text') AS text FROM json_each(?)) ":'';
     const user=hasPatches?'COALESCE(p.user,danmaku.user)':'danmaku.user',text=hasPatches?'COALESCE(p.text,danmaku.text)':'danmaku.text';
-    sender=validateSenderFilter(sender);const args=[...(hasPatches?[JSON.stringify(patches)]:[]),id,from,to,`%${search}%`,`%${search}%`];let filter='';
+    sender=validateSenderFilter(sender);
+    const args=[...(hasPatches?[JSON.stringify(patches)]:[]),id,from,to,`%${search}%`,`%${search}%`];
+    const uidMatch=/^[1-9]\d{0,30}$/.test(search)?' OR EXISTS(SELECT 1 FROM danmaku_senders s WHERE s.message=danmaku.id AND s.uid=?)':'';
+    if(uidMatch)args.push(search);
+    let filter='';
     if(sender?.mode==='uid'){filter=' AND EXISTS(SELECT 1 FROM danmaku_senders s WHERE s.message=danmaku.id AND s.platform=? AND s.uid=?)';args.push(sender.platform,sender.uid);}
     if(sender?.mode==='name'){filter=' AND danmaku.user=?';args.push(sender.name);}
     if(sender?.mode==='approx'){filter=' AND substr(danmaku.user,1,length(?))=? AND substr(danmaku.user,-length(?))=?';args.push(sender.prefix,sender.prefix,sender.suffix,sender.suffix);}
     const fields=hasPatches?`danmaku.id,danmaku.session,danmaku.source,danmaku.time,${user} AS user,${text} AS text,danmaku.type,danmaku.color,danmaku.user AS originalUser,danmaku.text AS originalText,(p.id IS NOT NULL) AS edited`:'danmaku.*';
-    const query=`SELECT ${fields},(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku ${hasPatches?'LEFT JOIN message_patches p ON p.id=danmaku.id ':''}WHERE danmaku.session=? AND danmaku.type='d' AND danmaku.time>=? AND danmaku.time<=? AND (${text} LIKE ? OR ${user} LIKE ?) AND NOT is_sticker_placeholder(danmaku.text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))` + lottery+filter+cursorFilter('d',page,args,'danmaku');
+    const query=`SELECT ${fields},(SELECT uid FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderId,(SELECT platform FROM danmaku_senders s WHERE s.message=danmaku.id) AS senderPlatform FROM danmaku ${hasPatches?'LEFT JOIN message_patches p ON p.id=danmaku.id ':''}WHERE danmaku.session=? AND danmaku.type='d' AND danmaku.time>=? AND danmaku.time<=? AND (${text} LIKE ? OR ${user} LIKE ?${uidMatch}) AND NOT is_sticker_placeholder(danmaku.text) AND NOT EXISTS (SELECT 1 FROM danmaku_filters f WHERE f.message=danmaku.id AND f.reason IN ('length','repeat','rate'))` + lottery+filter+cursorFilter('d',page,args,'danmaku');
     // Keep the current playback position inside a dense list, then restore
     // chronological order. Search and non-following callers keep their order.
     if(page)return this.all(prefix+query+` ORDER BY danmaku.time ${page.direction==='before'?'DESC':'ASC'},danmaku.id ${page.direction==='before'?'DESC':'ASC'} LIMIT ?`,...args,limit);

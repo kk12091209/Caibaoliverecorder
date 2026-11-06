@@ -3,14 +3,14 @@ import { ui } from '../../shared/ui-copy.js';
 
 import {ref,computed,onMounted,onBeforeUnmount} from 'vue';
 const props=defineProps({from:Number,to:Number,time:Number,disabled:Boolean});
-const emit=defineEmits(['start','seek']);
+const emit=defineEmits(['start','preview','seek','cancel']);
 const rail=ref(null),draft=ref(null);
 let drag;
 const clamp=value=>Math.max(props.from,Math.min(props.to,value));
 const value=computed(()=>clamp(draft.value??props.time??props.from));
 const percent=computed(()=>props.to>props.from?(value.value-props.from)/(props.to-props.from)*100:0);
 const format=t=>[Math.floor(t/3600),Math.floor(t/60)%60,Math.floor(t)%60].map(n=>String(n).padStart(2,'0')).join(':');
-function move(e){if(!drag||e.pointerId!==drag.id)return;const r=rail.value.getBoundingClientRect(),usable=Math.max(1,r.height-32);draft.value=clamp(props.from+(e.clientY-r.top-16-drag.offset)/usable*(props.to-props.from));}
+function move(e){if(!drag||e.pointerId!==drag.id)return;const r=rail.value.getBoundingClientRect(),usable=Math.max(1,r.height-32);draft.value=clamp(props.from+(e.clientY-r.top-16-drag.offset)/usable*(props.to-props.from));emit('preview',draft.value);}
 function down(e){
   if(props.disabled||props.to<=props.from||e.button!==0)return;
   e.preventDefault();rail.value.focus({preventScroll:true});rail.value.setPointerCapture(e.pointerId);
@@ -18,7 +18,7 @@ function down(e){
   drag={id:e.pointerId,offset:e.target.closest('.message-time-thumb')?e.clientY-center:0};
   draft.value=value.value;emit('start');move(e);
 }
-function end(e,cancel=false){if(!drag||e&&e.pointerId!==drag.id)return;const id=drag.id,next=value.value;drag=null;draft.value=null;if(rail.value?.hasPointerCapture(id))rail.value.releasePointerCapture(id);if(!cancel)emit('seek',next);}
+function end(e,cancel=false){if(!drag||e&&e.pointerId!==drag.id)return;const id=drag.id,next=value.value;drag=null;draft.value=null;if(rail.value?.hasPointerCapture(id))rail.value.releasePointerCapture(id);if(cancel)emit('cancel');else emit('seek',next);}
 function blur(){end(null,true);}
 function key(e){if(props.disabled)return;const step=Math.max(1,(props.to-props.from)/100),next=({ArrowUp:value.value-step,ArrowDown:value.value+step,PageUp:value.value-step*10,PageDown:value.value+step*10,Home:props.from,End:props.to})[e.key];if(next===undefined)return;e.preventDefault();emit('start');emit('seek',clamp(next));}
 onMounted(()=>window.addEventListener('blur',blur));

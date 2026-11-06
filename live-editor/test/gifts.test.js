@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../server/store.js';
 import {Ingestor} from '../server/ingest.js';
+import {messageFeed} from '../server/message-feed.js';
 import {createApp,fetch} from './helpers/authenticated-app.js';
 import {giftFromXml,saveGift,giftMessages,giftSegments,giftAss,safeGiftIcon} from '../server/gifts.js';
 import {DEFAULT_GIFT_STYLE,validateGiftStyle,giftCards,giftPrice} from '../shared/gifts.js';
@@ -41,6 +42,20 @@ test('incremental gift XML survives partial writes without rewinding chat cursor
  await ingest.readDanmaku(source);await ingest.readDanmaku(source);
  const rows=giftMessages(store,session.id);assert.equal(rows.length,2);assert.equal(rows[0].count,5);assert.equal(rows[0].totalPrice,10);assert.equal(rows[0].time,22);
 });
+test('B站醒目留言作为独立礼物索引，列表可按正文查找，普通礼物流仍可独立查询',async t=>{
+ const {store,source,session}=await fixture(t),ingest=new Ingestor(store);
+ store.run('UPDATE sessions SET duration=60 WHERE id=?',session.id);
+ await fs.writeFile(source.xml,'<i><gift ts="1" user="礼物观众" giftname="小花"/><sc ts="3.125" user="醒目观众" uid="12" price="30" time="60">原文 &amp; &lt;测试&gt;</sc></i>');
+ await ingest.readDanmaku(source);await ingest.readDanmaku(source);
+ assert.deepEqual(giftMessages(store,session.id).map(row=>row.type),['gift']);
+ assert.equal(store.messages(session.id).length,0);
+ assert.equal(messageFeed(store,session.id).rows.length,0);
+ const rows=messageFeed(store,session.id,{gifts:true,onlyGifts:true}).rows;
+ assert.deepEqual(rows.map(row=>row.type),['gift','sc']);
+ assert.deepEqual([rows[1].time,rows[1].user,rows[1].totalPrice,rows[1].text],[23.125,'醒目观众',30,'原文 & <测试>']);
+ assert.equal(messageFeed(store,session.id,{gifts:true,search:'原文'}).rows[0].id,rows[1].id);
+ assert.equal(messageFeed(store,session.id,{gifts:true,style:{...DEFAULT_GIFT_STYLE,minBilibili:31}}).rows.length,0);
+});
 const join=(...parts)=>Buffer.concat(parts);
 function varint(value){let v=BigInt(value),out=[];do{const b=Number(v&127n);v>>=7n;out.push(b|(v?128:0));}while(v);return Buffer.from(out);}
 const n=(field,v)=>join(varint(field*8),varint(v)),b=(field,v)=>{v=Buffer.isBuffer(v)?v:Buffer.from(v);return join(varint(field*8+2),varint(v.length),v);};
@@ -65,6 +80,12 @@ test('gift queue deduplicates combo updates and keeps in-flight bytes bounded un
 test('gift cards align clipped export time, cap simultaneous cards and escape ASS control text',()=>{
  const events=Array.from({length:4},(_,i)=>({id:String(i),time:i+1,type:'gift',user:'A{\\bad}',name:'B',platform:'bilibili',count:1,totalPrice:1}));
  assert.equal(giftCards(events,4).length,3);assert.equal(giftCards(events,10).length,0);
+ const superChat={...events[0],id:'sc',type:'sc'};
+ const withSuperChat=[superChat,...events];
+ assert.deepEqual(giftCards(withSuperChat,4).map(row=>row.id),['sc','2','3']);
+ assert.deepEqual(giftCards(withSuperChat,10).map(row=>row.id),['sc']);
+ assert.deepEqual(giftCards(withSuperChat,11),[]);
+ assert.deepEqual(giftSegments(withSuperChat,3,6),giftSegments(events,3,6));
  for(const s of giftSegments(events,3,6))assert.ok(s.start>=3&&s.end<=6&&s.events.length<=3);
  const ass=giftAss(events,1280,720,{base:3,from:3,to:6});assert.match(ass,/0:00:00.00/);assert.ok(!ass.includes('{\\bad}'));
 });
@@ -89,11 +110,18 @@ test('gift settings persist separately, gifts API filters by value and chat stay
  assert.deepEqual(app.snapshot().giftStyle,DEFAULT_GIFT_STYLE);
  const session=app.store.createSession({status:'finished'}),source=app.store.addSource(session.id,path.join(root,'one.flv'));
  saveGift(app.store,giftFromXml('guard',{ts:12,level:3,total_coin:198000,coin_type:'gold'},source,1));
+ saveGift(app.store,giftFromXml('sc',{ts:13,price:100,user:'付费观众'},source,2,'请展示这条留言'));
+ saveGift(app.store,giftFromXml('sc',{ts:14,price:30,user:'低于预览门槛'},source,3,'低价留言'));
  const base=`http://127.0.0.1:${app.port}/api/`,style={...DEFAULT_GIFT_STYLE,preview:true,minBilibili:100};
  const post=async data=>fetch(base+'settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
  assert.equal((await post({giftStyle:style})).status,200);assert.deepEqual(app.snapshot().giftStyle,style);
  assert.equal((await post({giftStyle:{...style,minBilibili:-1},previewTimestamp:true})).status,400);assert.equal(app.snapshot().previewTimestamp,false);
- const response=await fetch(base+`sessions/${session.id}/gifts`);assert.equal(response.status,200);const rows=await response.json();assert.equal(rows[0].name,'舰长');assert.equal(rows[0].time,12);
+ const response=await fetch(base+`sessions/${session.id}/gifts`);assert.equal(response.status,200);const rows=await response.json();assert.deepEqual(rows.map(row=>row.name),['舰长']);assert.equal(rows[0].time,12);
+ const preview=await fetch(base+`sessions/${session.id}/gifts?from=10&to=20&at=13&includeSuperChat=1`);
+ assert.equal(preview.status,200);
+ assert.deepEqual((await preview.json()).map(row=>row.type==='sc'?[row.type,row.text,row.totalPrice]:[row.type]),[
+   ['guard'],['sc','请展示这条留言',100],
+ ]);
  assert.deepEqual(await (await fetch(base+`sessions/${session.id}/messages`)).json(),[]);
  assert.equal((await fetch(base+`sessions/${session.id}/gifts?from=-1`)).status,400);
 });

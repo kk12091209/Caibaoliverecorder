@@ -5,10 +5,13 @@ import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick 
 import DanmakuOverlay from './components/DanmakuOverlay.vue';
 import GiftOverlay from './components/GiftOverlay.vue';
 import GiftIcon from './components/GiftIcon.vue';
+import MessageMatch from './components/MessageMatch.vue';
 import VirtualMessageList from './components/VirtualMessageList.vue';
 import MessageTimeNavigator from './components/MessageTimeNavigator.vue';
 import {messageTime,messageWindow} from '../shared/message-navigation.js';
-import {normalizedGiftStyle} from '../shared/gifts.js';
+import {giftCards,giftPrice,normalizedGiftStyle,SUPER_CHAT_SECONDS} from '../shared/gifts.js';
+import {normalizedDanmakuStyle} from '../shared/danmaku-style.js';
+import {cacheWarningInGB,MAX_CACHE_WARNING_GB} from '../shared/cache-warning-units.js';
 import {senderFilterFor} from '../shared/sender-filter.js';
 import {applyMessageEdit} from '../shared/message-edits.js';
 import MessageTextEditor from './components/MessageTextEditor.vue';
@@ -17,6 +20,7 @@ import {lotteryCountLabel} from '../shared/lottery-records.js';
 import LinkmicOverlay from './components/LinkmicOverlay.vue';
 import RecordingTimestamp from './components/RecordingTimestamp.vue';
 import RecordingSettings from './components/RecordingSettings.vue';
+import SettingsGroup from './components/SettingsGroup.vue';
 import RecorderStatus from './components/RecorderStatus.vue';
 import RecordingLayout from './components/RecordingLayout.vue';
 import { CAMERA_POSITIONS, normalizedRecordingStyle } from '../shared/recording-style.js';
@@ -38,8 +42,8 @@ import { recordingCoverage } from './recording-coverage.js';
 import { livePreparationView } from './preparation-state.js';
 import DismissibleNotice from './components/DismissibleNotice.vue';
 import appIcon from './assets/app-icon.png';
-import { formatVideoTime as format, displayedSpan, markPreviewPosition } from './video-time.js';
-import { recordingTimeAt, positionAtRecordingTime, toRecordingInput, parseRecordingInput, recordingTimeBounds } from './recording-time.js';
+import { formatVideoTime as format, formatFrameTime, formatFrameDuration, frameTimePosition, videoFrameRate, latestPreviewPosition, markPreviewPosition } from './video-time.js';
+import { recordingTimeAt, positionAtRecordingInput, toRecordingInput, recordingTimeBounds } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
 import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
@@ -71,12 +75,22 @@ const previewVolume=ref(1),previewMuted=ref(false);
 try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
 let previewVolumeHold=previewVolume.value>0?previewVolume.value:1;
 const previewSlider=computed(()=>previewMuted.value?0:previewVolume.value);
-const giftRows=shallowRef([]),giftFeed=shallowRef([]),showGifts=ref(false),onlyGifts=ref(false),exportGifts=ref(false);
-watch(showGifts,value=>{if(!value)onlyGifts.value=false;});
-function changeOnlyGifts(){messageFollowPaused.value=false;if(onlyGifts.value&&senderFilter.value)clearSenderFilter();void loadMessages(true);}
-watch(()=>state.value.giftStyle?.preview,value=>{showGifts.value=value===true;giftRows.value=[];lotteryRows.value=[];void loadMessages(true);});
-async function changeGiftPreview(){try{const result=await api('settings',{giftStyle:{...normalizedGiftStyle(state.value.giftStyle),preview:showGifts.value}});state.value.giftStyle=result.giftStyle;void loadMessages(true);void loadGiftOverlay();}catch(e){showGifts.value=state.value.giftStyle?.preview===true;tell(e.message);}}
-const startText=ref('00:00:00'),endText=ref('00:00:00'),startExact=ref(0),endExact=ref(0),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true),messageList=ref(null);
+const giftRows=shallowRef([]),giftFeed=shallowRef([]),showGiftList=ref(false),exportGifts=ref(false);
+const previewGifts=computed(()=>state.value.giftStyle?.preview===true);
+const savingPreviewGifts=ref(false);
+async function setPreviewGifts(event){
+  if(savingPreviewGifts.value)return;
+  const checkbox=event.target;
+  savingPreviewGifts.value=true;
+  try{
+    const result=await api('settings',{giftStyle:{...normalizedGiftStyle(state.value.giftStyle),preview:checkbox.checked}});
+    state.value.giftStyle=result.giftStyle;
+  }catch(error){tell(error.message);}
+  finally{checkbox.checked=previewGifts.value;savingPreviewGifts.value=false;}
+}
+watch(previewGifts,enabled=>{if(enabled)void loadGiftOverlay();else giftFeed.value=[];});
+const startText=ref(''),endText=ref(''),startExact=ref(null),endExact=ref(null),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true),messageList=ref(null);
+watch(showOverlay,enabled=>{if(enabled)void loadOverlay();});
 const messagePage=ref({hasBefore:false,hasAfter:false}),messageLoading=ref(false),messageFollowPaused=ref(false);
 const feedKey=row=>`${row.type==='d'?'d':row.type==='lottery'?'l':'g'}:${row.id}`;
 const roomBusyIds=ref([]);
@@ -92,7 +106,9 @@ const senderWarning=computed(()=>senderFilter.value?.mode==='approx'?ui.workbenc
 const jobMenu=ref(null),jobDeleteTarget=ref(null),jobDeletePreview=shallowRef(null),jobPreviewLoading=ref(false),jobDeleteError=ref('');
 const jobDeleteRecordOnly=ref(false);
 const retrySaveTarget=ref(null),retrySaveDirectory=ref(''),retrySaveError=ref(''),retrySavingIds=ref([]),jobRetryErrors=ref({});
-const cacheWarningGiBDraft=ref(null),cacheWarningBusy=ref(false),cacheWarningError=ref(''),cacheWarningDismissed=ref('');
+const cacheWarningGBDraft=ref(null),cacheWarningBusy=ref(false),cacheWarningError=ref(''),cacheWarningDismissed=ref('');
+const maxCacheWarningInputGB = Math.floor(MAX_CACHE_WARNING_GB);
+const cacheWarningDisplayGB = computed(() => cacheWarningInGB(state.value.preparation?.cache?.warningGiB));
 const cacheWarningKey=computed(()=>`${state.value.preparation?.cache?.warningGiB}:${state.value.preparation?.cache?.warningCycle}`);
 const cacheWarningVisible=computed(()=>connected.value&&state.value.preparation?.cache?.warningDue===true&&cacheWarningDismissed.value!==cacheWarningKey.value&&!modal.value&&!sessionMenu.value&&!jobMenu.value&&!messageMenu.value&&!timelineDragging.value&&!scrubbing.value);
 const preparationBusyIds=ref([]),preparationErrors=ref({}),preparationSettingsBusy=ref(false),preparationSettingsError=ref(''),preparationEnabledDraft=ref(null),livePreparationEnabledDraft=ref(null);
@@ -104,7 +120,8 @@ watch(selected,()=>{danmakuPreference.value=true;},{flush:'sync'});
 const exportScope=ref('clips'),exportTarget=ref(null),exportRanges=ref([]),exportExcluded=ref(0);
 const pendingCleanup=computed(()=>(state.value.pendingCleanup||[]).map(item=>({...item,task:state.value.deletions?.find(task=>task.id===item.id)})));
 const requestedDeletions=new Map();
-async function openCleanup(){openSettings();await nextTick();document.querySelector('.cleanup-settings')?.scrollIntoView({block:'center'});}
+const expandedSettings = ref({});
+function openCleanup() { return openSettingsSection('.cleanup-settings', { group: 'storage' }); }
 function cleanupLabel(item){const task=item.task;if(!task)return item.purge_error?ui.workbench.等待重试:ui.workbench.等待清理;const count=task.total?`（${task.completed}/${task.total}）`:'';return ({resources:ui.workbench.正在释放占用,checking:ui.workbench.正在核对文件,files:ui.workbench.正在清理文件,cache:ui.workbench.正在清理缓存,temporary:ui.workbench.正在清理临时文件,records:ui.workbench.正在清理记录,waiting:ui.workbench.等待占用释放随后自动重试})[task.phase]+count;}
 const draftStart=computed(()=>markerTime('start',startMarked.value));
 const draftEnd=computed(()=>markerTime('end',endMarked.value));
@@ -146,7 +163,15 @@ const selectedPreparationBlock=computed(()=>preparationActionBlock(activeSession
 const preparationExpanded=computed(()=>selectedLivePreparation.value?.active||['queued','preparing','waiting','paused','error'].includes(selectedPreparation.value?.status)||!!preparationErrors.value[selected.value]||!!selectedPreparation.value?.error);
 const duration=computed(()=>activeSession.value?.duration||0);
 const messageWindowAnchor=ref(0),messageBrowseTime=ref(0),messageNavigationPinned=ref(false);
-const messageRange=computed(()=>messageWindow(duration.value,messageFollowPaused.value?messageWindowAnchor.value:position.value,followMessages.value));
+const searchKeyword=computed(()=>query.value.trim());
+const searching=computed(()=>!!searchKeyword.value);
+const searchPattern=computed(()=>{
+  const keyword=searchKeyword.value.slice(0,200);
+  return keyword?new RegExp('('+keyword.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'):null;
+});
+const followMessageList=computed(()=>followMessages.value&&!searching.value);
+const activeSenderFilter=computed(()=>searching.value||showGiftList.value?null:senderFilter.value);
+const messageRange=computed(()=>messageWindow(duration.value,messageFollowPaused.value?messageWindowAnchor.value:position.value,followMessageList.value));
 const coverage=computed(()=>recordingCoverage(detail.value?.sources,duration.value));
 const timelineAutoFollow=ref(true),activeMarker=ref(null);
 const timelineWindow=ref(null),signals=shallowRef(null),signalsLoading=ref(false),signalsError=ref('');
@@ -156,22 +181,40 @@ const viewSpan=computed(()=>viewport.value.to-viewport.value.from);
 const visibleRanges=computed(()=>edit.value.ranges.map((range,index)=>({range,index,view:visibleRange(range,viewport.value.from,viewport.value.to)})).filter(item=>item.view));
 const visibleGaps=computed(()=>coverage.value.gaps.map(gap=>({gap,view:visibleRange(gap,viewport.value.from,viewport.value.to)})).filter(item=>item.view));
 const draftView=computed(()=>draftStart.value!==null&&draftEnd.value!==null?visibleRange({start:draftStart.value,end:draftEnd.value},viewport.value.from,viewport.value.to):null);
-const source=computed(()=>detail.value?.sources?.find(s=>position.value>=s.start-.02&&position.value<=s.start+s.duration+.1));
-const fps=computed(()=>source.value?.metadata?.fps||30);
+function frameRateAt(time){return videoFrameRate(detail.value?.sources?.find(s=>time>=s.start-.02&&time<=s.start+s.duration+.1)?.metadata?.fps);}
+const fps=computed(()=>frameRateAt(position.value));
+const formatPosition=time=>formatFrameTime(time,frameRateAt(time));
+const formatClipDuration=(time,at)=>formatFrameDuration(time,frameRateAt(at));
 const excluded=computed(()=>new Set(edit.value.excluded));
 const highlighted=computed(()=>new Set(edit.value.highlighted||[]));
-const mergedMessages=computed(()=>[...(showGifts.value&&onlyGifts.value?[]:messages.value.map(m=>applyMessageEdit(m,edit.value.messageEdits))),...(showGifts.value?[...giftRows.value,...lotteryRows.value]:[])].sort((a,b)=>a.time-b.time||(feedKey(a)<feedKey(b)?-1:feedKey(a)>feedKey(b)?1:0)));
-const visibleMessages=computed(()=>mergedMessages.value.filter(row=>Number.isFinite(row.time)&&row.time>=messageRange.value.from&&row.time<=messageRange.value.to));
+const visibleDanmaku=shallowRef(new Set());
+const previewGiftEvents = computed(() => giftFeed.value.filter(gift => !excluded.value.has(gift.id)));
+const previewGiftCards = computed(() => {
+  if (!previewGifts.value || !previewUrl.value || loading.value) return [];
+  return giftCards(previewGiftEvents.value, position.value);
+});
+const visibleGiftIds = computed(() => new Set(previewGiftCards.value.map(gift => gift.id)));
+function isCurrentMessage(message) {
+  if (message.type === 'd') return visibleDanmaku.value.has(message.id);
+  if (message.type === 'lottery') return Math.abs(message.time - position.value) < 1;
+  return visibleGiftIds.value.has(message.id);
+}
+const mergedMessages=computed(()=>[
+  ...(!showGiftList.value||searching.value?messages.value.map(m=>applyMessageEdit(m,edit.value.messageEdits)):[]),
+  ...(showGiftList.value||searching.value?[...giftRows.value,...lotteryRows.value]:[]),
+].sort((a,b)=>a.time-b.time||(feedKey(a)<feedKey(b)?-1:feedKey(a)>feedKey(b)?1:0)));
+const visibleMessages=computed(()=>mergedMessages.value.filter(row=>Number.isFinite(row.time)&&
+  (scrubbing.value||row.time>=messageRange.value.from&&row.time<=messageRange.value.to)));
 const overlayFeed=shallowRef([]),exportDirectory=ref(''),savedExportDirectory=ref('');
 let overlayBusy=false, overlayWindow=null;
 const myJobs=computed(()=>state.value.jobs.filter(j=>j.session===selected.value));
 const selectedRanges=computed(()=>edit.value.ranges.filter(r=>r.selected!==false));
 const allRangesSelected=computed(()=>edit.value.ranges.length>0&&selectedRanges.value.length===edit.value.ranges.length);
-const rangeDuration=computed(()=>selectedRanges.value.reduce((n,r)=>n+displayedSpan(r.start,r.end),0));
+const rangeDuration=computed(()=>selectedRanges.value.reduce((n,r)=>n+r.end-r.start,0));
 const versionDescription=computed(()=>({clean:ui.workbench.选项一个纯净版MP4,danmaku:ui.workbench.选项一个弹幕版MP4,dual:ui.workbench.纯净版和弹幕版两个MP4})[exportMode.value]);
 const exportSession=computed(()=>state.value.sessions.find(s=>s.id===exportTarget.value?.id));
 const exportCategory=computed(()=>exportScope.value==='full'?'完整素材':'导出片段');
-const exportDuration=computed(()=>exportScope.value==='full'?displayedSpan(0,exportSession.value?.duration||0):exportRanges.value.reduce((total,r)=>total+displayedSpan(r.start,r.end),0));
+const exportDuration=computed(()=>exportScope.value==='full'?(exportSession.value?.duration||0):exportRanges.value.reduce((total,r)=>total+r.end-r.start,0));
 const exportBlock=computed(()=>{
   if(!exportSession.value)return ui.workbench.素材已被删除无法导出;
   if(exportScope.value==='full')return fullExportBlock(exportSession.value);
@@ -184,12 +227,24 @@ let windowSignalTimer=null,lastWindowRequestAt=0,disposing=false;
 let jobPreviewRequest=0;
 
 
-function parse(text){const values=String(text).split(':').map(Number);if(values.some(n=>!Number.isFinite(n)||n<0)||values.length>3)throw new Error(ui.workbench.视频时间格式错误);return values.reduce((a,b)=>a*60+b,0);}
+function parse(text){
+  const fields=text.split(':');
+  if(fields.length===4&&fields.every(field=>/^\d+$/.test(field))){
+    const [hours,minutes,seconds,frame]=fields.map(Number),second=hours*3600+minutes*60+seconds;
+    const time=frameTimePosition(second,frame,frameRateAt(second));
+    if(minutes<60&&seconds<60&&Number.isFinite(time))return time;
+  }
+  const values=fields.map(Number);
+  if(fields.length<=3&&fields.every(field=>field.trim())&&values.every(value=>Number.isFinite(value)&&value>=0)){
+    const time=values.reduce((a,b)=>a*60+b,0);if(Number.isFinite(time))return time;
+  }
+  throw new Error(ui.workbench.视频时间格式错误);
+}
 function materialPeople(session,kind){const names=[...new Set((session.monitoring||[]).filter(entry=>(entry.kind==='guest'?'guest':'self')===kind).map(entry=>entry.name).filter(Boolean))];return names.join('、')||(kind==='guest'?'':session.hostName||'');}
-function date(text){return new Date(text).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
+function date(text){return new Date(text).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'});}
 function categoryPath(root,category){const raw=String(root||''),value=raw.replace(/[\\/]+$/,'');return raw?value+(raw.startsWith('/')?'/':'\\')+category:category;}
-function formatBytes(bytes){const size=Math.max(0,Number(bytes)||0);if(size<1024)return size+ui.workbench.字节;const units=['KB','MB','GB','TB'],power=Math.min(4,Math.floor(Math.log(size)/Math.log(1024)));return (size/1024**power).toFixed(1)+' '+units[power-1];}
-function closeModal(){if(modalBusy.value)return;if(['danmaku-style','recording-style','cookie-management'].includes(modal.value)){const selector=modal.value==='cookie-management'?'.open-cookie-management':modal.value==='danmaku-style'?'.open-danmaku-style':'.open-recording-style';modal.value='settings';void nextTick(()=>document.querySelector(selector)?.focus());return;}const kind=modal.value,messageId=kind==='edit-message'?messageEditTarget.value?.message.id:kind==='lottery'?lotteryTarget.value?.record.id:null,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(kind==='lottery'){lotteryDetailRequest++;lotteryLoading.value=false;lotteryTarget.value=null;lotteryError.value='';if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(kind==='edit-message'){messageEditTarget.value=null;if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(jobId)void nextTick(()=>focusJob(jobId));}
+function formatBytes(bytes,base=1024){const size=Math.max(0,Number(bytes)||0);if(size<base)return size+ui.workbench.字节;const units=['KB','MB','GB','TB'],power=Math.min(4,Math.floor(Math.log(size)/Math.log(base)));return (size/base**power).toFixed(1)+' '+units[power-1];}
+function closeModal(){if(modalBusy.value)return;if(['danmaku-style','recording-style','cookie-management'].includes(modal.value)){const selector=modal.value==='cookie-management'?'.open-cookie-management':modal.value==='danmaku-style'?'.open-danmaku-style':'.open-recording-style';modal.value='settings';void nextTick(()=>document.querySelector(selector)?.focus());return;}const kind=modal.value,messageId=kind==='edit-message'?messageEditTarget.value?.message.id:kind==='lottery'?lotteryTarget.value?.record.id:null,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(kind==='lottery'){lotteryDetailRequest++;lotteryLoading.value=false;lotteryTarget.value=null;lotteryError.value='';if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.lottery-open')?.focus());}if(kind==='edit-message'){messageEditTarget.value=null;if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(jobId)void nextTick(()=>focusJob(jobId));}
 function dismissModalFromBackdrop(event){if(modalBackdropClick.click(event))closeModal();}
 function fullExportBlock(session){return session.status!=='finished'?ui.workbench.录制或整理完成后才能导出完整素材:!(session.duration>0)?ui.workbench.这份素材暂时没有可导出的画面:'';}
 function preparationFor(id){return state.value.preparation?.items?.find(item=>item.session===id);}
@@ -221,6 +276,19 @@ async function updatePreparationSettings(values){
   catch(e){if(!disposing)preparationSettingsError.value=e.message;}
   finally{preparationSettingsBusy.value=false;preparationEnabledDraft.value=null;livePreparationEnabledDraft.value=null;}
 }
+async function saveCacheWarningGB(input) {
+  const value = input.valueAsNumber;
+  if (value === cacheWarningDisplayGB.value) {
+    cacheWarningGBDraft.value = null;
+    return;
+  }
+  if (!Number.isInteger(value) || value < 1 || value > maxCacheWarningInputGB) {
+    preparationSettingsError.value = ui.cacheWarning.阈值无效;
+  } else {
+    await updatePreparationSettings({ cacheWarningGB: value });
+  }
+  cacheWarningGBDraft.value = null;
+}
 async function acknowledgeCacheWarning(manage=false){
   if(cacheWarningBusy.value)return;cacheWarningBusy.value=true;cacheWarningError.value='';
   const {warningCycle:cycle,warningGiB:thresholdGiB}=state.value.preparation.cache;
@@ -229,7 +297,7 @@ async function acknowledgeCacheWarning(manage=false){
     if(disposing)return;applyPreparation(result);
     if(result.cache?.warningAcknowledged&&result.cache.warningCycle===cycle&&result.cache.warningGiB===thresholdGiB)cacheWarningDismissed.value=`${thresholdGiB}:${cycle}`;
     await nextTick();
-    if(manage){openSettings();await nextTick();const panel=document.querySelector('.cache-settings');panel?.scrollIntoView({block:'center'});panel?.querySelector('button')?.focus();}
+    if(manage)await openSettingsSection('.cache-settings', { group: 'advanced', focus: '.cache-settings button' });
   }catch(error){if(!disposing)cacheWarningError.value=error.message;}
   finally{cacheWarningBusy.value=false;}
 }
@@ -264,7 +332,7 @@ function queueWindowSignals(immediate=false){
 }
 function endTimelineDrag(){activeMarker.value=null;scrubbing.value=false;timelineDragging.value=false;queueWindowSignals(true);}
 function resetTimelineNavigation(){clearTimeout(windowSignalTimer);windowSignalTimer=null;timelineDragging.value=false;timelineAutoFollow.value=true;activeMarker.value=null;timelineWindow.value=null;}
-function invalidateMessages(){messageRequest++;overlayRequest++;dmBusy=false;overlayBusy=false;lastMessageKey='';overlayWindow=null;}
+function invalidateMessages(){stopMessageDrag();messageRequest++;overlayRequest++;dmBusy=false;overlayBusy=false;lastMessageKey='';overlayWindow=null;}
 let pendingSignalKey='';
 function invalidateSignals(clear=false){signalRequest++;signalController?.abort();signalController=null;signalsLoading.value=false;lastSignalKey='';if(clear){pendingSignalKey='';signals.value=null;signalsError.value='';}}
 async function loadSignals(force=false){
@@ -283,52 +351,52 @@ function signalsVisibility(){if(document.hidden){clearTimeout(windowSignalTimer)
 
 function readMark(which){
   if(!selectionReady.value)throw new Error(ui.workbench.请等待素材加载完成);
-  if(positionMode.value==='recording')return positionAtRecordingTime(parseRecordingInput(which==='start'?startDateText.value:endDateText.value),activeSession.value,detail.value?.sources||[],duration.value);
+  if(!(which==='start'?startMarked.value:endMarked.value))throw new Error(ui.workbench.请填写视频时间);
+  if(positionMode.value==='recording')return positionAtRecordingInput(which==='start'?startDateText.value:endDateText.value,activeSession.value,detail.value?.sources||[],duration.value,which==='start'?startExact.value:endExact.value);
   const t=videoMark(which);if(t>duration.value+.000001)throw new Error(ui.workbench.超出已录制范围);return Math.min(t,duration.value);
 }
 function videoMark(which){
   const text=(which==='start'?startText.value:endText.value).trim();
   if(!text)throw new Error(ui.workbench.请填写视频时间);
   const exact=which==='start'?startExact.value:endExact.value;
-  return Number.isFinite(exact)&&format(exact)===text?exact:parse(text);
+  return Number.isFinite(exact)?exact:parse(text);
 }
 function markerTime(which,marked){if(!marked||!selected.value)return null;try{return readMark(which);}catch{return null;}}
-function markText(which,t){if(which==='start'){startExact.value=t;startText.value=format(t);}else{endExact.value=t;endText.value=format(t);}}
-function syncRecordingTexts(){
-  for(const which of ['start','end']){let t;try{t=videoMark(which);}catch{t=NaN;}
-    const stamp=recordingTimeAt(t,activeSession.value,detail.value?.sources||[]),text=Number.isFinite(stamp)?toRecordingInput(stamp):'';
-    if(which==='start')startDateText.value=text;else endDateText.value=text;
-  }
+function inputMark(which,text){
+  const marked=!!text.trim(),recording=positionMode.value==='recording';
+  if(which==='start'){startMarked.value=marked;startExact.value=null;(recording?startDateText:startText).value=text;}
+  else{endMarked.value=marked;endExact.value=null;(recording?endDateText:endText).value=text;}
+}
+function markText(which,t){
+  const stamp=recordingTimeAt(t,activeSession.value,detail.value?.sources||[]),dateText=Number.isFinite(stamp)?toRecordingInput(stamp,false):'';
+  if(which==='start'){startMarked.value=true;startExact.value=t;startText.value=formatPosition(t);startDateText.value=dateText;}
+  else{endMarked.value=true;endExact.value=t;endText.value=formatPosition(t);endDateText.value=dateText;}
 }
 function setPositionMode(mode){
-  if(mode===positionMode.value||!selected.value)return;
-  if(mode==='recording'){if(!canUseRecordingTime.value)return;syncRecordingTexts();}
-  else for(const which of ['start','end']){try{markText(which,readMark(which));}catch{}}
+  if(mode===positionMode.value||!selected.value||mode==='recording'&&!canUseRecordingTime.value)return;
+  for(const which of ['start','end']){
+    if(!(which==='start'?startMarked.value:endMarked.value))continue;
+    try{markText(which,readMark(which));}catch{}
+  }
   positionMode.value=mode;
 }
 function commitMark(which){
-  if(which==='start')startMarked.value=true;else endMarked.value=true;
+  if(!(which==='start'?startMarked.value:endMarked.value))return;
   try{const t=readMark(which);markText(which,t);void playFrom(markPreviewPosition(t,detail.value?.sources||[]),false);}catch(e){tell(e.message);}
 }
-function setMark(which){
-  if(!canPreview.value)return;markText(which,position.value);
-  const stamp=recordingTimeAt(position.value,activeSession.value,detail.value?.sources||[]),text=Number.isFinite(stamp)?toRecordingInput(stamp):'';
-  if(which==='start'){startMarked.value=true;startDateText.value=text;}else{endMarked.value=true;endDateText.value=text;}
-}
-function dragMark(which,time){
-  markText(which,time);
-  const stamp=recordingTimeAt(time,activeSession.value,detail.value?.sources||[]),text=Number.isFinite(stamp)?toRecordingInput(stamp):'';
-  if(which==='start'){startMarked.value=true;startDateText.value=text;}else{endMarked.value=true;endDateText.value=text;}
-}
+function setMark(which){if(canPreview.value)markText(which,position.value);}
+function dragMark(which,time){markText(which,time);}
 function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
-function clearDraftMarks(){startMarked.value=false;endMarked.value=false;}
+function clearDraftMarks(){
+  startMarked.value=false;endMarked.value=false;startExact.value=null;endExact.value=null;
+  startText.value='';endText.value='';startDateText.value='';endDateText.value='';
+}
 function resetSelection(){
   previewTransport?.dispose();selectionGeneration++;generation++;senderFilter.value=null;selected.value=null;detail.value=null;
   invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();
   previewUrl.value='';loading.value=false;previewEnded.value=false;previewBase.value=0;scrubbing.value=false;
   edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;
-  startMarked.value=false;endMarked.value=false;startExact.value=0;endExact.value=0;
-  startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';
+  clearDraftMarks();
 }
 function applyState(value){
   state.value=value;if(selected.value&&!value.sessions.some(s=>s.id===selected.value))resetSelection();
@@ -338,19 +406,21 @@ function applyState(value){
     }
   }
 }
-function closeContext(){sessionMenu.value=null;jobMenu.value=null;messageMenu.value=null;}
-async function showMessageContext(event,message){pauseMessageFollow();
-  if(!['d','lottery'].includes(message.type)||modal.value)return;closeContext();const rect=event.currentTarget.getBoundingClientRect();
+function closeContext(){
+  sessionMenu.value=null;jobMenu.value=null;messageMenu.value=null;
+}
+async function showMessageContext(event,message){
+  if(modal.value)return;
+  pauseMessageFollow();closeContext();const rect=event.currentTarget.getBoundingClientRect();
   messageMenu.value={message,x:event.clientX||rect.left,y:event.clientY||rect.bottom};await nextTick();const menu=document.querySelector('.message-context');if(!menu||!messageMenu.value)return;
   const bounds=menu.getBoundingClientRect();messageMenu.value.x=Math.max(8,Math.min(messageMenu.value.x,innerWidth-bounds.width-8));messageMenu.value.y=Math.max(8,Math.min(messageMenu.value.y,innerHeight-bounds.height-8));menu.querySelector('button:not(:disabled)')?.focus();
 }
-function filterSender(message){const filter=senderFilterFor(message);closeContext();if(!filter)return;senderFilter.value=filter;giftRows.value=[];lotteryRows.value=[];searchChanged();}
+function filterSender(message){const filter=senderFilterFor(message);closeContext();if(!filter)return;senderFilter.value=filter;showGiftList.value=false;query.value='';searchChanged();}
 function clearSenderFilter(){senderFilter.value=null;searchChanged();}
 async function toggleHighlight(message){if(saving.value||message.type!=='d')return;closeContext();const marked=new Set(edit.value.highlighted||[]);if(marked.has(message.id))marked.delete(message.id);else marked.add(message.id);edit.value.highlighted=[...marked];await save();}
 async function openLottery(message,editing=false){
   if(!selectionReady.value||message.type!=='lottery')return;
   closeContext();lotteryTarget.value={session:selected.value,version:selectionGeneration,record:message};lotteryEditing.value=editing;lotteryError.value='';modal.value='lottery';
-  if(!editing)void playFrom(message.time,false);
   await refreshLotteryDetail();
 }
 async function refreshLotteryDetail(){
@@ -484,8 +554,8 @@ async function choose(id){
   if(selected.value===id){closeContext();resetSelection();return;}
   const version=++selectionGeneration;senderFilter.value=null;
   detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();
-  previewTransport?.dispose();overlayWindow=null;closeContext();startMarked.value=false;endMarked.value=false;generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};startExact.value=0;endExact.value=0;startText.value='00:00:00';endText.value='00:00:00';startDateText.value='';endDateText.value='';messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
-  try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;startExact.value=0;endExact.value=Math.min(10,result.duration);startText.value=format(0);endText.value=format(endExact.value);if(!canUseRecordingTime.value)positionMode.value='video';syncRecordingTexts();query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
+  previewTransport?.dispose();overlayWindow=null;closeContext();clearDraftMarks();generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
+  try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;if(!canUseRecordingTime.value)positionMode.value='video';query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
 async function save(){if(saving.value||!selectionReady.value)return false;const id=selected.value,version=selectionGeneration;saving.value=true;try{const result=await api(`sessions/${id}/edit`,{...edit.value,filterLottery:true});if(selected.value===id&&version===selectionGeneration){edit.value=result;return true;}return false;}catch(e){tell(e.message);if(selected.value===id&&version===selectionGeneration){const result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration)edit.value=result.edit;}return false;}finally{saving.value=false;}}
@@ -507,9 +577,9 @@ async function confirmRoomChoice(){
 }
 async function roomAction(anchor,action,data={}){if(roomBusyIds.value.includes(anchor.key))return;roomBusyIds.value.push(anchor.key);try{await api(`anchors/${anchor.key}/${action}`,data);await refresh();}catch(e){tell(e.message);}finally{roomBusyIds.value=roomBusyIds.value.filter(id=>id!==anchor.key);}}
 function containsTime(ranges,time){for(let i=0;i<ranges.length;i++)if(time>=ranges.start(i)&&time<ranges.end(i)-.05)return true;return false;}
-async function playFrom(time,play=true){
+async function playFrom(time,play=true,{allowTail=false}={}){
   if(!canPreview.value)return;
-  const available=detail.value?.sources||[];let target=Math.max(0,Math.min(time,Math.max(0,duration.value-.1)));
+  const available=detail.value?.sources||[];let target=Math.max(0,Math.min(time,Math.max(0,duration.value-(allowTail?0:.1))));
   let s=available.find(x=>x.start<=target+.02&&x.start+x.duration>=target-.02);
   if(!s){s=available.find(x=>x.start>target);if(!s){tell(ui.workbench.该位置暂时没有录制画面);return;}target=s.start;tell(ui.workbench.已跳过直播断流的空缺区间,'success');}
   const player=video.value,version=++generation;
@@ -548,10 +618,14 @@ function played(){isPlaying.value=!!video.value&&!video.value.paused;}
 function loaded(){loading.value=false;applyPreviewAudio();if(!isPlaying.value)video.value?.pause();}
 function paused(){if(video.value?.paused&&!loading.value&&!video.value.ended)isPlaying.value=false;}
 function updateTime(){if(video.value&&!scrubbing.value)position.value=Math.min(duration.value,previewBase.value+video.value.currentTime);}
-function step(direction){pausePreview();void playFrom(position.value+direction/fps.value,false);}
+function step(direction){pausePreview();void playFrom(position.value+direction/fps.value,false,{allowTail:true});}
+function returnToLatest(){
+  const target=latestPreviewPosition(detail.value?.sources||[],duration.value);
+  if(target!==null)void playFrom(target,true,{allowTail:true});
+}
 function playNext(){const available=detail.value?.sources||[];const same=available.find(s=>s.start<=position.value&&s.start+s.duration>position.value+.15);if(same){void playFrom(position.value+1/fps.value,true);return;}const next=available.find(s=>s.start>previewBase.value+.1&&s.start>=position.value-.3&&s.duration>0);if(next)void playFrom(next.start,true);}
 function ended(){previewEnded.value=true;loading.value=false;if(isPlaying.value)playNext();}
-async function addRange(){if(saving.value||!selectionReady.value)return;const id=selected.value,version=selectionGeneration;try{const start=readMark('start'),end=readMark('end');if(start<0||end<=start||end>duration.value+.05)throw new Error(ui.workbench.请选择已录制范围内的起点和终点);edit.value.ranges.push({start,end:Math.min(end,duration.value),selected:true});if(await save()&&selected.value===id&&version===selectionGeneration)clearDraftMarks();}catch(e){tell(e.message);}}
+async function addRange(){if(saving.value||!canPreview.value||draftDuration.value===null)return;const id=selected.value,version=selectionGeneration;try{const start=readMark('start'),end=readMark('end');if(start<0||end<=start||end>duration.value+.05)throw new Error(ui.workbench.请选择已录制范围内的起点和终点);edit.value.ranges.push({start,end:Math.min(end,duration.value),selected:true});if(await save()&&selected.value===id&&version===selectionGeneration)clearDraftMarks();}catch(e){tell(e.message);}}
 async function selectRange(index,value){edit.value.ranges[index].selected=value;await save();}
 async function selectAllRanges(value){for(const range of edit.value.ranges)range.selected=value;await save();}
 async function removeRange(index){edit.value.ranges.splice(index,1);await save();}
@@ -559,32 +633,85 @@ async function moveRange(index,direction){const list=edit.value.ranges,[item]=li
 async function toggleMessage(message){if(message.type==='lottery')return;const id=selected.value,version=selectionGeneration;if(excluded.value.has(message.id))edit.value.excluded=edit.value.excluded.filter(x=>x!==message.id);else {edit.value.excluded.push(message.id);edit.value.undo.push(message.id);}await save();if(id===selected.value&&version===selectionGeneration)void loadSignals(true);}
 async function undoMessage(){const sessionId=selected.value,version=selectionGeneration,id=edit.value.undo.pop();if(!id)return;edit.value.excluded=edit.value.excluded.filter(x=>x!==id);await save();if(sessionId===selected.value&&version===selectionGeneration)void loadSignals(true);}
 let automaticMessageRequest=false;
-function pauseMessageFollow(){if(followMessages.value&&!messageFollowPaused.value){messageWindowAnchor.value=position.value;messageFollowPaused.value=true;}if(automaticMessageRequest&&dmBusy){messageRequest++;dmBusy=false;messageLoading.value=false;}}
+function pauseMessageFollow(){if(followMessageList.value&&!messageFollowPaused.value){messageWindowAnchor.value=position.value;messageFollowPaused.value=true;}if(automaticMessageRequest&&dmBusy){messageRequest++;dmBusy=false;messageLoading.value=false;}}
 // Keep the user's rail target through async loading and virtual-row measurement.
 // Only an explicit list gesture or resuming follow can hand control back.
 function startMessageNavigation(){messageNavigationPinned.value=true;pauseMessageFollow();}
-function manualMessageScroll(){messageNavigationPinned.value=false;pauseMessageFollow();}
-function syncMessageBrowseTime(time){if(!messageNavigationPinned.value)messageBrowseTime.value=time;}
-function jumpMessages(time){startMessageNavigation();const target=messageTime(time,duration.value);messageBrowseTime.value=target;void loadMessages(true,undefined,target);}
-function resumeMessageFollow(){messageNavigationPinned.value=false;messageFollowPaused.value=false;void loadMessages(true);}
+function manualMessageScroll(){stopMessageDrag();messageNavigationPinned.value=false;pauseMessageFollow();}
+function syncMessageBrowseTime(time){
+  if(!messageNavigationPinned.value&&(!followMessageList.value||messageFollowPaused.value))messageBrowseTime.value=time;
+}
+function jumpMessages(time){stopMessageDrag();startMessageNavigation();const target=messageTime(time,duration.value);messageBrowseTime.value=target;void loadMessages(true,undefined,target);}
+function resumeMessageFollow(){stopMessageDrag();messageNavigationPinned.value=false;messageFollowPaused.value=false;void loadMessages(true);}
+let messageDragFrame=0,messageDragRequest=null;
+function stopMessageDrag(){
+  cancelAnimationFrame(messageDragFrame);messageDragFrame=0;
+  messageDragRequest?.abort();messageDragRequest=null;
+}
+function previewMessageNavigation(time){
+  if(!selectionReady.value||!danmakuVisible.value||document.hidden)return;
+  const target=messageTime(time,duration.value);messageBrowseTime.value=target;
+  const rows=visibleMessages.value;
+  if(rows[0]?.time<=target&&target<=rows.at(-1)?.time){
+    stopMessageDrag();messageList.value?.scrollToTime(target,true);return;
+  }
+  if(messageDragFrame||messageDragRequest)return;
+  // Reuse cached rows and keep one page request in flight while dragging.
+  messageDragFrame=requestAnimationFrame(async()=>{
+    messageDragFrame=0;
+    const controller=new AbortController();
+    const requested=messageBrowseTime.value;
+    messageDragRequest=controller;
+    try{await loadMessages(true,undefined,requested,controller.signal);}
+    finally{
+      if(messageDragRequest===controller){
+        messageDragRequest=null;
+        if(messageBrowseTime.value!==requested)previewMessageNavigation(messageBrowseTime.value);
+      }
+    }
+  });
+}
+function shouldFollowPlayback(){
+  return followMessageList.value&&!messageFollowPaused.value&&!messageMenu.value&&!modal.value&&danmakuVisible.value;
+}
+function startPlaybackScrub(){
+  scrubbing.value=true;
+  timelineDragging.value=true;
+  timelineAutoFollow.value=false;
+  if(shouldFollowPlayback()&&dmBusy){messageRequest++;dmBusy=false;messageLoading.value=false;}
+}
+function movePlaybackScrub(time){
+  position.value=time;
+  if(shouldFollowPlayback())previewMessageNavigation(time);
+}
+function finishPlaybackScrub(){
+  stopMessageDrag();
+  endTimelineDrag();
+  if(shouldFollowPlayback()){
+    messageBrowseTime.value=position.value;
+    void loadMessages(true,undefined,position.value);
+  }
+}
 function assignFeed(rows){messages.value=rows.filter(row=>row.type==='d');giftRows.value=rows.filter(row=>row.type!=='d'&&row.type!=='lottery');lotteryRows.value=rows.filter(row=>row.type==='lottery');}
-async function loadMessages(force=false,direction,at){
+async function loadMessages(force=false,direction,at,dragSignal){
   if(!selectionReady.value||!danmakuVisible.value||document.hidden)return;
   if(dmBusy){if(!force)return;messageRequest++;dmBusy=false;}
-  const scope={...messageRange.value},target=at!==undefined?Math.max(scope.from,Math.min(scope.to,at)):followMessages.value?messageTime(position.value,duration.value):undefined;
-  if(!force&&!direction&&(messageFollowPaused.value||messageMenu.value||modal.value))return;
-  const id=selected.value,version=selectionGeneration,key=`${id}:${followMessages.value?Math.floor(position.value/5):'all'}:${query.value}:${showGifts.value}:${onlyGifts.value}:${JSON.stringify(senderFilter.value)}`;
+  const scope={...messageRange.value},target=at!==undefined?Math.max(scope.from,Math.min(scope.to,at)):followMessageList.value?messageTime(position.value,duration.value):undefined;
+  if(!force&&!direction&&(queryTimer||scrubbing.value||messageFollowPaused.value||messageMenu.value||modal.value))return;
+  const id=selected.value,version=selectionGeneration;
+  const mode=searching.value?'search':showGiftList.value?'gifts':'chat';
+  const key=JSON.stringify([id,followMessageList.value?Math.floor(position.value/5):'all',searchKeyword.value,mode,activeSenderFilter.value]);
   if(!force&&!direction&&key===lastMessageKey)return;
   const request=++messageRequest;dmBusy=true;messageLoading.value=true;automaticMessageRequest=!force&&!direction;
-  const anchor=messageList.value?.capture(),current=()=>request===messageRequest&&version===selectionGeneration&&id===selected.value;
+  const anchor=messageList.value?.capture(),current=()=>!dragSignal?.aborted&&request===messageRequest&&version===selectionGeneration&&id===selected.value;
   try{
-    const params=new URLSearchParams({q:query.value,gifts:showGifts.value?'1':'0',onlyGifts:onlyGifts.value?'1':'0',from:String(scope.from),to:String(scope.to)});
-    if(senderFilter.value)params.set('sender',JSON.stringify(senderFilter.value));
+    const params=new URLSearchParams({q:searchKeyword.value,gifts:mode==='chat'?'0':'1',onlyGifts:mode==='gifts'?'1':'0',from:String(scope.from),to:String(scope.to)});
+    if(activeSenderFilter.value)params.set('sender',JSON.stringify(activeSenderFilter.value));
     if(direction){const row=direction==='before'?visibleMessages.value[0]:visibleMessages.value.at(-1);if(row)params.set('cursor',JSON.stringify({time:row.time,key:feedKey(row)}));params.set('direction',direction);}
     else if(target!==undefined)params.set('at',String(target));
-    const result=await api(`sessions/${id}/feed?${params}`);if(!current())return;
+    const result=await api(`sessions/${id}/feed?${params}`,undefined,{signal:dragSignal});if(!current())return;
     let rows=result.rows;
-    if(!direction&&followMessages.value){
+    if(!dragSignal&&!direction&&followMessageList.value){
       // Follow mode queries only the current +/- 60 second window.
       // Dense windows stay paginated; no chat timestamp sets media duration.
       while(result.hasBefore&&rows.length<2400&&rows[0]?.time>scope.from){
@@ -593,7 +720,7 @@ async function loadMessages(force=false,direction,at){
         rows=[...previous.rows,...rows];result.before=previous.before;result.hasBefore=previous.hasBefore;if(!previous.rows.length)break;
       }
     }
-    if(!direction&&followMessages.value){
+    if(!dragSignal&&!direction&&followMessageList.value){
       while(result.hasAfter&&rows.length+300<=3000&&rows.at(-1)?.time<scope.to){
         params.delete('at');params.set('direction','after');params.set('cursor',JSON.stringify(result.after));
         const next=await api(`sessions/${id}/feed?${params}`);if(!current())return;
@@ -611,7 +738,7 @@ async function loadMessages(force=false,direction,at){
     }else messagePage.value={before:result.before,after:result.after,hasBefore:result.hasBefore,hasAfter:result.hasAfter};
     assignFeed(rows);lastMessageKey=key;
     await nextTick();if(!current())return;
-    if(at!==undefined){messageList.value?.scrollToTime(target);}else if(direction||messageFollowPaused.value)await messageList.value?.restore(anchor);else if(followMessages.value)followMessagePosition();else messageList.value?.reset();
+    if(at!==undefined){messageList.value?.scrollToTime(target,!!dragSignal);}else if(direction||messageFollowPaused.value)await messageList.value?.restore(anchor);else if(followMessageList.value)followMessagePosition();else messageList.value?.reset();
     const lottery=lotteryTarget.value,summary=lottery&&lotteryRows.value.find(x=>x.id===lottery.record.id);
     if(modal.value==='lottery'&&!lotteryEditing.value&&!modalBusy.value&&summary&&(summary.state!==lottery.record.state||summary.winnerCount!==lottery.record.winnerCount||summary.revision!==lottery.record.revision))void refreshLotteryDetail();
   }catch(e){if(current())tell(e.message);}finally{if(request===messageRequest){dmBusy=false;messageLoading.value=false;}}
@@ -619,17 +746,24 @@ async function loadMessages(force=false,direction,at){
 function loadMessagePage(direction){pauseMessageFollow();return loadMessages(false,direction);}
 function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user&&m.senderId===b[i].senderId&&m.senderPlatform===b[i].senderPlatform&&m.edited===b[i].edited&&m.originalUser===b[i].originalUser&&m.originalText===b[i].originalText);}
 function followMessagePosition(){
-  if(!followMessages.value||messageFollowPaused.value||messageMenu.value||modal.value||!danmakuVisible.value)return;
-  syncMessageBrowseTime(position.value);messageList.value?.scrollToTime(position.value);
+  if(scrubbing.value||!shouldFollowPlayback())return;
+  messageBrowseTime.value=position.value;messageList.value?.scrollToTime(position.value);
 }
-watch([position,followMessages,danmakuVisible],followMessagePosition,{flush:'post'});
+watch([position,followMessageList,danmakuVisible],followMessagePosition,{flush:'post'});
 watch(danmakuVisible,value=>{if(value)void loadMessages(true);});
 watch(selected,()=>{messageFollowPaused.value=false;messageWindowAnchor.value=0;messageBrowseTime.value=0;messageNavigationPinned.value=false;messagePage.value={hasBefore:false,hasAfter:false};});
 let giftFeedBusy=false;
 async function loadGiftOverlay(){
-  if(!showGifts.value||!selectionReady.value||giftFeedBusy){if(!showGifts.value)giftFeed.value=[];return;}
-  const id=selected.value,version=selectionGeneration,from=Math.max(0,position.value-10);giftFeedBusy=true;
-  try{const events=await api(`sessions/${id}/gifts?from=${from}&to=${from+60}`);if(version===selectionGeneration&&id===selected.value&&showGifts.value)giftFeed.value=events;}catch{}finally{giftFeedBusy=false;}
+  if(!previewGifts.value||!selectionReady.value||giftFeedBusy){if(!previewGifts.value)giftFeed.value=[];return;}
+  const id = selected.value, version = selectionGeneration, at = position.value;
+  const from = Math.max(0, at - SUPER_CHAT_SECONDS);
+  giftFeedBusy = true;
+  try {
+    const events = await api(`sessions/${id}/gifts?from=${from}&to=${from+60}&at=${at}&includeSuperChat=1`);
+    if (version === selectionGeneration && id === selected.value && previewGifts.value) giftFeed.value = events;
+  } catch {} finally {
+    giftFeedBusy = false;
+  }
 }
 async function loadOverlay(){
   if(document.hidden)return;
@@ -649,9 +783,23 @@ watch(()=>[state.value.updates?.status,state.value.updates?.autoInstall,state.va
   catch(error){tell(error.message);if(!/已有任务|等待当前|有录制任务/.test(error.message))await api('updates/cancel',{}).catch(()=>{});}
   finally{applyingUpdate=false;}
 });
-async function openUpdateSettings(){openSettings();await nextTick();document.querySelector('.update-settings')?.scrollIntoView({block:'center'});}
-async function openAbout(){openSettings();await nextTick();const heading=document.querySelector('#settings-about-title');heading?.scrollIntoView({block:'center'});heading?.focus({preventScroll:true});}
-function openSettings(){const current=state.value.paths?.exports||'';savedExportDirectory.value=current;exportDirectory.value=current;closeActionError.value='';modal.value='settings';}
+function openUpdateSettings() { return openSettingsSection('#settings-updates-title', { focus: '#settings-updates-title' }); }
+function openAbout() { return openSettingsSection('#settings-about-title', { focus: '#settings-about-title' }); }
+async function openSettingsSection(selector, { group, focus } = {}) {
+  openSettings();
+  if (group) expandedSettings.value[group] = true;
+  await nextTick();
+  document.querySelector(selector)?.scrollIntoView({ block: 'center' });
+  if (focus) document.querySelector(focus)?.focus({ preventScroll: focus === selector });
+}
+function openSettings() {
+  const current = state.value.paths?.exports || '';
+  savedExportDirectory.value = current;
+  exportDirectory.value = current;
+  closeActionError.value = '';
+  expandedSettings.value = {};
+  modal.value = 'settings';
+}
 async function applyDanmakuSettings(result){const rateChanged=state.value.danmakuPerSecond!==result.danmakuPerSecond;state.value={...state.value,highlightStyle:result.highlightStyle,danmakuStyle:result.danmakuStyle,danmakuPerSecond:result.danmakuPerSecond,danmakuFont:result.danmakuFont};if(rateChanged){invalidateMessages();invalidateSignals(true);await Promise.all([loadMessages(true),loadOverlay()]);}}
 async function setCloseAction(value){if(closeActionBusy.value)return;closeActionBusy.value=true;closeActionDraft.value=value;closeActionError.value='';try{const result=await api('settings',{closeAction:value});state.value={...state.value,closeAction:result.closeAction};await refresh();}catch(e){closeActionError.value=e.message;}finally{closeActionDraft.value=null;closeActionBusy.value=false;}}
 function openExport(){if(!selected.value||!selectedRanges.value.length){tell(ui.workbench.请先勾选至少一个选段);return;}exportScope.value='clips';exportTarget.value={id:selected.value,title:activeSession.value?.title};exportRanges.value=selectedRanges.value.map(r=>({start:r.start,end:r.end}));exportExcluded.value=edit.value.excluded.length;exportMode.value='dual';exportGifts.value=state.value.giftStyle?.export===true;exportDirectory.value=state.value.paths?.exports||'';modal.value='export';}
@@ -659,7 +807,30 @@ function openFullExport(session){const latest=state.value.sessions.find(s=>s.id=
 async function browseFolder(){try{const value=await pickExportFolder(exportDirectory.value);if(!value)return;exportDirectory.value=value;if(modal.value==='settings')await commitExportDirectory();}catch(e){tell(e.message);}}
 async function commitExportDirectory(){if(modal.value!=='settings'||modalBusy.value)return;const value=exportDirectory.value.trim();if(!value){if(exportDirectory.value!==savedExportDirectory.value)tell(ui.workbench.请填写导出文件夹的完整路径);return;}if(value===savedExportDirectory.value)return;modalBusy.value=true;try{const result=await api('settings',{exportDirectory:value});const saved=result.paths?.exports||value;savedExportDirectory.value=saved;exportDirectory.value=saved;await refresh();tell(ui.workbench.默认导出文件夹已保存,'success');}catch(e){tell(e.message);}finally{modalBusy.value=false;}}
 async function openFolder(input){try{await api('folders/open',input);}catch(e){tell(e.message);}}
-function searchChanged(){messageNavigationPinned.value=false;messageBrowseTime.value=followMessages.value?position.value:0;lastMessageKey='';messageFollowPaused.value=false;messageRequest++;dmBusy=false;clearTimeout(queryTimer);queryTimer=setTimeout(()=>loadMessages(true),250);}
+function searchChanged(){
+  stopMessageDrag();
+  messageNavigationPinned.value=false;
+  messageBrowseTime.value=followMessageList.value?position.value:0;
+  lastMessageKey='';
+  messageFollowPaused.value=false;
+  messageRequest++;
+  dmBusy=false;
+  assignFeed([]);
+  messagePage.value={hasBefore:false,hasAfter:false};
+  messageLoading.value=selectionReady.value;
+  clearTimeout(queryTimer);
+  queryTimer=setTimeout(()=>{queryTimer=null;void loadMessages(true);},250);
+}
+function changeGiftList(enabled){
+  if(searching.value||showGiftList.value===enabled)return;
+  showGiftList.value=enabled;
+  searchChanged();
+}
+function clearMessageSearch(){
+  query.value='';
+  searchChanged();
+  document.getElementById('message-search')?.focus();
+}
 async function exportClip(){if(modalBusy.value)return;if(exportBlock.value){tell(exportBlock.value);return;}modalBusy.value=true;const target=exportTarget.value.id,scope=exportScope.value;try{const result=await api(`sessions/${target}/export`,{scope,mode:exportMode.value,giftsEnabled:exportMode.value!=='clean'&&exportGifts.value,...(scope==='clips'?{ranges:exportRanges.value}:{}),exportDirectory:exportDirectory.value});modal.value='';tell(scope==='full'?ui.workbench.完整素材已加入导出队列:ui.workbench.导出任务已创建(result.jobs?.length??1),'success');await refresh();}catch(e){tell(e.message);}finally{modalBusy.value=false;}}
 function onKey(e){if(e.key==='Escape'){const jobId=jobMenu.value?.id;closeContext();closeModal();if(jobId)focusJob(jobId);return;}if(sessionMenu.value||jobMenu.value||messageMenu.value)return;if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||modal.value)return;if(e.code==='Space'){e.preventDefault();void togglePlay();}else if(e.code==='ArrowLeft'){e.preventDefault();step(-1);}else if(e.code==='ArrowRight'){e.preventDefault();step(1);}else if(e.key.toLowerCase()==='i')setMark('start');else if(e.key.toLowerCase()==='o')setMark('end');}
 watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(true);});
@@ -707,12 +878,17 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
           <div v-if="!previewUrl" class="preview-empty"><button v-if="selected" class="preview-start" :disabled="!canPreview" :aria-label="canPreview?ui.workbench.播放预览:ui.workbench.等待录制画面" @click="togglePlay"><Play v-if="canPreview" :size="42" aria-hidden="true"/><Video v-else :size="42" aria-hidden="true"/></button><strong v-if="!canPreview">{{ selected?ui.workbench.等待录制画面:ui.workbench.选择一段录像 }}</strong></div>
           <div v-if="loading" class="video-loading"><LoaderCircle :size="30" class="spin"/><span>{{ ui.workbench.正在读取画面 }}</span></div>
           <RecordingLayout v-if="previewUrl" :video="video" :events="recordingCameraEvents" :style="state.recordingStyle" :base="previewBase" :loading="loading"/>
-          <DanmakuOverlay v-if="previewUrl" @font-error="tell(ui.workbench.字体未能加载请在设置中重新导入)" :font="state.danmakuFont" :style="state.danmakuStyle" :video="video" :base="previewBase" :messages="overlayFeed" :highlighted="highlighted" :highlight-style="state.highlightStyle" :message-edits="edit.messageEdits" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
+          <DanmakuOverlay v-if="previewUrl" @font-error="tell(ui.workbench.字体未能加载请在设置中重新导入)" @visible-danmaku="visibleDanmaku=$event" :font="state.danmakuFont" :style="state.danmakuStyle" :video="video" :base="previewBase" :messages="overlayFeed" :highlighted="highlighted" :highlight-style="state.highlightStyle" :message-edits="edit.messageEdits" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
           <LinkmicOverlay v-if="previewUrl" @cameras="recordingCameraEvents=$event" :session="selected" :video="video" :base="previewBase" :loading="loading"/>
-          <GiftOverlay :events="giftFeed.filter(g=>!excluded.has(g.id))" :time="position" :enabled="showGifts" :video="video" :loading="loading"/>
+          <GiftOverlay :cards="previewGiftCards" :video="video" :loading="loading"/>
           <RecordingTimestamp v-if="previewUrl&&state.previewTimestamp===true&&selectionReady" :video="video" :base="previewBase" :session="activeSession" :sources="detail?.sources" :loading="loading" :timestamp-style="state.previewTimestampStyle" :timestamp-position="state.previewTimestampPosition"/>
         </div>
-        <div v-if="selected" class="playback-toolbar"><div class="playback-left"><button class="icon-button" :aria-label="ui.workbench.上一帧" :title="ui.workbench.上一帧左方向键" :disabled="!canPreview" @click="step(-1)"><StepBack :size="21"/></button><button class="icon-button play" :disabled="!canPreview" :aria-label="isPlaying?ui.workbench.暂停:ui.workbench.播放" @click="togglePlay"><Pause v-if="isPlaying" :size="25"/><Play v-else :size="25"/></button><button class="icon-button" :aria-label="ui.workbench.下一帧" :title="ui.workbench.下一帧右方向键" :disabled="!canPreview" @click="step(1)"><StepForward :size="21"/></button><div class="preview-volume" :class="{open:previewVolumeOpen}" @pointerenter="openPreviewVolume" @pointerleave="leavePreviewVolume" @pointerdown="previewVolumeDown"><button type="button" class="icon-button" :disabled="!canPreview" :aria-pressed="previewMuted||previewVolume===0" :aria-label="previewMuted||previewVolume===0?ui.workbench.恢复预览声音:ui.workbench.静音预览" :title="(previewMuted||previewVolume===0?ui.workbench.预览已静音点击恢复声音:ui.workbench.点击静音预览)+ui.workbench.只改变这里的播放导出视频的声音不变" @click="togglePreviewMute"><VolumeX v-if="previewMuted||previewVolume===0" :size="18"/><Volume1 v-else-if="previewVolume<0.5" :size="18"/><Volume2 v-else :size="18"/></button><div class="preview-volume-pop"><div class="preview-volume-rotator"><input type="range" min="0" max="100" step="1" :value="Math.round(previewSlider*100)" :disabled="!canPreview" :aria-label="ui.workbench.预览音量" :title="ui.workbench.预览音量预览音量+Math.round(previewSlider*100)+'%'" @input="setPreviewVolume"/></div></div></div><span class="playback-time">{{ format(position) }} <span>/ {{ format(duration) }}</span></span></div><div class="playback-right"><button v-if="activeSession?.status==='recording'" class="button subtle" :disabled="!canPreview" @click="playFrom(Math.max(0,duration-3),true)"><RotateCcw :size="16"/>{{ ui.workbench.回到最新 }}</button></div></div>
+        <div v-if="selected" class="playback-toolbar"><div class="playback-left"><button class="icon-button" :aria-label="ui.workbench.上一帧" :title="ui.workbench.上一帧左方向键" :disabled="!canPreview" @click="step(-1)"><StepBack :size="21"/></button><button class="icon-button play" :disabled="!canPreview" :aria-label="isPlaying?ui.workbench.暂停:ui.workbench.播放" @click="togglePlay"><Pause v-if="isPlaying" :size="25"/><Play v-else :size="25"/></button><button class="icon-button" :aria-label="ui.workbench.下一帧" :title="ui.workbench.下一帧右方向键" :disabled="!canPreview" @click="step(1)"><StepForward :size="21"/></button><div class="preview-volume" :class="{open:previewVolumeOpen}" @pointerenter="openPreviewVolume" @pointerleave="leavePreviewVolume" @pointerdown="previewVolumeDown"><button type="button" class="icon-button" :disabled="!canPreview" :aria-pressed="previewMuted||previewVolume===0" :aria-label="previewMuted||previewVolume===0?ui.workbench.恢复预览声音:ui.workbench.静音预览" :title="(previewMuted||previewVolume===0?ui.workbench.预览已静音点击恢复声音:ui.workbench.点击静音预览)+ui.workbench.只改变这里的播放导出视频的声音不变" @click="togglePreviewMute"><VolumeX v-if="previewMuted||previewVolume===0" :size="18"/><Volume1 v-else-if="previewVolume<0.5" :size="18"/><Volume2 v-else :size="18"/></button><div class="preview-volume-pop"><div class="preview-volume-rotator"><input type="range" min="0" max="100" step="1" :value="Math.round(previewSlider*100)" :disabled="!canPreview" :aria-label="ui.workbench.预览音量" :title="ui.workbench.预览音量预览音量+Math.round(previewSlider*100)+'%'" @input="setPreviewVolume"/></div></div></div><span class="playback-time">{{ formatPosition(position) }} <span>/ {{ formatPosition(duration) }}</span></span></div><div class="playback-right"><button v-if="activeSession?.status==='recording'" class="button subtle" :disabled="!canPreview" @click="returnToLatest"><RotateCcw :size="16"/>{{ ui.workbench.回到最新 }}</button>
+          <div class="preview-display-options" role="group" :aria-label="ui.workbench.画面显示">
+            <label class="checkbox"><input v-model="showOverlay" type="checkbox"/>{{ ui.workbench.弹幕 }}</label>
+            <label class="checkbox"><input type="checkbox" :checked="previewGifts" :disabled="savingPreviewGifts" @change="setPreviewGifts"/>{{ ui.gifts.礼物 }}</label>
+          </div>
+        </div></div>
         </div>
         <strong v-if="!selected" class="editor-empty-hint">{{ ui.workbench.选择一段录像 }}</strong>
         <div v-if="selected" class="editor-scroll">
@@ -732,25 +908,25 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
             <div v-if="draftView" class="draft-range" :style="rangeStyle(draftView)"/>
             <TimelineMarker v-if="inViewport(draftStart)||activeMarker==='start'" kind="start" :duration="duration" @pan="panTimeline" :time="draftStart" :from="viewport.from" :to="viewport.to" :min="0" :max="draftEnd!==null&&draftEnd>0?draftEnd-.001:duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('start',$event)" @commit="previewMark" @start="timelineDragging=true;activeMarker='start';timelineAutoFollow=false" @end="endTimelineDrag"/>
             <TimelineMarker v-if="inViewport(draftEnd)||activeMarker==='end'" kind="end" :duration="duration" @pan="panTimeline" :time="draftEnd" :from="viewport.from" :to="viewport.to" :min="draftStart!==null&&draftStart<duration?draftStart+.001:0" :max="duration" :fps="fps" :disabled="!canPreview||saving" @change="dragMark('end',$event)" @commit="previewMark" @start="timelineDragging=true;activeMarker='end';timelineAutoFollow=false" @end="endTimelineDrag"/>
-            <div v-for="{range,index,view} in visibleRanges" :key="index" class="range-highlight" :class="{unselected:range.selected===false}" :title="ui.workbench.选段选段+(index+1)+'：'+format(range.start)+' → '+format(range.end)" :style="rangeStyle(view)"/>
+            <div v-for="{range,index,view} in visibleRanges" :key="index" class="range-highlight" :class="{unselected:range.selected===false}" :title="ui.workbench.选段选段+(index+1)+'：'+formatPosition(range.start)+' → '+formatPosition(range.end)" :style="rangeStyle(view)"/>
             <div v-if="inViewport(position)" class="playhead" :style="{left:timelinePercent(position)+'%'}"/>
-            <TimelineScrubber :from="viewport.from" :to="viewport.to" :duration="duration" :time="position" :disabled="!canPreview" @start="scrubbing=true;timelineDragging=true;timelineAutoFollow=false" @change="position=$event" @commit="playFrom($event,isPlaying)" @pan="panTimeline" @end="endTimelineDrag"/>
+            <TimelineScrubber :from="viewport.from" :to="viewport.to" :duration="duration" :time="position" :disabled="!canPreview" @start="startPlaybackScrub" @change="movePlaybackScrub" @commit="playFrom($event,isPlaying)" @pan="panTimeline" @end="finishPlaybackScrub"/>
           </div>
           <TimelineSignals kind="density" :density="signals?.density" :from="viewport.from" :to="viewport.to" :data-from="signals?.from??viewport.from" :data-to="signals?.to??viewport.to" :position="position" :selected="selectionReady" :loading="signalsLoading" :error="signalsError" :disabled="!canPreview" @seek="playFrom($event,isPlaying)"/>
           </div>
           <TimelineNavigator :key="selected||'empty'" :duration="duration" :from="viewport.from" :to="viewport.to" :disabled="!canPreview" @pan="panTimeline" @start="timelineDragging=true" @end="endTimelineDrag"/>
-          <div v-if="startMarked||endMarked" class="marker-summary" aria-live="polite"><span class="start-color">{{ draftStart===null?ui.workbench.起点未标记或超出范围:ui.workbench.I起点+format(draftStart) }}</span><span class="end-color">{{ draftEnd===null?ui.workbench.终点未标记或超出范围:ui.workbench.O终点+format(draftEnd) }}</span><span v-if="draftDuration!==null" class="selection-duration">{{ ui.workbench.片段时长 }} {{ format(displayedSpan(draftStart,draftEnd)) }}</span><span v-if="draftStart!==null&&draftEnd!==null&&draftEnd<=draftStart" class="invalid-range">{{ ui.workbench.终点需要晚于起点 }}</span></div>
+          <div v-if="startMarked||endMarked" class="marker-summary" aria-live="polite"><span class="start-color">{{ draftStart===null?ui.workbench.起点未标记或超出范围:ui.workbench.I起点+formatPosition(draftStart) }}</span><span class="end-color">{{ draftEnd===null?ui.workbench.终点未标记或超出范围:ui.workbench.O终点+formatPosition(draftEnd) }}</span><span v-if="draftDuration!==null" class="selection-duration">{{ ui.workbench.片段时长 }} {{ formatClipDuration(draftDuration,draftStart) }}</span><span v-if="draftStart!==null&&draftEnd!==null&&draftEnd<=draftStart" class="invalid-range">{{ ui.workbench.终点需要晚于起点 }}</span></div>
           <div class="selection-controls" :class="{'recording-time-controls':positionMode==='recording'}">
               <div class="position-mode" role="group" :aria-label="ui.workbench.定位方式" @keydown.stop><button type="button" :aria-pressed="positionMode==='video'" :disabled="!selected" @click="setPositionMode('video')">{{ ui.workbench.视频时间 }}</button><button type="button" :aria-pressed="positionMode==='recording'" :disabled="!canUseRecordingTime" :title="canUseRecordingTime?ui.workbench.按录制日期和时刻定位:ui.workbench.这份素材没有可靠的开录时间" @click="setPositionMode('recording')">{{ ui.workbench.录制时间 }}</button></div>
-              <label v-if="positionMode==='video'">{{ ui.common.起点 }}<input :value="startMarked?startText:''" :placeholder="ui.common.起点" @input="startText=$event.target.value;startMarked=true" @change="commitMark('start')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.选段起点" :disabled="!selectionReady"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置起点" :title="ui.workbench.设置起点+'（'+ui.workbench.快捷键I+'）'" @click="setMark('start')"><span aria-hidden="true">{{ ui.workbench.快捷键I }}</span></button></label>
-              <label v-else>{{ ui.common.起点 }}<input :value="startMarked?startDateText:''" :placeholder="ui.common.起点" type="datetime-local" step="0.001" :min="clockBounds?toRecordingInput(clockBounds.min):undefined" :max="clockBounds?toRecordingInput(clockBounds.max):undefined" @input="startDateText=$event.target.value;startMarked=true" @change="commitMark('start')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.起点录制时间" :aria-invalid="startMarked&&draftStart===null" :disabled="!canUseRecordingTime"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置起点" :title="ui.workbench.设置起点+'（'+ui.workbench.快捷键I+'）'" @click="setMark('start')"><span aria-hidden="true">{{ ui.workbench.快捷键I }}</span></button></label>
-            <label v-if="positionMode==='video'">{{ ui.common.终点 }}<input :value="endMarked?endText:''" :placeholder="ui.common.终点" @input="endText=$event.target.value;endMarked=true" @change="commitMark('end')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.选段终点" :disabled="!selectionReady"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置终点" :title="ui.workbench.设置终点+'（'+ui.workbench.快捷键O+'）'" @click="setMark('end')"><span aria-hidden="true">{{ ui.workbench.快捷键O }}</span></button></label>
-            <label v-else>{{ ui.common.终点 }}<input :value="endMarked?endDateText:''" :placeholder="ui.common.终点" type="datetime-local" step="0.001" :min="clockBounds?toRecordingInput(clockBounds.min):undefined" :max="clockBounds?toRecordingInput(clockBounds.max):undefined" @input="endDateText=$event.target.value;endMarked=true" @change="commitMark('end')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.终点录制时间" :aria-invalid="endMarked&&draftEnd===null" :disabled="!canUseRecordingTime"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置终点" :title="ui.workbench.设置终点+'（'+ui.workbench.快捷键O+'）'" @click="setMark('end')"><span aria-hidden="true">{{ ui.workbench.快捷键O }}</span></button></label>
-            <div class="selection-actions"><button class="button" :class="selectedRanges.length?'accent':'primary'" :disabled="!canPreview||saving||!!markerError" @click="addRange"><Plus :size="16"/>{{ ui.workbench.添加选段 }}</button><button class="button export-selected" :class="selectedRanges.length?'primary':'accent'" :disabled="!selectedRanges.length||saving||!selected" @click="openExport"><Download :size="17"/>{{ ui.workbench.导出选段 }}<span v-if="selectedRanges.length">（{{ selectedRanges.length }}）</span></button></div>
+              <label v-if="positionMode==='video'">{{ ui.common.起点 }}<input :value="startMarked?startText:''" :placeholder="ui.common.起点" @input="inputMark('start',$event.target.value)" @change="commitMark('start')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.选段起点" :disabled="!selectionReady"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置起点" :title="ui.workbench.设置起点+'（'+ui.workbench.快捷键I+'）'" @click="setMark('start')"><span aria-hidden="true">{{ ui.workbench.快捷键I }}</span></button></label>
+              <label v-else>{{ ui.common.起点 }}<input :value="startMarked?startDateText:''" :placeholder="ui.common.起点" type="datetime-local" step="1" :min="clockBounds?toRecordingInput(clockBounds.min,false):undefined" :max="clockBounds?toRecordingInput(clockBounds.max,false):undefined" @input="inputMark('start',$event.target.value)" @change="commitMark('start')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.起点录制时间" :aria-invalid="startMarked&&draftStart===null" :disabled="!canUseRecordingTime"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置起点" :title="ui.workbench.设置起点+'（'+ui.workbench.快捷键I+'）'" @click="setMark('start')"><span aria-hidden="true">{{ ui.workbench.快捷键I }}</span></button></label>
+            <label v-if="positionMode==='video'">{{ ui.common.终点 }}<input :value="endMarked?endText:''" :placeholder="ui.common.终点" @input="inputMark('end',$event.target.value)" @change="commitMark('end')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.选段终点" :disabled="!selectionReady"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置终点" :title="ui.workbench.设置终点+'（'+ui.workbench.快捷键O+'）'" @click="setMark('end')"><span aria-hidden="true">{{ ui.workbench.快捷键O }}</span></button></label>
+            <label v-else>{{ ui.common.终点 }}<input :value="endMarked?endDateText:''" :placeholder="ui.common.终点" type="datetime-local" step="1" :min="clockBounds?toRecordingInput(clockBounds.min,false):undefined" :max="clockBounds?toRecordingInput(clockBounds.max,false):undefined" @input="inputMark('end',$event.target.value)" @change="commitMark('end')" @keydown.enter.prevent="$event.target.blur()" :aria-label="ui.workbench.终点录制时间" :aria-invalid="endMarked&&draftEnd===null" :disabled="!canUseRecordingTime"/><button type="button" class="icon-button mark-button" :disabled="!canPreview" :aria-label="ui.workbench.设置终点" :title="ui.workbench.设置终点+'（'+ui.workbench.快捷键O+'）'" @click="setMark('end')"><span aria-hidden="true">{{ ui.workbench.快捷键O }}</span></button></label>
+            <div class="selection-actions"><button class="button" :class="selectedRanges.length?'accent':'primary'" :disabled="!canPreview||saving||draftDuration===null" @click="addRange"><Plus :size="16"/>{{ ui.workbench.添加选段 }}</button><button class="button export-selected" :class="selectedRanges.length?'primary':'accent'" :disabled="!selectedRanges.length||saving||!selected" @click="openExport"><Download :size="17"/>{{ ui.workbench.导出选段 }}<span v-if="selectedRanges.length">（{{ selectedRanges.length }}）</span></button></div>
           </div>
           <p v-if="markerError" class="position-error" role="status">{{ markerError }}</p>
         </section>
-        <div class="bottom-panels" :class="{'has-jobs':myJobs.length}" :data-tab="bottomTab"><div v-if="myJobs.length" class="bottom-switch" role="tablist" :aria-label="ui.workbench.选段与导出"><button type="button" role="tab" :aria-selected="bottomTab==='clips'" @click="bottomTab='clips'">{{ ui.workbench.选段 }} <span>({{ edit.ranges.length }})</span></button><button type="button" role="tab" :aria-selected="bottomTab==='jobs'" @click="bottomTab='jobs'">{{ ui.workbench.导出 }} <span>({{ myJobs.length }})</span></button></div><section class="clips-panel"><h2><Scissors :size="16"/>{{ ui.workbench.待导出选段 }} <span class="panel-count">({{ edit.ranges.length }})</span><small v-if="edit.ranges.length">{{ ui.workbench.已选 }} {{ selectedRanges.length }}/{{ edit.ranges.length }} · {{ format(rangeDuration) }}</small></h2><div v-if="edit.ranges.length" class="clip-selection-toolbar"><label><input type="checkbox" :aria-label="ui.workbench.全选选段" :checked="allRangesSelected" :indeterminate="selectedRanges.length>0&&!allRangesSelected" :disabled="saving" @change="selectAllRanges($event.target.checked)"/>{{ ui.workbench.全选 }}</label></div><div v-if="!edit.ranges.length" class="panel-empty">{{ ui.workbench.暂无选段 }}</div><div class="clip-list"><div v-for="(range,index) in edit.ranges" :key="index" class="clip-row" :class="{unselected:range.selected===false}"><input class="clip-checkbox" type="checkbox" :aria-label="ui.workbench.选择第+(index+1)+ui.workbench.个选段" :checked="range.selected!==false" :disabled="saving" @change="selectRange(index,$event.target.checked)"/><button class="clip-time" @click="playFrom(range.start,true)">{{ format(range.start) }} <span>→</span> {{ format(range.end) }}</button><div><button class="icon-button" :aria-label="ui.workbench.上移选段" :disabled="index===0||saving" @click="moveRange(index,-1)"><ChevronUp :size="15"/></button><button class="icon-button" :aria-label="ui.workbench.下移选段" :disabled="index===edit.ranges.length-1||saving" @click="moveRange(index,1)"><ChevronDown :size="15"/></button><button class="icon-button" :aria-label="ui.workbench.移除选段" :disabled="saving" @click="removeRange(index)"><X :size="16"/></button></div></div></div></section>
+        <div class="bottom-panels" :class="{'has-jobs':myJobs.length}" :data-tab="bottomTab"><div v-if="myJobs.length" class="bottom-switch" role="tablist" :aria-label="ui.workbench.选段与导出"><button type="button" role="tab" :aria-selected="bottomTab==='clips'" @click="bottomTab='clips'">{{ ui.workbench.选段 }} <span>({{ edit.ranges.length }})</span></button><button type="button" role="tab" :aria-selected="bottomTab==='jobs'" @click="bottomTab='jobs'">{{ ui.workbench.导出 }} <span>({{ myJobs.length }})</span></button></div><section class="clips-panel"><h2><Scissors :size="16"/>{{ ui.workbench.待导出选段 }} <span class="panel-count">({{ edit.ranges.length }})</span><small v-if="edit.ranges.length">{{ ui.workbench.已选 }} {{ selectedRanges.length }}/{{ edit.ranges.length }} · {{ formatClipDuration(rangeDuration,selectedRanges[0]?.start??0) }}</small></h2><div v-if="edit.ranges.length" class="clip-selection-toolbar"><label><input type="checkbox" :aria-label="ui.workbench.全选选段" :checked="allRangesSelected" :indeterminate="selectedRanges.length>0&&!allRangesSelected" :disabled="saving" @change="selectAllRanges($event.target.checked)"/>{{ ui.workbench.全选 }}</label></div><div v-if="!edit.ranges.length" class="panel-empty">{{ ui.workbench.暂无选段 }}</div><div class="clip-list"><div v-for="(range,index) in edit.ranges" :key="index" class="clip-row" :class="{unselected:range.selected===false}"><input class="clip-checkbox" type="checkbox" :aria-label="ui.workbench.选择第+(index+1)+ui.workbench.个选段" :checked="range.selected!==false" :disabled="saving" @change="selectRange(index,$event.target.checked)"/><button class="clip-time" @click="playFrom(range.start,true)">{{ formatPosition(range.start) }} <span>→</span> {{ formatPosition(range.end) }}</button><div><button class="icon-button" :aria-label="ui.workbench.上移选段" :disabled="index===0||saving" @click="moveRange(index,-1)"><ChevronUp :size="15"/></button><button class="icon-button" :aria-label="ui.workbench.下移选段" :disabled="index===edit.ranges.length-1||saving" @click="moveRange(index,1)"><ChevronDown :size="15"/></button><button class="icon-button" :aria-label="ui.workbench.移除选段" :disabled="saving" @click="removeRange(index)"><X :size="16"/></button></div></div></div></section>
           <section v-if="myJobs.length" class="jobs-panel" tabindex="-1"><h2><Download :size="16"/>{{ ui.workbench.导出任务 }} <span class="panel-count">({{ myJobs.length }})</span></h2><div v-if="!myJobs.length" class="panel-empty">{{ ui.workbench.暂无导出任务 }}</div>
             <div v-for="job in myJobs" :key="job.id" class="job-row" tabindex="0" role="group" aria-haspopup="menu" :aria-label="ui.workbench.导出任务导出任务+jobDescription(job)" :data-job-id="job.id" :title="ui.workbench.右键管理导出任务" @contextmenu.prevent.stop="showJobContext($event,job)" @keydown.shift.f10.prevent.stop="showJobContext($event,job)" @keydown.context-menu.prevent.stop="showJobContext($event,job)">
               <div><LoaderCircle v-if="['running','queued','finalizing','saving','cancelling'].includes(job.status)" class="spin job-ok" :size="15"/><Check v-else-if="job.status==='done'" class="job-ok" :size="15"/><AlertCircle v-else class="job-bad" :size="15"/><span><template v-if="job.clipCount>1">{{ ui.workbench.选段 }} {{ job.clipIndex }}/{{ job.clipCount }} · </template>{{ jobStatusText(job) }}</span><small>{{ date(job.created) }}</small></div>
@@ -775,18 +951,103 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
         </section>
         </div>
       </main>
-      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel"><div class="danmaku-heading"><h2>{{ showGifts?ui.workbench.弹幕与礼物:ui.workbench.弹幕 }}</h2><button class="icon-button" :title="ui.workbench.撤销最近一次排除" :aria-label="ui.workbench.撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button></div><div class="danmaku-preview-options"><label class="checkbox"><input v-model="showOverlay" type="checkbox"/>{{ ui.workbench.弹幕预览 }}</label><label class="checkbox"><input v-model="showGifts" type="checkbox" @change="changeGiftPreview"/>{{ ui.common.展示礼物 }}</label></div><div class="search-input"><Search :size="17"/><input v-model="query" :aria-label="ui.workbench.搜索弹幕" :placeholder="ui.workbench.搜索弹幕或发送者" @input="searchChanged"/></div><div class="danmaku-options"><div class="message-follow-control"><label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>{{ ui.workbench.跟随播放位置 }}</label><button type="button" class="icon-button message-follow-resume" :style="{visibility:followMessages&&messageFollowPaused?'visible':'hidden'}" :disabled="!followMessages||!messageFollowPaused" :aria-label="ui.workbench.恢复跟随" :title="ui.workbench.恢复跟随" @click="resumeMessageFollow"><RotateCcw :size="14"/></button></div><label v-if="showGifts"><input v-model="onlyGifts" type="checkbox" @change="changeOnlyGifts"/>{{ ui.workbench.仅显示礼物 }}</label></div><div v-if="senderFilter" class="sender-filter"><span>{{ ui.workbench.只看 }}{{ senderFilter.name }}</span><button type="button" class="text-button" :aria-label="ui.workbench.清除发送者筛选" @click="clearSenderFilter">{{ ui.workbench.清除筛选 }}</button><small v-if="senderWarning" role="status">{{ senderWarning }}</small></div><div class="message-browser"><VirtualMessageList ref="messageList" :rows="visibleMessages" :automatic="followMessages&&!messageFollowPaused" :busy="messageLoading" :has-before="messagePage.hasBefore" :has-after="messagePage.hasAfter||!followMessages&&['recording','waiting'].includes(activeSession?.status)" :bounded="followMessages" @time="syncMessageBrowseTime" @manual="manualMessageScroll" @page="loadMessagePage"><template #empty><div class="danmaku-empty"><Radio :size="28"/><strong>{{ query?ui.workbench.没有匹配记录:showGifts&&onlyGifts?ui.workbench.暂无礼物:ui.workbench.暂无弹幕 }}</strong></div></template><template #default="{message}"><div :id="'danmaku-'+message.id" class="danmaku-row" :class="{excluded:excluded.has(message.id),current:Math.abs(message.time-position)<1,highlighted:highlighted.has(message.id),lottery:message.type==='lottery'}" @contextmenu.prevent.stop="showMessageContext($event,message)" @keydown.shift.f10.prevent.stop="showMessageContext($event,message)" @keydown.context-menu.prevent.stop="showMessageContext($event,message)"><button class="message-content" @click="message.type==='lottery'?openLottery(message):playFrom(message.time,false)"><span class="message-meta"><time>{{ format(message.time) }}</time><span>{{ message.user }}</span></span><span class="message-text"><span v-if="highlighted.has(message.id)" class="highlight-mark" :title="ui.workbench.已突出显示">✦ </span><Trophy v-if="message.type==='lottery'" class="lottery-icon" :size="19"/><GiftIcon v-else-if="message.type!=='d'" :gift="message"/>{{ message.text }}</span><span v-if="message.type==='lottery'" class="lottery-summary">{{ lotteryCountLabel(message) }} {{ ui.workbench.仅记录不导出 }}</span></button><button v-if="message.type==='d'||message.type==='lottery'" type="button" class="icon-button message-more" :aria-label="(message.type==='lottery'?ui.workbench.天选操作:ui.workbench.弹幕操作)+message.text" :title="ui.workbench.弹幕操作也可右键" :aria-haspopup="'menu'" @click="showMessageContext($event,message)">⋯</button><button v-if="message.type!=='lottery'" class="icon-button message-exclude" :aria-label="ui.workbench.弹幕操作标签(excluded.has(message.id)?ui.workbench.恢复:ui.workbench.删除, message.text)" :title="excluded.has(message.id)?ui.workbench.恢复到剪辑:ui.workbench.从剪辑中排除保留原始弹幕" :disabled="saving" @click="toggleMessage(message)"><RotateCcw v-if="excluded.has(message.id)" :size="15"/><Trash2 v-else :size="15"/></button></div></template></VirtualMessageList><MessageTimeNavigator :from="messageRange.from" :to="messageRange.to" :time="messageBrowseTime" :disabled="!selectionReady||duration<=0" @start="startMessageNavigation" @seek="jumpMessages"/></div><div v-if="edit.excluded.length" class="danmaku-footer">{{ ui.workbench.已排除 }} {{ edit.excluded.length }} {{ ui.common.条 }}</div></aside>
+      <aside id="danmaku-panel" v-show="danmakuVisible" class="danmaku-panel">
+        <div class="message-controls">
+          <div class="message-searchbar">
+            <div class="search-input">
+              <Search :size="17" aria-hidden="true"/>
+              <input id="message-search" v-model="query" :aria-label="ui.workbench.搜索弹幕" :placeholder="ui.workbench.搜索弹幕或发送者" @input="searchChanged" @keydown.esc.stop.prevent="clearMessageSearch"/>
+              <button v-if="query" type="button" class="icon-button" :aria-label="ui.workbench.清除搜索" @click="clearMessageSearch"><X :size="15"/></button>
+            </div>
+            <button type="button" class="icon-button message-undo" :title="ui.workbench.撤销最近一次排除" :aria-label="ui.workbench.撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button>
+          </div>
+          <div v-if="searching" class="message-search-scope" role="status">
+            <h2>{{ ui.workbench.全场搜索结果 }}</h2>
+            <small>{{ ui.workbench.全场搜索范围 }}</small>
+          </div>
+          <template v-else>
+            <div class="message-modes" role="group" :aria-label="ui.workbench.记录类型" @keydown.stop>
+              <button type="button" :aria-pressed="!showGiftList" @click="changeGiftList(false)">{{ ui.workbench.弹幕 }}</button>
+              <button type="button" :aria-pressed="showGiftList" @click="changeGiftList(true)">{{ ui.gifts.礼物 }}</button>
+            </div>
+            <div class="message-follow-control">
+              <label><input v-model="followMessages" type="checkbox" @change="searchChanged"/>{{ ui.workbench.跟随播放位置 }}</label>
+              <div v-if="followMessages&&messageFollowPaused" class="message-follow-paused">
+                <span role="status">{{ ui.workbench.正在浏览历史 }}</span>
+                <button type="button" class="text-button" @click="resumeMessageFollow">{{ ui.workbench.回到播放位置 }}</button>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div v-if="activeSenderFilter" class="sender-filter">
+          <span>{{ ui.workbench.只看 }}{{ activeSenderFilter.name }}</span><button type="button" class="text-button" :aria-label="ui.workbench.清除发送者筛选" @click="clearSenderFilter">{{ ui.workbench.清除筛选 }}</button>
+          <small v-if="senderWarning" role="status">{{ senderWarning }}</small>
+        </div>
+        <div class="message-browser" :class="{'message-searching':searching}">
+          <VirtualMessageList ref="messageList" :rows="visibleMessages" :automatic="followMessageList&&!messageFollowPaused" :busy="messageLoading" :has-before="messagePage.hasBefore" :has-after="messagePage.hasAfter||!followMessageList&&['recording','waiting'].includes(activeSession?.status)" :bounded="followMessageList" @time="syncMessageBrowseTime" @manual="manualMessageScroll" @page="loadMessagePage">
+            <template #empty>
+              <div v-if="!messageLoading" class="danmaku-empty"><Radio :size="28"/><strong>{{ searching?ui.workbench.没有匹配记录:showGiftList?ui.workbench.暂无礼物:ui.workbench.暂无弹幕 }}</strong></div>
+            </template>
+            <template #default="{message}">
+              <div :id="'danmaku-'+message.id" class="danmaku-row" :class="{
+                'message-chat':message.type==='d', 'message-gift':message.type==='gift'||message.type==='guard',
+                'super-chat':message.type==='sc', lottery:message.type==='lottery',
+                excluded:excluded.has(message.id), highlighted:highlighted.has(message.id),
+                current:isCurrentMessage(message)
+              }" @contextmenu.prevent.stop="showMessageContext($event,message)" @keydown.shift.f10.prevent.stop="showMessageContext($event,message)" @keydown.context-menu.prevent.stop="showMessageContext($event,message)">
+                <div class="message-main">
+                  <button type="button" class="message-content" @click="playFrom(message.time,false)" @keydown.space.stop>
+                    <span class="message-meta">
+                      <time>{{ format(message.time) }}</time>
+                      <span><MessageMatch :text="message.user" :pattern="searchPattern"/></span>
+                    </span>
+                    <span v-if="message.type==='d'" class="message-text">
+                      <span v-if="highlighted.has(message.id)" class="highlight-mark" :title="ui.workbench.已突出显示">✦ </span><MessageMatch :text="message.text" :pattern="searchPattern"/>
+                    </span>
+                    <template v-else-if="message.type==='lottery'">
+                      <span class="message-event-line">
+                        <Trophy class="lottery-icon" :size="17" aria-hidden="true"/>
+                        <span class="message-event-name"><MessageMatch :text="message.text" :pattern="searchPattern"/></span>
+                      </span>
+                    </template>
+                    <template v-else-if="message.type==='sc'">
+                      <span class="message-event-line">
+                        <span class="message-type-badge"><MessageMatch :text="message.name" :pattern="searchPattern"/></span>
+                        <span class="message-event-price">{{ giftPrice(message) }}</span>
+                      </span>
+                      <span class="message-text super-chat-body"><MessageMatch :text="message.text" :pattern="searchPattern"/></span>
+                    </template>
+                    <span v-else class="message-event-line">
+                      <GiftIcon :gift="message"/>
+                      <span class="message-event-name">{{ ui.workbench.送出 }} <MessageMatch :text="message.name" :pattern="searchPattern"/> × {{ message.count }}</span>
+                      <span class="message-event-price">{{ giftPrice(message) }}</span>
+                    </span>
+                  </button>
+                  <div v-if="message.type==='lottery'" class="lottery-row-footer">
+                    <span :title="ui.workbench.仅记录不导出">{{ lotteryCountLabel(message) }}</span>
+                    <button type="button" class="text-button lottery-open" @click="openLottery(message)" @keydown.space.stop>{{ ui.workbench.查看中奖名单 }}</button>
+                  </div>
+                </div>
+                <button v-if="excluded.has(message.id)&&message.type!=='lottery'" type="button" class="text-button message-restore" :aria-label="ui.workbench.弹幕操作标签(ui.workbench.恢复, message.text)" :title="ui.workbench.恢复到剪辑" :disabled="saving" @click="toggleMessage(message)" @keydown.space.stop>{{ ui.workbench.恢复 }}</button>
+                <button v-else type="button" class="icon-button message-more" :aria-label="ui.workbench.记录操作+message.text" :title="ui.workbench.记录操作" aria-haspopup="menu" @click="showMessageContext($event,message)" @keydown.space.stop><MoreHorizontal :size="16"/></button>
+              </div>
+            </template>
+          </VirtualMessageList>
+          <MessageTimeNavigator :key="selected" :from="messageRange.from" :to="messageRange.to" :time="messageBrowseTime" :disabled="!selectionReady||duration<=0" @start="startMessageNavigation" @preview="previewMessageNavigation" @seek="jumpMessages" @cancel="stopMessageDrag"/>
+        </div>
+        <div v-if="edit.excluded.length" class="danmaku-footer">{{ ui.workbench.已排除 }} {{ edit.excluded.length }} {{ ui.common.条 }}</div>
+      </aside>
     </div>
     <footer class="statusbar"><span v-if="saving||selected">{{ saving?ui.workbench.正在保存剪辑:ui.workbench.剪辑自动保存 }}</span></footer>
     <DismissibleNotice v-if="notice" :key="noticeSequence" class="toast" @dismiss="notice=''" :class="noticeKind" role="status"><Check v-if="noticeKind==='success'" :size="18"/><AlertCircle v-else :size="18"/><span>{{ notice }}</span></DismissibleNotice>
-    <div v-if="messageMenu" class="session-context message-context" role="menu" :aria-label="messageMenu.message.type==='lottery'?ui.workbench.天选操作天选操作:ui.workbench.弹幕操作弹幕操作" :style="{left:messageMenu.x+'px',top:messageMenu.y+'px'}" @pointerdown.stop @keydown.up.prevent="messageMenuKey" @keydown.down.prevent="messageMenuKey"><template v-if="messageMenu.message.type==='lottery'"><button role="menuitem" @click="openLottery(messageMenu.message)"><Trophy :size="16"/>{{ ui.workbench.查看中奖名单 }}</button><button role="menuitem" @click="openLottery(messageMenu.message,true)"><Pencil :size="16"/>{{ ui.workbench.编辑奖品备注 }}</button></template><template v-else><button role="menuitem" :disabled="!senderFilterFor(messageMenu.message)" :title="senderFilterFor(messageMenu.message)?'':ui.workbench.这条弹幕没有可区分的发送者信息" @click="filterSender(messageMenu.message)"><Search :size="16"/>{{ ui.workbench.只看此人弹幕 }}</button><button role="menuitem" :disabled="saving" @click="openMessageEditor(messageMenu.message)"><Pencil :size="16"/>{{ ui.workbench.编辑文本 }}</button><button role="menuitem" :disabled="saving" @click="toggleHighlight(messageMenu.message)"><span aria-hidden="true">✦</span>{{ highlighted.has(messageMenu.message.id)?ui.workbench.取消突出显示:ui.workbench.突出显示此条弹幕 }}</button><button role="menuitem" :disabled="saving" @click="toggleMessage(messageMenu.message);closeContext()"><Trash2 :size="16"/>{{ excluded.has(messageMenu.message.id)?ui.workbench.恢复此条弹幕:ui.workbench.从剪辑中排除此条 }}</button></template></div>
+    <div v-if="messageMenu" class="session-context message-context" role="menu" :aria-label="ui.workbench.记录操作" :style="{left:messageMenu.x+'px',top:messageMenu.y+'px'}" @pointerdown.stop @keydown.up.prevent="messageMenuKey" @keydown.down.prevent="messageMenuKey"><template v-if="messageMenu.message.type==='lottery'"><button role="menuitem" @click="openLottery(messageMenu.message)"><Trophy :size="16"/>{{ ui.workbench.查看中奖名单 }}</button><button role="menuitem" @click="openLottery(messageMenu.message,true)"><Pencil :size="16"/>{{ ui.workbench.编辑奖品备注 }}</button></template><template v-else><template v-if="messageMenu.message.type==='d'"><button role="menuitem" :disabled="!senderFilterFor(messageMenu.message)" :title="senderFilterFor(messageMenu.message)?'':ui.workbench.这条弹幕没有可区分的发送者信息" @click="filterSender(messageMenu.message)"><Search :size="16"/>{{ ui.workbench.只看此人弹幕 }}</button><button role="menuitem" :disabled="saving" @click="openMessageEditor(messageMenu.message)"><Pencil :size="16"/>{{ ui.workbench.编辑文本 }}</button><button role="menuitem" :disabled="saving" @click="toggleHighlight(messageMenu.message)"><span aria-hidden="true">✦</span>{{ highlighted.has(messageMenu.message.id)?ui.workbench.取消突出显示:ui.workbench.突出显示此条弹幕 }}</button></template><button role="menuitem" :disabled="saving" @click="toggleMessage(messageMenu.message);closeContext()"><Trash2 :size="16"/>{{ excluded.has(messageMenu.message.id)?ui.workbench.恢复此条弹幕:ui.workbench.从剪辑中排除此条 }}</button></template></div>
     <div v-if="sessionMenu" class="session-context" role="menu" :aria-label="ui.workbench.素材操作" :style="{left:sessionMenu.x+'px',top:sessionMenu.y+'px'}" @pointerdown.stop><button role="menuitem" :disabled="!!fullExportBlock(sessionMenu.session)" :title="fullExportBlock(sessionMenu.session)" @click="openFullExport(sessionMenu.session)"><Download :size="16"/>{{ ui.workbench.导出完整素材 }}</button><p v-if="fullExportBlock(sessionMenu.session)" class="context-hint">{{ fullExportBlock(sessionMenu.session) }}</p><button role="menuitem" :disabled="!!preparationActionBlock(sessionMenu.session)" :title="preparationActionBlock(sessionMenu.session)" @click="actPreparation(sessionMenu.session)"><Pause v-if="preparationAction(preparationFor(sessionMenu.session.id))==='pause'" :size="16"/><Check v-else-if="preparationFor(sessionMenu.session.id)?.status==='ready'" :size="16"/><Play v-else :size="16"/>{{ preparationActionLabel(preparationFor(sessionMenu.session.id),true) }}</button><p v-if="!preparationEnabled&&preparationAction(preparationFor(sessionMenu.session.id))!=='pause'" class="context-hint">{{ ui.workbench.请在设置中开启后台预处理 }}</p><button role="menuitem" class="context-danger" @click="requestDelete(sessionMenu.session)"><Trash2 :size="16"/>{{ ui.workbench.删除素材 }}</button></div>
     <div v-if="jobMenu" class="session-context job-context" role="menu" :aria-label="ui.workbench.导出任务操作" tabindex="-1" :style="{left:jobMenu.x+'px',top:jobMenu.y+'px'}" @pointerdown.stop>
       <button v-if="['queued','running','finalizing','cancelling','saving'].includes(jobMenuTarget?.status)" role="menuitem" :disabled="!!jobCancellationBlock(jobMenuTarget)" :title="jobCancellationBlock(jobMenuTarget)" @click="cancelJob(jobMenuTarget)"><X :size="16"/>{{ ui.workbench.取消导出 }}</button>
       <button role="menuitem" class="context-danger" :disabled="!!jobRemovalBlock(jobMenuTarget)" @click="requestJobDelete(jobMenuTarget)"><Trash2 :size="16"/>{{ ui.workbench.删除导出任务删除导出任务 }}</button>
       <p v-if="jobRemovalBlock(jobMenuTarget)" class="context-hint">{{ jobRemovalBlock(jobMenuTarget) }}</p>
     </div>
-    <CacheWarning v-if="cacheWarningVisible" :usage="formatBytes(state.preparation.cache.usedBytes)" :threshold="state.preparation.cache.warningGiB" :busy="cacheWarningBusy" :error="cacheWarningError" @acknowledge="acknowledgeCacheWarning"/>
+    <CacheWarning v-if="cacheWarningVisible" :usage="formatBytes(state.preparation.cache.usedBytes,1000)" :threshold="cacheWarningDisplayGB" :busy="cacheWarningBusy" :error="cacheWarningError" @acknowledge="acknowledgeCacheWarning"/>
     <UpdatePrompt :state="state.updates" :blocked="!!modal||!!sessionMenu||!!jobMenu||cacheWarningVisible" @changed="state.updates=$event" @started="tell($event,'success')" @manage="openUpdateSettings"/>
     <div v-if="modal" class="modal-backdrop" @pointerdown.capture="modalBackdropClick.pointerDown" @pointermove.capture="modalBackdropClick.pointerMove" @pointerup.capture="modalBackdropClick.pointerUp" @pointercancel.capture="modalBackdropClick.reset" @click.self="dismissModalFromBackdrop"><section class="modal" :class="{'danmaku-style-modal':modal==='danmaku-style','settings-modal':modal==='settings'}" :role="confirmation?'alertdialog':'dialog'" aria-modal="true" :aria-label="modalTitle"><button class="icon-button close-modal" :aria-label="ui.workbench.关闭窗口" :disabled="modalBusy" @click="closeModal"><X :size="20"/></button>
       <template v-if="confirmation"><h2><Trash2 :size="22"/>{{ modalTitle }}</h2>
@@ -819,53 +1080,54 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
       <template v-else-if="modal==='cookie-management'"><h2><Settings :size="23"/>{{ ui.common.Cookie管理 }}</h2><PlatformCredentials @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>{{ ui.workbench.设置 }}</h2>
         <div class="settings-content">
-        <section class="settings-group"><h3>常规</h3>
-        <fieldset v-if="isDesktop" class="export-versions" :aria-label="ui.workbench.关闭窗口时"><legend>{{ ui.workbench.关闭窗口时 }}</legend><label v-for="choice in [{value:'ask',label:ui.workbench.每次询问},{value:'exit',label:ui.workbench.退出},{value:'background',label:ui.workbench.后台运行}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
-        <PowerSettings v-if="isMacDesktop"/>
-        <UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
-        </section>
-        <section class="settings-group"><h3>弹幕与录制样式</h3>
-        <section class="danmaku-style-entry"><div><strong>{{ ui.workbench.弹幕样式 }}</strong><p class="settings-style-summary"><span>{{ state.danmakuFont?.family||ui.common.默认字体 }} · {{ ui.workbench.字号 }} {{ state.danmakuStyle?.size??0.6 }}</span><span>{{ ui.workbench.不透明度 }} {{ state.danmakuStyle?.opacity??100 }}% · {{ ui.workbench.速度 }} {{ (state.danmakuStyle?.speed??1).toFixed(1) }} {{ ui.workbench.倍 }} · {{ state.danmakuStyle?.fps??60 }} {{ ui.workbench.帧 }}</span></p></div><button class="button open-danmaku-style" :disabled="modalBusy" @click="modal='danmaku-style'"><Settings :size="16"/>{{ ui.workbench.调整弹幕样式 }}</button></section>
-        <section class="danmaku-style-entry"><div><strong>{{ ui.common.录制样式 }}</strong><p class="settings-style-summary"><span>{{ ui.workbench.独立摄像头 }}{{ recordingStyleSummary }}</span><span>{{ ui.workbench.时间戳 }}{{ state.previewTimestamp?timestampStyleSummary+' · '+timestampPositionSummary:ui.common.关闭 }}</span></p></div><button class="button open-recording-style" :disabled="modalBusy" @click="modal='recording-style'"><Settings :size="16"/>{{ ui.workbench.调整录制样式 }}</button></section>
-        </section>
-        <section class="settings-group"><h3>导出与存储</h3>
-        <div class="directory-settings"><label class="field-label">{{ ui.workbench.默认导出根目录 }}<div class="path-picker"><input v-model="exportDirectory" :aria-label="ui.workbench.默认导出文件夹" :placeholder="ui.workbench.填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><p class="muted">{{ ui.workbench.导出目录说明 }}</p><div class="export-destinations"><span>{{ ui.workbench.完整素材 }}</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>{{ ui.workbench.导出片段 }}</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>{{ ui.workbench.打开文件目录 }}</button></div></div>
-        <div v-if="state.recovery?.safeMode" class="setting-info"><span>{{ ui.workbench.安全启动前的旧录像已保留 }}</span><code>{{ state.paths?.retained }}</code><button class="button" @click="openFolder({kind:'retained'})"><FolderOpen :size="16"/>{{ ui.workbench.查看旧录像 }}</button><p class="muted">{{ ui.workbench.旧素材索引异常 }}</p></div>
-        <div class="setting-info"><span>{{ ui.workbench.完整原始录像与弹幕 }}</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">{{ ui.workbench.打开原始素材文件夹 }}</button></div>
-        <section v-if="pendingCleanup.length" class="cleanup-settings" :aria-label="ui.workbench.素材清理进度"><strong>{{ ui.workbench.素材清理进度素材清理进度 }}{{ pendingCleanup.length }}）</strong><p class="muted">{{ ui.workbench.文件占用释放后自动重试 }}</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p role="status">{{ cleanupLabel(item) }}</p><small v-if="item.task?.detail">{{ item.task.detail }}</small><p v-if="item.purge_error&&!item.task" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy||!!item.task" @click="requestDelete(item)">{{ item.task?ui.workbench.清理中:ui.workbench.重试清理 }}</button></div></section>
-        </section>
-        <section class="settings-group"><h3>高级</h3>
-        <section class="preparation-settings" :aria-label="ui.workbench.自动预处理设置">
-          <div class="preparation-option">
-          <label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>{{ ui.workbench.录制完成后自动预处理 }}<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label>
-          <p class="muted">{{ ui.workbench.预处理用途 }}</p>
-          </div>
-          <div class="preparation-option">
-          <label class="checkbox"><input type="checkbox" :checked="livePreparationEnabledDraft??livePreparationEnabled" :disabled="!preparationEnabled||preparationSettingsBusy||modalBusy" @change="setLivePreparationEnabled($event.target.checked)"/>{{ ui.workbench.录制时自动提前处理 }}</label>
-          <p class="muted">{{ ui.workbench.录制预处理说明 }}</p>
-          <p v-if="!preparationEnabled" class="muted">{{ ui.workbench.请先开启录制完成后的自动预处理 }}</p>
-          </div>
-          <div v-if="state.preparation?.cache" class="cache-settings">
-            <p>{{ ui.workbench.预处理缓存 }}{{ formatBytes(state.preparation.cache.usedBytes) }}<span v-if="state.preparation.cache.reservedBytes"> {{ ui.workbench.正在使用 }} {{ formatBytes(state.preparation.cache.reservedBytes) }}</span></p>
-            <label class="checkbox"><input type="checkbox" :checked="state.preparation.cache.warningEnabled" :disabled="preparationSettingsBusy" @change="updatePreparationSettings({cacheWarningEnabled:$event.target.checked})"/>{{ ui.cacheWarning.开关 }}</label>
-            <label>{{ ui.cacheWarning.阈值 }}<input type="number" min="1" max="1048576" step="1" :value="cacheWarningGiBDraft??state.preparation.cache.warningGiB" @input="cacheWarningGiBDraft=$event.target.value" :disabled="preparationSettingsBusy||!state.preparation.cache.warningEnabled" @change="updatePreparationSettings({cacheWarningGiB:Number($event.target.value)});cacheWarningGiBDraft=null"/></label>
-            <p class="muted">{{ ui.cacheWarning.设置说明 }}</p>
-            <div class="cache-path"><code>{{ state.preparation.cache.path }}</code></div>
-            <p v-if="state.preparation.cache.availableBytes!==undefined" class="muted">{{ ui.workbench.该位置可用 }} {{ formatBytes(state.preparation.cache.availableBytes) }}{{ ui.workbench.另预留 }} {{ formatBytes(state.preparation.cache.minFreeBytes) }} {{ ui.workbench.供录制使用 }}</p>
-            <button type="button" class="button" :disabled="preparationSettingsBusy" @click="clearPreparationCache">{{ ui.workbench.清理可重建缓存 }}</button><p class="muted">{{ ui.workbench.清理缓存影响 }}</p>
-          </div>
-          <p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p>
-        </section>
-        <div class="setting-info"><span>{{ ui.workbench.运行日志北京时间每天一份TXT }}</span><code>{{ state.paths?.logs }}</code><button class="button" @click="openFolder({kind:'logs'})"><FolderOpen :size="16"/>{{ ui.workbench.点击查看日志文件 }}</button><p class="muted">{{ ui.workbench.日志保留说明 }}</p><p v-if="state.diagnostics?.error" class="inline-warning">{{ ui.workbench.日志暂时无法保存 }}{{ state.diagnostics.error }}</p></div>
-        <section class="danmaku-style-entry cookie-management-entry"><strong>{{ ui.common.Cookie管理 }}</strong><button class="button open-cookie-management" :disabled="modalBusy" @click="modal='cookie-management'">{{ ui.workbench.管理Cookie }}</button></section>
-        </section>
-        <section class="settings-group about-settings" aria-labelledby="settings-about-title"><h3 id="settings-about-title" tabindex="-1">关于</h3>
-        <div class="about-credit"><p>{{ ui.workbench.软件作者瞌睡小菜包 }}</p><p>{{ ui.workbench.技术支持藤椒麦旋风 }}</p><p>{{ ui.workbench.菜包宇宙 }}<a href="https://www.caibao.media/" @click.prevent="openStudioPage">www.caibao.media</a></p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">{{ ui.workbench.联系我们 }}</a></p></div>
-        </section>
+          <SettingsGroup name="styles" title="弹幕与录制样式" v-model:open="expandedSettings.styles">
+            <section class="danmaku-style-entry"><div><strong>{{ ui.workbench.弹幕样式 }}</strong><p class="settings-style-summary"><span>{{ state.danmakuFont?.family||ui.common.默认字体 }} · {{ ui.workbench.字号 }} {{ normalizedDanmakuStyle(state.danmakuStyle).size.toFixed(1) }} {{ ui.workbench.倍 }}</span><span>{{ ui.workbench.不透明度 }} {{ state.danmakuStyle?.opacity??100 }}% · {{ ui.workbench.速度 }} {{ (state.danmakuStyle?.speed??1).toFixed(1) }} {{ ui.workbench.倍 }} · {{ state.danmakuStyle?.fps??60 }} {{ ui.workbench.帧 }}</span></p></div><button class="button open-danmaku-style" :disabled="modalBusy" @click="modal='danmaku-style'"><Settings :size="16"/>{{ ui.workbench.调整弹幕样式 }}</button></section>
+            <section class="danmaku-style-entry"><div><strong>{{ ui.common.录制样式 }}</strong><p class="settings-style-summary"><span>{{ ui.workbench.独立摄像头 }}{{ recordingStyleSummary }}</span><span>{{ ui.workbench.时间戳 }}{{ state.previewTimestamp?timestampStyleSummary+' · '+timestampPositionSummary:ui.common.关闭 }}</span></p></div><button class="button open-recording-style" :disabled="modalBusy" @click="modal='recording-style'"><Settings :size="16"/>{{ ui.workbench.调整录制样式 }}</button></section>
+          </SettingsGroup>
+          <SettingsGroup name="general" title="常规" v-model:open="expandedSettings.general">
+            <fieldset v-if="isDesktop" class="export-versions" :aria-label="ui.workbench.关闭窗口时"><legend>{{ ui.workbench.关闭窗口时 }}</legend><label v-for="choice in [{value:'ask',label:ui.workbench.每次询问},{value:'exit',label:ui.workbench.退出},{value:'background',label:ui.workbench.后台运行}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
+            <PowerSettings v-if="isMacDesktop"/>
+          </SettingsGroup>
+          <SettingsGroup name="storage" title="导出与存储" v-model:open="expandedSettings.storage">
+            <div class="directory-settings"><label class="field-label">{{ ui.workbench.默认导出根目录 }}<div class="path-picker"><input v-model="exportDirectory" :aria-label="ui.workbench.默认导出文件夹" :placeholder="ui.workbench.填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><p class="muted">{{ ui.workbench.导出目录说明 }}</p><div class="export-destinations"><span>{{ ui.workbench.完整素材 }}</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>{{ ui.workbench.导出片段 }}</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>{{ ui.workbench.打开文件目录 }}</button></div></div>
+            <div v-if="state.recovery?.safeMode" class="setting-info"><span>{{ ui.workbench.安全启动前的旧录像已保留 }}</span><code>{{ state.paths?.retained }}</code><button class="button" @click="openFolder({kind:'retained'})"><FolderOpen :size="16"/>{{ ui.workbench.查看旧录像 }}</button><p class="muted">{{ ui.workbench.旧素材索引异常 }}</p></div>
+            <div class="setting-info"><span>{{ ui.workbench.完整原始录像与弹幕 }}</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">{{ ui.workbench.打开原始素材文件夹 }}</button></div>
+            <section v-if="pendingCleanup.length" class="cleanup-settings" :aria-label="ui.workbench.素材清理进度"><strong>{{ ui.workbench.素材清理进度素材清理进度 }}{{ pendingCleanup.length }}）</strong><p class="muted">{{ ui.workbench.文件占用释放后自动重试 }}</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p role="status">{{ cleanupLabel(item) }}</p><small v-if="item.task?.detail">{{ item.task.detail }}</small><p v-if="item.purge_error&&!item.task" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy||!!item.task" @click="requestDelete(item)">{{ item.task?ui.workbench.清理中:ui.workbench.重试清理 }}</button></div></section>
+          </SettingsGroup>
+          <SettingsGroup name="advanced" title="高级" v-model:open="expandedSettings.advanced">
+            <section class="preparation-settings" :aria-label="ui.workbench.自动预处理设置">
+              <div class="preparation-option">
+              <label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>{{ ui.workbench.录制完成后自动预处理 }}<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label>
+              <p class="muted">{{ ui.workbench.预处理用途 }}</p>
+              </div>
+              <div class="preparation-option">
+              <label class="checkbox"><input type="checkbox" :checked="livePreparationEnabledDraft??livePreparationEnabled" :disabled="!preparationEnabled||preparationSettingsBusy||modalBusy" @change="setLivePreparationEnabled($event.target.checked)"/>{{ ui.workbench.录制时自动提前处理 }}</label>
+              <p class="muted">{{ ui.workbench.录制预处理说明 }}</p>
+              <p v-if="!preparationEnabled" class="muted">{{ ui.workbench.请先开启录制完成后的自动预处理 }}</p>
+              </div>
+              <div v-if="state.preparation?.cache" class="cache-settings">
+                <p>{{ ui.workbench.预处理缓存 }}{{ formatBytes(state.preparation.cache.usedBytes,1000) }}<span v-if="state.preparation.cache.reservedBytes"> {{ ui.workbench.正在使用 }} {{ formatBytes(state.preparation.cache.reservedBytes,1000) }}</span></p>
+                <label class="checkbox"><input type="checkbox" :checked="state.preparation.cache.warningEnabled" :disabled="preparationSettingsBusy" @change="updatePreparationSettings({cacheWarningEnabled:$event.target.checked})"/>{{ ui.cacheWarning.开关 }}</label>
+                <label>{{ ui.cacheWarning.阈值 }}<input type="number" min="1" :max="maxCacheWarningInputGB" step="1" :value="cacheWarningGBDraft??cacheWarningDisplayGB" @input="cacheWarningGBDraft=$event.target.value" :disabled="preparationSettingsBusy||!state.preparation.cache.warningEnabled" @change="saveCacheWarningGB($event.target)"/></label>
+                <p class="muted">{{ ui.cacheWarning.设置说明 }}</p>
+                <div class="cache-path"><code>{{ state.preparation.cache.path }}</code></div>
+                <p v-if="state.preparation.cache.availableBytes!==undefined" class="muted">{{ ui.workbench.该位置可用 }} {{ formatBytes(state.preparation.cache.availableBytes,1000) }}{{ ui.workbench.另预留 }} {{ formatBytes(state.preparation.cache.minFreeBytes,1000) }} {{ ui.workbench.供录制使用 }}</p>
+                <button type="button" class="button" :disabled="preparationSettingsBusy" @click="clearPreparationCache">{{ ui.workbench.清理可重建缓存 }}</button><p class="muted">{{ ui.workbench.清理缓存影响 }}</p>
+              </div>
+              <p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p>
+            </section>
+            <div class="setting-info"><span>{{ ui.workbench.运行日志北京时间每天一份TXT }}</span><code>{{ state.paths?.logs }}</code><button class="button" @click="openFolder({kind:'logs'})"><FolderOpen :size="16"/>{{ ui.workbench.点击查看日志文件 }}</button><p class="muted">{{ ui.workbench.日志保留说明 }}</p><p v-if="state.diagnostics?.error" class="inline-warning">{{ ui.workbench.日志暂时无法保存 }}{{ state.diagnostics.error }}</p></div>
+            <section class="danmaku-style-entry cookie-management-entry"><strong>{{ ui.common.Cookie管理 }}</strong><button class="button open-cookie-management" :disabled="modalBusy" @click="modal='cookie-management'">{{ ui.workbench.管理Cookie }}</button></section>
+          </SettingsGroup>
+          <UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
+          <section class="settings-group settings-group-static" aria-labelledby="settings-about-title">
+            <h3 id="settings-about-title" tabindex="-1">关于</h3>
+            <div class="about-credit"><p>{{ ui.workbench.软件作者瞌睡小菜包 }}</p><p>{{ ui.workbench.技术支持藤椒麦旋风 }}</p><p>{{ ui.workbench.菜包宇宙 }}<a href="https://www.caibao.media/" @click.prevent="openStudioPage">www.caibao.media</a></p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">{{ ui.workbench.联系我们 }}</a></p></div>
+          </section>
         </div>
       </template>
       <template v-else-if="modal==='retry-save'"><h2><FolderOpen :size="23"/>{{ ui.workbench.更换保存位置 }}</h2><p class="export-target">{{ retrySaveTarget?.description }}</p><p>{{ ui.workbench.重试保存说明 }}</p><form @submit.prevent="retryJobSave(retrySaveJob,true)"><label class="field-label">{{ ui.workbench.本次保存根目录 }}<div class="path-picker"><input v-model="retrySaveDirectory" class="retry-save-directory" :aria-label="ui.workbench.重试保存文件夹" :placeholder="ui.workbench.填写完整的文件夹路径" :disabled="modalBusy" required/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseRetryFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><div class="export-destinations"><span>{{ ui.workbench.保存到 }}{{ retrySaveCategory }}」</span><code>{{ categoryPath(retrySaveDirectory,retrySaveCategory) }}</code></div><p class="muted">{{ ui.workbench.单次保存位置说明 }}</p><p v-if="retrySaveError" class="inline-warning" role="alert">{{ retrySaveError }}</p><p v-else-if="retrySaveBlock" class="inline-warning">{{ retrySaveBlock }}</p><div class="confirm-actions"><button type="button" class="button" :disabled="modalBusy" @click="closeModal">{{ ui.common.取消 }}</button><button class="button primary" :disabled="modalBusy||!!retrySaveBlock||!retrySaveDirectory.trim()"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>{{ ui.workbench.保存到此位置 }}</button></div></form></template>
-      <template v-else><h2><Download :size="23"/>{{ modalTitle }}</h2><p class="export-target">{{ exportTarget?.title }}</p><p v-if="exportScope==='full'">{{ ui.workbench.整场导出摘要(format(exportDuration), versionDescription) }}</p><p v-else>{{ ui.workbench.选段导出摘要(exportRanges.length, format(exportDuration), versionDescription) }}</p><label class="field-label">{{ ui.workbench.本次导出根目录 }}<div class="path-picker"><input v-model="exportDirectory" :aria-label="ui.workbench.本次导出文件夹" :placeholder="ui.workbench.填写完整的文件夹路径"/><button v-if="isDesktop" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><div class="export-destinations"><span>{{ ui.workbench.本次保存到 }}{{ exportCategory }}」</span><code>{{ categoryPath(exportDirectory,exportCategory) }}</code></div><fieldset class="export-versions"><legend>{{ ui.workbench.导出版本 }}</legend>
+      <template v-else><h2><Download :size="23"/>{{ modalTitle }}</h2><p class="export-target">{{ exportTarget?.title }}</p><p v-if="exportScope==='full'">{{ ui.workbench.整场导出摘要(format(exportDuration), versionDescription) }}</p><p v-else>{{ ui.workbench.选段导出摘要(exportRanges.length, formatClipDuration(exportDuration,exportRanges[0]?.start??0), versionDescription) }}</p><label class="field-label">{{ ui.workbench.本次导出根目录 }}<div class="path-picker"><input v-model="exportDirectory" :aria-label="ui.workbench.本次导出文件夹" :placeholder="ui.workbench.填写完整的文件夹路径"/><button v-if="isDesktop" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><div class="export-destinations"><span>{{ ui.workbench.本次保存到 }}{{ exportCategory }}」</span><code>{{ categoryPath(exportDirectory,exportCategory) }}</code></div><fieldset class="export-versions"><legend>{{ ui.workbench.导出版本 }}</legend>
           <label class="export-mode" :class="{chosen:exportMode==='clean'}"><input v-model="exportMode" type="radio" name="export-mode" value="clean"/><span><strong>{{ ui.workbench.纯净版本 }}</strong><small>{{ ui.workbench.无弹幕的MP4 }}</small></span></label>
           <label class="export-mode" :class="{chosen:exportMode==='danmaku'}"><input v-model="exportMode" type="radio" name="export-mode" value="danmaku"/><span><strong>{{ ui.workbench.弹幕版本 }}</strong><small>{{ ui.workbench.叠加弹幕的MP4 }}</small></span></label>
           <label class="export-mode" :class="{chosen:exportMode==='dual'}"><input v-model="exportMode" type="radio" name="export-mode" value="dual"/><span><strong>{{ ui.workbench.纯净弹幕双文件版本 }}</strong><small>{{ ui.workbench.分别生成两份MP4 }}</small></span></label>

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { displayedSpan, formatVideoTime, markPreviewPosition } from '../src/video-time.js';
+import { displayedSpan, formatVideoTime, markPreviewPosition, formatFrameTime, frameTimePosition, formatFrameDuration, latestPreviewPosition } from '../src/video-time.js';
 
 test('30帧与24帧逐帧累加到整秒时，毫秒进位不会输出1000或把切点变成0.1秒', () => {
   for (const fps of [30, 24]) {
@@ -48,4 +48,27 @@ test('断流前精确终点只回退预览一帧，连续边界照常显示下�
   assert.equal(markPreviewPosition(90,[first,next]),90);
   assert.equal(markPreviewPosition(.01,[{start:0,duration:.01}]),0);
   assert.equal(markPreviewPosition(180,[first,next]),180-1/30);
+});
+
+
+test('剪辑时间码在非整数帧率与高帧率下仍区分相邻帧并可往返',()=>{
+  for(const rate of [24,25,30000/1001,60000/1001,120,240]){
+    const labels=new Set();
+    for(let frame=0;frame<rate*3;frame++){
+      const time=3600+frame/rate,label=formatFrameTime(time,rate);
+      assert.ok(!labels.has(label),`${rate} fps repeats ${label}`);labels.add(label);
+      const [h,m,s,f]=label.split(':').map(Number);
+      assert.ok(Math.abs(frameTimePosition(h*3600+m*60+s,f,rate)-time)<=.5/rate+1e-8,label);
+    }
+  }
+  assert.equal(formatFrameDuration(1/60,60),'00:00:00:01');
+  assert.equal(formatFrameDuration(.001,60),'< 00:00:00:01');
+  assert.ok(Number.isNaN(frameTimePosition(12,25,25)));
+});
+
+test('回到最新使用最后已索引的来源，保留一帧内的解码余量',()=>{
+  const sources=[{start:15,duration:4.1,metadata:{fps:25}},{start:0,duration:5},{start:21,duration:0}];
+  assert.ok(Math.abs(latestPreviewPosition(sources,25)-19.06)<1e-8);
+  assert.ok(Math.abs(latestPreviewPosition(sources,18)-17.96)<1e-8);
+  assert.equal(latestPreviewPosition([],25),null);
 });

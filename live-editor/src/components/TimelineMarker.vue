@@ -3,7 +3,7 @@ import { ui } from '../../shared/ui-copy.js';
 
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { windowPercent,edgeVelocity,panWindow } from '../timeline-signals.js';
-import { formatVideoTime } from '../video-time.js';
+import { formatFrameTime } from '../video-time.js';
 
 const props=defineProps({kind:String,time:Number,from:Number,to:Number,min:{type:Number,default:0},max:Number,duration:Number,fps:{type:Number,default:30},disabled:Boolean});
 const emit=defineEmits(['change','commit','start','end','pan']);
@@ -53,7 +53,7 @@ onBeforeUnmount(()=>{window.removeEventListener('blur',blur);blur();cancelAnimat
 </script>
 
 <template>
-  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+ui.timeline.标记" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatVideoTime(time)" :aria-disabled="disabled" :title="label+' '+formatVideoTime(time)+ui.timeline.标记拖动提示" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
+  <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+ui.timeline.标记" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatFrameTime(time,fps)" :aria-disabled="disabled" :title="label+' '+formatFrameTime(time,fps)+ui.timeline.标记拖动提示" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
     <span :style="{'--label-shift':`max(0px, calc(80px - ${percent}cqw))`}">{{ kind==='start'?'I':'O' }} {{ label }}</span>
   </div>
 </template>

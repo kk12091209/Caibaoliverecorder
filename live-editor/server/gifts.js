@@ -11,46 +11,66 @@ export function safeGiftIcon(value){
 export function installGifts(store){store.db.exec(`
   CREATE TABLE IF NOT EXISTS gift_events(id TEXT PRIMARY KEY,session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     source TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,time REAL NOT NULL,platform TEXT NOT NULL,type TEXT NOT NULL,
-    user TEXT NOT NULL,name TEXT NOT NULL,gift_id TEXT NOT NULL,count INTEGER NOT NULL,total_price REAL,currency TEXT NOT NULL,icon TEXT NOT NULL DEFAULT '');
+    user TEXT NOT NULL,name TEXT NOT NULL,gift_id TEXT NOT NULL,count INTEGER NOT NULL,total_price REAL,currency TEXT NOT NULL,icon TEXT NOT NULL DEFAULT '',comment TEXT NOT NULL DEFAULT '',sender_uid TEXT NOT NULL DEFAULT '');
   CREATE INDEX IF NOT EXISTS gift_time ON gift_events(session,time);
   CREATE TABLE IF NOT EXISTS gift_icons(key TEXT PRIMARY KEY,png BLOB NOT NULL,updated INTEGER NOT NULL);
-`);}
+`);
+  const columns=new Set(store.all('PRAGMA table_info(gift_events)').map(column=>column.name));
+  for(const name of ['comment','sender_uid']){
+    if(!columns.has(name))store.db.exec(`ALTER TABLE gift_events ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+  }
+}
 const amount=value=>value!==undefined&&value!==''&&Number.isFinite(Number(value))&&Number(value)>=0&&Number(value)<=1e12?Number(value):null;
-export function giftFromXml(type,attributes,source,offset){
-  const local=Number(attributes.ts),count=Number(attributes.giftcount??attributes.count??1);
-  if(!['gift','guard'].includes(type)||!Number.isFinite(local)||local<0||local>366*86400||!Number.isSafeInteger(count)||count<1||count>1e9)return null;
-  const platform=attributes.platform==='douyin'?'douyin':'bilibili';
-  let name=attributes.giftname||({1:'总督',2:'提督',3:'舰长'}[attributes.level])||(type==='guard'?'上舰':'礼物');
-  let totalPrice=amount(attributes.total_price);
-  if(totalPrice===null){
+export function giftEventId(type,attributes,source,offset){
+  const stable=/^[\w:-]{1,160}$/.test(attributes.eventid||'')?attributes.eventid:offset;
+  return createHash('sha256').update(`${source.id}:${type==='sc'?'sc':'gift'}:${stable}`).digest('hex').slice(0,32);
+}
+export function giftSenderId(attributes){
+  // Earlier Douyin recordings retain the sender in the combo ID only.
+  const uid=attributes.platform==='douyin'
+    ?attributes.sender_id||/^combo:([1-9]\d{0,30}):\d+:\d+$/.exec(attributes.eventid||'')?.[1]
+    :attributes.uid;
+  return /^[1-9]\d{0,30}$/.test(uid||'')?uid:'';
+}
+export function giftFromXml(type,attributes,source,offset,comment=''){
+  const local=Number(attributes.ts),sc=type==='sc',count=sc?1:Number(attributes.giftcount??attributes.count??1);
+  if(!['gift','guard','sc'].includes(type)||!Number.isFinite(local)||local<0||local>366*86400||!Number.isSafeInteger(count)||count<1||count>1e9)return null;
+  const platform=!sc&&attributes.platform==='douyin'?'douyin':'bilibili';
+  const name=sc?'醒目留言':attributes.giftname||({1:'总督',2:'提督',3:'舰长'}[attributes.level])||(type==='guard'?'上舰':'礼物');
+  let totalPrice=amount(sc?attributes.price:attributes.total_price);
+  if(!sc&&totalPrice===null){
     const total=amount(attributes.total_coin),unit=amount(attributes.unit_coin);
     if(platform==='douyin')totalPrice=total??(unit===null?null:unit*count);
     else if(attributes.coin_type==='silver')totalPrice=0;
     else if(attributes.coin_type==='gold')totalPrice=total!==null?total/1000:unit!==null?unit*count/1000:null;
   }
   if(totalPrice!==null&&(!Number.isFinite(totalPrice)||totalPrice>1e12))totalPrice=null;
-  const stable=/^[\w:-]{1,160}$/.test(attributes.eventid||'')?attributes.eventid:offset;
-  return {id:createHash('sha256').update(`${source.id}:gift:${stable}`).digest('hex').slice(0,32),session:source.session,source:source.id,
+  return {id:giftEventId(type,attributes,source,offset),session:source.session,source:source.id,senderId:giftSenderId(attributes),
     time:source.start+local,platform,type,user:String(attributes.user||'观众').slice(0,200),name:String(name).slice(0,200),
-    giftId:String(attributes.giftid||'').slice(0,80),count,totalPrice,currency:platform==='douyin'?'douyin_coin':'CNY',icon:safeGiftIcon(attributes.icon)};
+    giftId:String(attributes.giftid||'').slice(0,80),count,totalPrice,currency:platform==='douyin'?'douyin_coin':'CNY',icon:safeGiftIcon(attributes.icon),...(sc?{comment:String(comment).slice(0,10000)}:{})};
 }
 export function saveGift(store,g){
-  return store.run(`INSERT INTO gift_events(id,session,source,time,platform,type,user,name,gift_id,count,total_price,currency,icon) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+  return store.run(`INSERT INTO gift_events(id,session,source,time,platform,type,user,name,gift_id,count,total_price,currency,icon,comment,sender_uid) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET count=MAX(gift_events.count,excluded.count),time=MIN(gift_events.time,excluded.time),
     total_price=CASE WHEN excluded.count>=gift_events.count THEN COALESCE(excluded.total_price,gift_events.total_price) ELSE gift_events.total_price END,
-    icon=CASE WHEN excluded.icon!='' THEN excluded.icon ELSE gift_events.icon END`,g.id,g.session,g.source,g.time,g.platform,g.type,g.user,g.name,g.giftId,g.count,g.totalPrice,g.currency,g.icon).changes;
+    icon=CASE WHEN excluded.icon!='' THEN excluded.icon ELSE gift_events.icon END,
+    sender_uid=CASE WHEN gift_events.sender_uid='' THEN excluded.sender_uid ELSE gift_events.sender_uid END`,g.id,g.session,g.source,g.time,g.platform,g.type,g.user,g.name,g.giftId,g.count,g.totalPrice,g.currency,g.icon,g.comment??'',g.senderId||'').changes;
 }
-export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,style,at,page}={}){
+export function giftMessages(store,id,{from=0,to=Number.MAX_SAFE_INTEGER,search='',limit=500,style,at,page,includeSuperChat=false}={}){
   style=normalizedGiftStyle(style);
-  const args=[id,from,to,`%${search}%`,`%${search}%`,style.minBilibili,style.minDouyin];
-  const query=`SELECT id,session,source,time,platform,type,user,name,gift_id AS giftId,count,total_price AS totalPrice,currency,icon
-    FROM gift_events WHERE session=? AND time>=? AND time<=? AND (name LIKE ? OR user LIKE ?)
+  const pattern=`%${search}%`,args=[id,from,to,pattern,pattern];
+  const commentMatch=includeSuperChat?" OR (type='sc' AND comment LIKE ?)":"";
+  if(commentMatch)args.push(pattern);
+  const uidMatch=includeSuperChat&&/^[1-9]\d{0,30}$/.test(search)?' OR sender_uid=?':'';
+  if(uidMatch)args.push(search);
+  args.push(style.minBilibili,style.minBilibili,style.minDouyin*10,style.minDouyin*10);
+  const query=`SELECT id,session,source,time,platform,type,user,name,gift_id AS giftId,count,total_price AS totalPrice,currency,icon,comment
+    FROM gift_events WHERE session=? AND time>=? AND time<=? AND (name LIKE ? OR user LIKE ?${commentMatch}${uidMatch})
+    ${includeSuperChat?"":"AND type<>'sc'"}
     AND ((platform='bilibili' AND (?=0 OR total_price>=?)) OR (platform='douyin' AND (?=0 OR total_price>=?)))`;
-  // Bind the same minimum twice without interpolating user input into SQL.
-  args.splice(5,2,style.minBilibili,style.minBilibili,style.minDouyin*10,style.minDouyin*10);
   const paged=query+cursorFilter('g',page,args);
   const rows=page?store.all(paged+` ORDER BY time ${page.direction==='before'?'DESC':'ASC'},id ${page.direction==='before'?'DESC':'ASC'} LIMIT ?`,...args,limit):Number.isFinite(at)?store.all('SELECT * FROM ('+query+' ORDER BY ABS(time-?),time,id LIMIT ?) ORDER BY time,id',...args,at,limit):store.all(query+' ORDER BY time,id LIMIT ?',...args,limit);
-  return rows.map(g=>({...g,text:giftDescription(g),color:'16766069',iconUrl:g.icon?`/api/gift-icons/${createHash('sha256').update(g.icon).digest('hex')}.png`:''}));
+  return rows.map(({comment,...g})=>({...g,text:g.type==='sc'?comment:giftDescription(g),color:'16766069',iconUrl:g.icon?`/api/gift-icons/${createHash('sha256').update(g.icon).digest('hex')}.png`:''}));
 }
 const assTime=t=>{t=Math.max(0,t);return `${Math.floor(t/3600)}:${String(Math.floor(t/60)%60).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`;};
 const escape=value=>String(value).replace(/[{}\\\r\n]/g,' ').slice(0,180);

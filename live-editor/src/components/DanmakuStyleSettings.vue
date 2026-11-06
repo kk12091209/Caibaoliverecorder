@@ -18,6 +18,8 @@ const highlightDraft=computed(()=>({scale:highlightScale.value,showSender:highli
 function togglePreviewHighlight(id){previewHighlighted.value=previewHighlighted.value.includes(id)?previewHighlighted.value.filter(x=>x!==id):[...previewHighlighted.value,id];}
 const font=ref(props.font),error=ref(''),saving=ref(false),saved=ref(false),fontBusy=ref(false);
 const draft=computed(()=>({size:DANMAKU_SIZE_STEPS[sizeIndex.value],opacity:opacity.value,speed:speed.value,fps:fps.value,areaTop:areaTop.value,areaHeight:areaHeight.value}));
+const sizeMultiplier=value=>`${value.toFixed(1)} ${ui.danmakuStyle.倍}`;
+const sizeLabel=computed(()=>sizeMultiplier(draft.value.size));
 function changeArea(area){areaTop.value=area.areaTop;areaHeight.value=area.areaHeight;}
 watch(()=>[sizeIndex.value,opacity.value,speed.value,fps.value,areaTop.value,areaHeight.value,rate.value,font.value?.id],()=>saved.value=false);
 watch(()=>JSON.stringify(highlightDraft.value),()=>saved.value=false);
@@ -40,7 +42,11 @@ async function persist(){
   <DanmakuStylePreview :style="draft" :highlight-style="highlightDraft" :highlighted="previewHighlighted" :font="font" :rate="rate" :disabled="saving||fontBusy" @area-change="changeArea"/>
   <div class="style-sliders">
     <label class="style-control" for="style-rate"><span>{{ ui.danmakuStyle.每秒弹幕上限 }}<output for="style-rate">{{ rate }} {{ ui.common.条 }}</output></span><input id="style-rate" v-model.number="rate" type="range" min="1" max="50" step="1" :style="{'--style-fill':((rate-1)/49*100)+'%'}" :disabled="saving||fontBusy"/><small>{{ ui.danmakuStyle.选项1条 }}<span>{{ ui.danmakuStyle.选项50条 }}</span></small></label>
-    <label class="style-control" for="style-size"><span>{{ ui.danmakuStyle.弹幕字号 }}<output for="style-size">{{ draft.size }}<small v-if="draft.size===0.6">{{ ui.danmakuStyle.默认 }}</small></output></span><input id="style-size" v-model.number="sizeIndex" type="range" min="0" :max="DANMAKU_SIZE_STEPS.length-1" step="1" :style="{'--style-fill':(sizeIndex/(DANMAKU_SIZE_STEPS.length-1)*100)+'%'}" :aria-valuetext="String(draft.size)" :disabled="saving||fontBusy"/><small>0.4<span>5</span></small></label>
+    <label class="style-control" for="style-size">
+      <span>{{ ui.danmakuStyle.弹幕字号 }}<output for="style-size">{{ sizeLabel }}<small v-if="draft.size===0.6">{{ ui.danmakuStyle.默认 }}</small></output></span>
+      <input id="style-size" v-model.number="sizeIndex" type="range" min="0" :max="DANMAKU_SIZE_STEPS.length-1" step="1" :style="{'--style-fill':(sizeIndex/(DANMAKU_SIZE_STEPS.length-1)*100)+'%'}" :aria-valuetext="sizeLabel" :disabled="saving||fontBusy"/>
+      <small>{{ sizeMultiplier(DANMAKU_SIZE_STEPS[0]) }}<span>{{ sizeMultiplier(DANMAKU_SIZE_STEPS.at(-1)) }}</span></small>
+    </label>
     <label class="style-control" for="style-opacity"><span>{{ ui.danmakuStyle.弹幕不透明度 }}<output for="style-opacity">{{ opacity }}%</output></span><input id="style-opacity" v-model.number="opacity" type="range" min="0" max="100" step="1" :style="{'--style-fill':opacity+'%'}" :disabled="saving||fontBusy"/><small>{{ ui.danmakuStyle.完全透明 }}<span>{{ ui.danmakuStyle.完全显示 }}</span></small></label>
   </div>
   <div class="style-motion-row">

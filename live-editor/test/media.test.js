@@ -233,7 +233,7 @@ test('普通弹幕查询不混入礼物；礼物上舰独立索引并支持尾�
   store.close();
 });
 
-test('启动和重新连接录制核心时开启聊天礼物上舰，付费留言仍关闭',async()=>{
+test('启动和重新连接录制核心时开启聊天、礼物、上舰和醒目留言',async()=>{
   const store=new Store(path.join(root,'chat-config'));opened.push(store);const applied=[],recorders=[];
   try{for(let n=0;n<2;n++){
     const recorder=new Recorder(store,{executable:'already-running-core'});recorders.push(recorder);
@@ -241,7 +241,7 @@ test('启动和重新连接录制核心时开启聊天礼物上舰，付费留�
     await recorder.start();recorder.close();
     }
     const changes=applied.filter(x=>x.route==='config/global'||x.route==='room/42/config');assert.equal(changes.length,4);
-    for(const {body} of changes){assert.equal(body.optionalRecordDanmaku.value,true);assert.equal(body.optionalRecordDanmakuGift.value,true);assert.equal(body.optionalRecordDanmakuGuard.value,true);assert.equal(body.optionalRecordDanmakuSuperChat.value,false);}
+    for(const {body} of changes){assert.equal(body.optionalRecordDanmaku.value,true);assert.equal(body.optionalRecordDanmakuGift.value,true);assert.equal(body.optionalRecordDanmakuGuard.value,true);assert.equal(body.optionalRecordDanmakuSuperChat.value,true);}
   }finally{for(const recorder of recorders)recorder.close();store.close();}
 });
 

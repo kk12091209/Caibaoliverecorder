@@ -46,6 +46,11 @@ try{
   record('interface-ready',{url:safeUrl(page.url()),title:await page.title(),apiStatus:status.status});
   await page.screenshot({path:path.join(out,'loaded.png')});
   await page.getByRole('button',{name:'设置',exact:true}).click();
+  const styleGroup=page.getByRole('button',{name:'弹幕与录制样式',exact:true});
+  await styleGroup.waitFor({state:'visible',timeout:5000});
+  assert.equal(await styleGroup.getAttribute('aria-expanded'),'false');
+  await page.getByRole('button',{name:'检查更新',exact:true}).waitFor({state:'visible',timeout:5000});
+  await styleGroup.click();
   await page.getByRole('button',{name:'调整录制样式',exact:true}).waitFor({timeout:5000});
   record('settings-open');await page.screenshot({path:path.join(out,'settings.png')});
   await page.reload();

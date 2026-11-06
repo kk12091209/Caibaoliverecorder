@@ -116,7 +116,7 @@ export function decodeGift(message,{sourceStart,roomId}={}){
   if(imageBytes){const image=record(imageBytes,128);icon=text(image,1,2048);}
   const group=decimal(number(fields,11)),uid=decimal(number(user,1));
   return {id:group?`combo:${uid}:${giftId}:${group}`:id,time:Math.max(0,(timestamp-sourceStart)/1000),timestamp,
-    user:text(user,3,1024)||'观众',name:text(gift,16,1024)||'礼物',giftId,count,totalPrice,icon,platform:'douyin',type:'gift'};
+    user:text(user,3,1024)||'观众',name:text(gift,16,1024)||'礼物',giftId,count,totalPrice,icon,platform:'douyin',type:'gift',...(uid&&uid!=='0'?{senderId:uid}:{})};
 }
 
 // LotteryInfo/Condition field numbers are documented in the public web SDK

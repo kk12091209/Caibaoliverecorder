@@ -20,11 +20,11 @@ async function action(name,input={}){
 </script>
 
 <template>
-  <section class="update-settings" :aria-label="ui.common.软件更新">
-    <div class="update-heading"><strong>{{ ui.common.软件更新 }}</strong><span>{{ ui.updates.当前 }} {{ update.current?.version || '0.2.2' }}</span></div>
+  <section class="settings-group settings-group-static update-settings" aria-labelledby="settings-updates-title">
+    <div class="update-heading"><h3 id="settings-updates-title" tabindex="-1">{{ ui.updates.版本更新 }}</h3><span>{{ ui.updates.当前 }} {{ update.current?.version || '0.2.2' }}</span></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>{{ ui.updates.自动检查更新并提醒 }}</label>
     <p class="muted">{{ ui.updates.发现新版本时提醒不中断录制或导出 }}</p>
-    <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>{{ ui.updates.检查更新 }}</button><small v-if="update.checkedAt">{{ ui.updates.上次检查 }} {{ new Date(update.checkedAt).toLocaleString() }}</small></div>
+    <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>{{ ui.updates.检查更新 }}</button><small v-if="update.checkedAt">{{ ui.updates.上次检查 }} {{ new Date(update.checkedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}) }}</small></div>
     <p v-if="update.status!=='idle'" role="status">{{ status }}</p>
     <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
@@ -49,10 +49,10 @@ async function action(name,input={}){
 </template>
 
 <style scoped>
-.update-settings{border:1px solid var(--line);border-radius:var(--radius-card);padding:14px;margin:16px 0;color:var(--text);font-size:13px;}
-.update-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.update-settings{color:var(--text);font-size:13px;}
+.update-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
 .update-heading span,.update-actions small{color:var(--muted);font-size:12px;}
-.update-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;}
+.update-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;}
 .update-available{border-top:1px solid var(--line);padding-top:14px;margin-top:12px;}
 .update-available ul{padding-left:18px;line-height:1.7;margin:10px 0;overflow-wrap:anywhere;}
 progress{display:block;width:100%;height:10px;accent-color:var(--accent);margin:14px 0;}
