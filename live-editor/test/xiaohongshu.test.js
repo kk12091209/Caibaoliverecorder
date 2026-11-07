@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {createApp,fetch as localFetch} from './helpers/authenticated-app.js';
 import {Store} from '../server/store.js';
 import {Ingestor,FLV_HEADER} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';
@@ -72,6 +73,21 @@ test('media URL boundaries accept only the matching platform CDN and keep redire
   ])assert.equal(safeXiaohongshuStream(url),'');
   assert.equal(safeXiaohongshuRedirect('https://live-play.xhscdn.com/live/999.flv',media),'');
   assert.equal(safeXiaohongshuRedirect(media+'?uid=visitor',media),media+'?uid=visitor');
+  const origin='http://live-source-play.xhscdn.com/live/'+roomId+'.flv';
+  const dispatchPath='/live-source-play.xhscdn.com/live/'+roomId+'.flv';
+  const dispatched='http://120.232.94.168'+dispatchPath+'?TxLiveCode=fixture';
+  assert.equal(safeXiaohongshuStream(dispatched),'','literal IPs cannot be stream origins');
+  assert.equal(safeXiaohongshuRedirect(dispatched,origin),dispatched);
+  for(const target of [
+    'http://127.0.0.1'+dispatchPath,
+    'http://169.254.169.254'+dispatchPath,
+    'http://[::ffff:127.0.0.1]'+dispatchPath,
+    'http://10.0.0.1'+dispatchPath,
+    'http://120.232.94.168:8080'+dispatchPath,
+    'http://120.232.94.168/live/'+roomId+'.flv',
+    'http://120.232.94.168'+dispatchPath.replace(roomId,'999'),
+    'http://120.232.94.168'+dispatchPath.replace('live-source-play','other-cdn'),
+  ])assert.equal(safeXiaohongshuRedirect(target,origin),'',target);
 });
 
 test('H5 comment polling persists bounded unique messages, preserves the cursor on failure and closes in-flight work',async()=>{
@@ -190,4 +206,30 @@ test('XHS status and sender identity remain platform-scoped throughout list filt
   assert.equal(rows[2].rooms[0].chatFailed,true);
   assert.equal(rows[2].rooms[0].chatHint,'访问受限');
   assert.equal(rows[2].rooms[0].video,'录制中');
+});
+
+
+test('authenticated anchor API can stop, start and remove a saved XHS monitor by its hexadecimal UID',async t=>{
+  const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'xhs-anchor-api-'));
+  const app=await createApp({data:path.join(root,'data'),noRecorder:true,preparation:false,compact:false,updatesAutoCheck:false,ffmpeg:'unused',ffprobe:'unused',
+    xiaohongshu:{resolver:{resolve:async()=>({kind:'profile',uid,name:'本地测试主播'})},chat:{async close(){}}}});
+  t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+  const post=async(route,body={})=>{
+    const response=await localFetch(app.runtime.origin+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    return {status:response.status,body:await response.json()};
+  };
+  const added=await post('anchors',{url:'https://www.xiaohongshu.com/user/profile/'+uid});
+  assert.equal(added.status,200);
+  const key='anchors/xiaohongshu-user:'+uid;
+  assert.equal(added.body.key,'xiaohongshu-user:'+uid);
+  const stopped=await post(key+'/stop');
+  assert.equal(stopped.status,200);
+  assert.equal(stopped.body.anchors[0].enabled,false);
+  assert.equal((await post(key+'/start')).body.anchors[0].enabled,true);
+  assert.equal((await post(key+'/remove')).status,400);
+  assert.equal((await post(key+'f/remove',{confirmed:true})).status,404);
+  const removed=await post(key+'/remove',{confirmed:true});
+  assert.equal(removed.status,200);
+  assert.deepEqual(removed.body.anchors,[]);
+  assert.deepEqual(app.store.setting('xiaohongshu-anchors'),[]);
 });

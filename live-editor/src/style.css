@@ -73,7 +73,7 @@ h2 > span { color: var(--muted); font-weight: 500; }
 h2 small { font-size: 12px; font-weight: 500; color: var(--accent-dark); margin-left: auto; }
 svg { flex-shrink: 0; }
 
-.app-shell { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.app-shell { --library-width: 240px; height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 
 .topbar {
   height: 52px;
@@ -206,7 +206,7 @@ svg { flex-shrink: 0; }
 }
 .text-button:hover:not(:disabled) { color: var(--accent-dark); }
 
-.workspace { --library-width: 240px; --danmaku-width: clamp(270px, 18vw, 320px); display: grid; grid-template-columns: var(--library-width) minmax(0, 1fr) var(--danmaku-width); flex: 1; min-height: 0; }
+.workspace { --danmaku-width: clamp(270px, 18vw, 320px); display: grid; grid-template-columns: var(--library-width) minmax(0, 1fr) var(--danmaku-width); flex: 1; min-height: 0; }
 .workspace.library-collapsed { --library-width: 0px; }
 .workspace.danmaku-collapsed { --danmaku-width: 0px; }
 .workspace.library-collapsed > .library,
@@ -715,16 +715,17 @@ svg { flex-shrink: 0; }
   height: 30px;
   flex-shrink: 0;
   border-top: 1px solid var(--line);
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--library-width) minmax(0, 1fr);
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 16px;
+  padding-right: 16px;
   font-size: 12px;
   color: var(--muted);
   background: var(--panel);
 }
-.statusbar > span:first-child { display: flex; align-items: center; gap: 8px; }
-.statusbar > span:last-child { color: var(--faint); }
+.statusbar > span { justify-self: end; color: var(--faint); }
+.statusbar-contact { justify-self: center; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; }
+.statusbar-contact:hover { color: var(--text); text-decoration: underline; }
 
 .inline-warning {
   padding: 10px 12px;
@@ -832,7 +833,7 @@ svg { flex-shrink: 0; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 @media (min-width: 1600px) {
-  .workspace { --library-width: 280px; }
+  .app-shell { --library-width: 280px; }
   .editor { padding: 0 28px 20px; }
   .selection-controls input { width: 136px; }
   .selection-controls button { padding: 0 16px; }
@@ -840,10 +841,10 @@ svg { flex-shrink: 0; }
   .message-text { font-size: 13px; }
 }
 @media (min-width: 2200px) {
-  .workspace { --library-width: 300px; }
+  .app-shell { --library-width: 300px; }
 }
 @media (max-width: 1440px) {
-  .workspace { --library-width: 200px; }
+  .app-shell { --library-width: 200px; }
   .library { padding-inline: 10px; }
   .editor { padding-inline: 16px; }
   .playback-left, .playback-right { gap: 8px; }
@@ -863,7 +864,8 @@ svg { flex-shrink: 0; }
   .clip-list { max-height: min(240px, 28vh); }
 }
 @media (max-width: 960px) {
-  .workspace { --library-width: 180px; grid-template-columns: var(--library-width) minmax(0, 1fr); }
+  .app-shell { --library-width: 180px; }
+  .workspace { grid-template-columns: var(--library-width) minmax(0, 1fr); }
   .workspace:not(.danmaku-collapsed) { grid-template-rows: minmax(0, 1fr) minmax(160px, 280px); }
   .workspace > .danmaku-panel { grid-column: 1 / -1; max-height: 280px; min-height: 0; border-top: 1px solid var(--line); border-left: 0; }
   .editor { overflow: auto; }
@@ -911,7 +913,7 @@ svg { flex-shrink: 0; }
   .selection-controls input { width: 104px; }
   .selection-controls label { gap: 6px; }
   .ruler { font-size: 10px; }
-  .statusbar { padding: 0 12px; font-size: 11px; }
+  .statusbar { display: flex; justify-content: space-between; padding: 0 12px; font-size: 11px; }
   .modal { padding: 22px 18px; }
   .playback-toolbar { gap: 10px; }
   .playback-right { width: 100%; justify-content: space-between; }
@@ -1215,10 +1217,6 @@ svg { flex-shrink: 0; }
   .selection-controls .position-mode button { padding: 0 6px; }
 }
 
-/* One-line author and contact entry; full credits remain in About. */
-.library-quick-links { position: sticky; bottom: 0; background: var(--panel); display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; margin-top: auto; padding: 12px 2px 0; font-size: 12px; line-height: 1.6; color: var(--muted); white-space: nowrap; }
-.library-quick-links .library-about-link { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; }
-.library-quick-links .library-about-link:hover { color: var(--text); text-decoration: underline; }
 /* Click-open recording status, anchored to its trigger. */
 .core-status-wrap { position: relative; }
 .core-status-wrap .core-status { position: relative; cursor: pointer; }

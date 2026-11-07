@@ -4,11 +4,15 @@ import { createReadStream } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { createSign } from 'node:crypto'
 import { resolve, join, dirname } from 'node:path'
+import { readSignedManifest } from './update-trust.mjs'
 import { verifyDesktopUpdate } from './desktop-update.mjs'
 import { fileURLToPath } from 'node:url'
 import {
   atomicJson,
+  betaVersionOf,
   cachedAsset,
+  compareBetaVersions,
+  planRecorderBeta,
   planRelease,
   publishProduct,
   readCatalog,
@@ -21,6 +25,8 @@ const config = validateConfig(
   JSON.parse(await readFile(process.env.SYNC_CONFIG || join(root, 'deploy/products.json'), 'utf8')),
 )
 const dryRun = process.argv.includes('--dry-run')
+const betaTag = process.argv.find((arg) => arg.startsWith('--recorder-beta='))?.slice('--recorder-beta='.length)
+if (betaTag !== undefined) betaVersionOf(betaTag)
 const stateDir = resolve(process.env.SYNC_STATE_DIR || join(root, '.release-state'))
 const catalogPath = resolve(
   process.env.RELEASE_CATALOG || join(root, 'public/releases/catalog.json'),
@@ -208,14 +214,28 @@ try {
     await mkdir(stateDir, { recursive: true, mode: 0o700 })
   }
   const token = await githubToken()
-  const catalog = await readCatalog(catalogPath)
+  const catalog = betaTag ? null : await readCatalog(catalogPath)
+  const products = betaTag ? config.products.filter((product) => product.slug === 'caibo-recorder') : config.products
+  if (!products.length) throw new Error('缺少录包机发布配置')
+  const betaPath = join(dirname(catalogPath), 'caibo-recorder-beta-update.json')
+  if (betaTag) {
+    try {
+      const previous = readSignedManifest(JSON.parse(await readFile(betaPath, 'utf8')))
+      if (compareBetaVersions(betaTag, 'v' + previous.version) < 0) throw new Error('拒绝将测试镜像回退到旧版')
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
   const store = dryRun ? null : storage()
   let changed = false
   let failures = 0
-  for (const product of config.products) {
+  for (const product of products) {
     try {
-      const release = await api(`/repos/${product.repository}/releases/latest`, token)
-      const plan = planRelease(product, release, baseUrl, catalog.products[product.slug])
+      const endpoint = betaTag ? 'tags/' + betaTag : 'latest'
+      const release = await api(`/repos/${product.repository}/releases/${endpoint}`, token)
+      const plan = betaTag
+        ? planRecorderBeta(product, release, baseUrl, betaTag)
+        : planRelease(product, release, baseUrl, catalog.products[product.slug])
       if (dryRun) {
         log('plan', {
           product: product.slug,
@@ -263,8 +283,8 @@ try {
         },
       )
       if (desktopEnvelope)
-        await atomicJson(join(dirname(catalogPath), `${product.slug}-update.json`), desktopEnvelope)
-      if (JSON.stringify(catalog.products[product.slug]) !== JSON.stringify(published)) {
+        await atomicJson(betaTag ? betaPath : join(dirname(catalogPath), `${product.slug}-update.json`), desktopEnvelope)
+      if (catalog && JSON.stringify(catalog.products[product.slug]) !== JSON.stringify(published)) {
         catalog.products[product.slug] = published
         changed = true
       }

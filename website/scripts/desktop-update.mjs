@@ -1,11 +1,11 @@
 import { readSignedManifest } from './update-trust.mjs'
-import { versionOf } from './release-core.mjs'
+import { betaVersionOf, versionOf } from './release-core.mjs'
 
 export function verifyDesktopUpdate(envelope, plan, publicKey) {
   const manifest = readSignedManifest(envelope, publicKey)
   if (
     manifest.schema !== 1 ||
-    manifest.version !== versionOf(plan.publicRelease.version) ||
+    manifest.version !== (plan.prerelease ? betaVersionOf : versionOf)(plan.publicRelease.version) ||
     !/^[a-f0-9]{40}$/.test(manifest.sourceRevision) ||
     manifest.sourceRevision !== plan.sourceRevision ||
     !Array.isArray(manifest.notes) ||

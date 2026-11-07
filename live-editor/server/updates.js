@@ -9,6 +9,7 @@ const RELEASES_API = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases
 const RELEASE_API = RELEASES_API + '/latest';
 const PRERELEASE_API = RELEASES_API + '?per_page=30';
 export const CAIBAO_UPDATE_URL = 'https://caibao.media/releases/caibo-recorder-update.json';
+export const CAIBAO_BETA_UPDATE_URL = 'https://caibao.media/releases/caibo-recorder-beta-update.json';
 const DOWNLOAD_ORIGIN = 'https://download.caibao.media';
 const COS_ORIGIN = 'https://caibao-releases-1393257344.cos.ap-singapore.myqcloud.com';
 const DAY = 86400000, MAX_PACKAGE = 512 * 1024 * 1024;
@@ -56,7 +57,7 @@ export function validateUpdate(release, manifest, current, platform, { beta = fa
   return {key,version:manifest.version,prerelease,revision:manifest.revision??1,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
 }
 
-export function validateMirrorUpdate(envelope, current, platform, publicKey = UPDATE_PUBLIC_KEY) {
+export function validateMirrorUpdate(envelope, current, platform, publicKey = UPDATE_PUBLIC_KEY, {beta=false} = {}) {
   const manifest = readSignedManifest(envelope, publicKey);
   releaseIdentity(manifest);
   const assets = ['win32-x64', 'darwin-arm64'].map(id => {
@@ -64,22 +65,24 @@ export function validateMirrorUpdate(envelope, current, platform, publicKey = UP
     if (!item || item.name !== packageName(manifest.version, id) || !/^[a-f0-9]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || item.size <= 0 || item.size > MAX_PACKAGE) fail('菜包更新文件信息无效。');
     return { ...item, state: 'uploaded', digest: `sha256:${item.sha256}`, browser_download_url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${manifest.version}/${item.name}` };
   });
-  const next = validateUpdate({ tag_name: `v${manifest.version}`, draft: false, prerelease: false, assets }, manifest, current, platform);
-  return next && { ...next, url: `${DOWNLOAD_ORIGIN}/caibo-recorder/${next.version}/${next.name}`, fallbackUrl: next.url };
+  const next = validateUpdate({ tag_name: `v${manifest.version}`, draft: false, prerelease: beta, assets }, manifest, current, platform, {beta});
+  return next && { ...next, url: `${DOWNLOAD_ORIGIN}/caibo-recorder${beta?'/beta':''}/${next.version}/${next.name}`, fallbackUrl: next.url };
 }
 
 export async function caibaoFetch(url, { fetcher = fetch, signal } = {}) {
   const start = new URL(url);
   const packagePath = /^\/caibo-recorder\/\d{1,5}\.\d{1,5}\.\d{1,5}\/(?:BiliLiveEditor-[\d.]+-win-x64-setup\.exe|Caibo-[\d.]+-macos-arm64\.dmg)$/;
-  if (url !== CAIBAO_UPDATE_URL && (start.origin !== DOWNLOAD_ORIGIN || !packagePath.test(start.pathname))) fail('菜包更新地址不受信任。');
+  const betaPath = /^\/caibo-recorder\/beta\/\d{1,5}\.\d{1,5}\.\d{1,5}-beta\.[1-9]\d{0,4}\/(?:BiliLiveEditor-[\d.]+-beta\.[1-9]\d{0,4}-win-x64-setup\.exe|Caibo-[\d.]+-beta\.[1-9]\d{0,4}-macos-arm64\.dmg)$/;
+  const isManifest = [CAIBAO_UPDATE_URL, CAIBAO_BETA_UPDATE_URL].includes(start.href);
+  if (!isManifest && (start.origin !== DOWNLOAD_ORIGIN || !(packagePath.test(start.pathname) || betaPath.test(start.pathname)))) fail('菜包更新地址不受信任。');
   const expectedPath = start.pathname;
   for (let redirects = 0; redirects <= 3; redirects++) {
     const address = new URL(url);
-    if (address.username || address.password || address.search || address.hash || (url !== CAIBAO_UPDATE_URL && (![DOWNLOAD_ORIGIN, COS_ORIGIN].includes(address.origin) || address.pathname !== expectedPath))) fail('菜包更新跳转不受信任。');
+    if (address.username || address.password || address.search || address.hash || (!isManifest && (![DOWNLOAD_ORIGIN, COS_ORIGIN].includes(address.origin) || address.pathname !== expectedPath))) fail('菜包更新跳转不受信任。');
     const response = await fetcher(url, { redirect: 'manual', signal, headers: { 'User-Agent': 'Caibo-Updater', Accept: 'application/octet-stream' } });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location'); await response.body?.cancel();
-      if (!location || start.href === CAIBAO_UPDATE_URL) fail('菜包更新跳转无效。');
+      if (!location || isManifest) fail('菜包更新跳转无效。');
       url = new URL(location, url).href; continue;
     }
     if (!response.ok) { await response.body?.cancel(); fail('菜包更新源暂时不可用。'); }
@@ -193,12 +196,12 @@ export class Updates {
       .finally(()=>{this.checkTask=null;});
   }
   async checkRemote(signal){
-    let next=await this.stableCandidate(signal), betaError;
+    let next=await this.channelCandidate(signal,this.current), betaError;
     signal.throwIfAborted();
     if(this.betaEnabled){
       try{
         const betaSignal=AbortSignal.any([signal,AbortSignal.timeout(5000)]);
-        next=await this.githubBetaCandidate(betaSignal,next??this.current)||next;
+        next=await this.channelCandidate(betaSignal,next??this.current,true)||next;
       }
       catch(error){
         if(signal.aborted||!next)throw error;
@@ -223,21 +226,22 @@ export class Updates {
     this.lastCheckSucceeded=true;this.retryAt=betaError?.retryAt||0;this.store.setting('update-retry-at',this.retryAt);
     this.store.setting('update-checked-at',this.checkedAt);return this.snapshot();
   }
-  async stableCandidate(signal){
-    let next;
-    if (this.mirror) {
-      let received = false;
-      try {
-        const primarySignal = AbortSignal.any([signal, AbortSignal.timeout(this.mirrorTimeoutMs)]);
-        const response = await caibaoFetch(CAIBAO_UPDATE_URL, { fetcher: this.fetcher, signal: primarySignal });
-        received = true;
-        next = validateMirrorUpdate(JSON.parse((await boundedBytes(response, 131072)).toString('utf8')), this.current, this.platform, this.mirrorPublicKey);
-      } catch (error) {
-        if (signal.aborted || this.closed || received || error.trustFailure) throw error;
-        next = await this.githubCandidate(signal);
+  async channelCandidate(signal,baseline,beta=false){
+    if(this.mirror){
+      let received=false;
+      try{
+        const timeout=beta?Math.min(2500,this.mirrorTimeoutMs):this.mirrorTimeoutMs;
+        const primarySignal=AbortSignal.any([signal,AbortSignal.timeout(timeout)]);
+        const url=beta?CAIBAO_BETA_UPDATE_URL:CAIBAO_UPDATE_URL;
+        const response=await caibaoFetch(url,{fetcher:this.fetcher,signal:primarySignal});
+        received=true;
+        const envelope=JSON.parse((await boundedBytes(response,131072)).toString('utf8'));
+        return validateMirrorUpdate(envelope,baseline,this.platform,this.mirrorPublicKey,{beta});
+      }catch(error){
+        if(signal.aborted||this.closed||received||error.trustFailure)throw error;
       }
-    } else next = await this.githubCandidate(signal);
-    return next;
+    }
+    return beta?this.githubBetaCandidate(signal,baseline):this.githubCandidate(signal);
   }
   acceptCandidate(next){
     if(this.candidate?.key!==next?.key||this.candidate?.sha256!==next?.sha256)this.ready=null;

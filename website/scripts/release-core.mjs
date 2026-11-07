@@ -54,6 +54,31 @@ export function planRelease(product, release, baseUrl, previous) {
   if (release.draft || release.prerelease) throw new Error('不发布草稿或预发布版')
   const version = versionOf(release.tag_name)
   if (previous && compareVersions(version, previous.version) < 0) throw new Error('拒绝自动降级')
+  return planReleaseAssets(product, release, baseUrl, version, previous)
+}
+
+export function betaVersionOf(tag) {
+  if (typeof tag !== 'string' || !/^v(?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})-beta\.[1-9]\d{0,4}$/.test(tag))
+    throw new Error('需要明确指定录包机测试标签')
+  return tag.slice(1)
+}
+
+export function compareBetaVersions(a, b) {
+  const [left, leftBeta] = betaVersionOf(a).split('-beta.')
+  const [right, rightBeta] = betaVersionOf(b).split('-beta.')
+  return compareVersions(left, right) || Math.sign(Number(leftBeta) - Number(rightBeta))
+}
+
+export function planRecorderBeta(product, release, baseUrl, tag) {
+  const version = betaVersionOf(tag)
+  if (product.slug !== 'caibo-recorder' || release.tag_name !== tag || release.draft !== false || release.prerelease !== true)
+    throw new Error('测试镜像仅接受已公开的录包机预发布版')
+  const files = product.files.filter((file) => ['win-setup', 'mac-dmg'].includes(file.id))
+  if (files.length !== 2) throw new Error('测试镜像需要两端安装包')
+  return planReleaseAssets({ ...product, slug: 'caibo-recorder/beta', files, sources: [] }, release, baseUrl, version, null, true)
+}
+
+function planReleaseAssets(product, release, baseUrl, version, previous, prerelease = false) {
   const base = new URL(baseUrl)
   if (
     base.protocol !== 'https:' ||
@@ -109,7 +134,7 @@ export function planRelease(product, release, baseUrl, previous) {
   const files = product.files.map(pick)
   const sources = (product.sources || []).map(pick)
   const desktopUpdate =
-    product.desktopUpdate && compareVersions(version, product.desktopUpdate.fromVersion) >= 0
+    prerelease || (product.desktopUpdate && compareVersions(version, product.desktopUpdate.fromVersion) >= 0)
       ? pick({ id: 'desktop-update', name: 'caibao-update.json' })
       : null
   if (previous && compareVersions(version, previous.version) === 0) {
@@ -123,6 +148,7 @@ export function planRelease(product, release, baseUrl, previous) {
   const publishFile = ({ key, assetId, ...file }) => file
   return {
     assets: [...files, ...sources, ...(desktopUpdate ? [desktopUpdate] : [])],
+    ...(prerelease ? { prerelease } : {}),
     sourceRevision: release.target_commitish,
     publicRelease: {
       version: `v${version}`,

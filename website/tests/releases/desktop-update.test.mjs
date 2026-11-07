@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { planRelease, publishProduct, validateConfig } from '../../scripts/release-core.mjs';
+import { compareBetaVersions, planRecorderBeta, planRelease, publishProduct, validateConfig } from '../../scripts/release-core.mjs';
 import { verifyDesktopUpdate } from '../../scripts/desktop-update.mjs';
 import { UPDATE_KEY_ID } from '../../scripts/update-trust.mjs';
 
@@ -35,4 +35,25 @@ test('桌面更新签名绑定两端安装包和精确源码，不接受被改�
   let visible = false;
   await assert.rejects(publishProduct(p, async asset => { if (asset.id === 'mac-dmg') throw new Error('not uploaded'); }).then(() => { visible = true; }));
   assert.equal(visible, false);
+});
+
+test('explicit beta mirror verifies both installers and is excluded from the formal catalog', () => {
+  const version = '0.4.3-beta.1', tag = 'v'+version;
+  const prerelease = { ...release(version), prerelease:true };
+  const beta = planRecorderBeta(product, prerelease, 'https://download.caibao.media', tag);
+  assert.throws(() => plan(prerelease), /预发布/);
+  assert.throws(() => planRecorderBeta(product, {...prerelease,draft:true}, 'https://download.caibao.media', tag), /预发布/);
+  assert.ok(beta.assets.every(asset=>asset.key.startsWith('caibo-recorder/beta/'+version+'/')));
+  assert.equal(beta.assets.length,3);
+  assert.equal(compareBetaVersions('v0.4.3-beta.10','v0.4.3-beta.2'),1);
+  const keys=generateKeyPairSync('ed25519');
+  const data=Buffer.from(JSON.stringify({schema:1,version,sourceRevision:prerelease.target_commitish,notes:[],
+    platforms:Object.fromEntries([['win32-x64','win-setup'],['darwin-arm64','mac-dmg']].map(([id,kind])=>{
+      const {name,size,sha256}=beta.assets.find(a=>a.id===kind);
+      return [id,{name,size,sha256}];
+    })),
+  }));
+  const envelope={schema:1,keyId:UPDATE_KEY_ID,data:data.toString('base64'),signature:sign(null,data,keys.privateKey).toString('base64')};
+  assert.equal(verifyDesktopUpdate(envelope,beta,keys.publicKey).version,version);
+  assert.throws(()=>verifyDesktopUpdate(envelope,plan(release()),keys.publicKey),/版本/);
 });

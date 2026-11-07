@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import {BlockList,isIP} from 'node:net';
+import {isPublicMediaIp} from './public-media-ip.js';
 import { signRoomQuery } from './douyin-signing.js';
 import { parsePlatformJson } from './linkmic-sei.js';
 import { labelText } from '../shared/linkmic-labels.js';
@@ -9,10 +9,6 @@ import { douyinCameraLayout } from './recording-layout.js';
 export const DOUYIN_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const roomHosts = new Set(['live.douyin.com','douyin.com','www.douyin.com','v.douyin.com','m.douyin.com','webcast.amemv.com']);
 const streamHosts = ['.douyincdn.com','.douyinliving.com','.bytecdntp.com','.douyinvod.com','.bytecdn.cn','.snssdk.com','.douyin.com'];
-const nonPublicV4=new BlockList(),nonPublicV6=new BlockList(),globalV6=new BlockList();
-for(const [address,prefix]of [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.0.0.0',24],['192.0.2.0',24],['192.88.99.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',3]])nonPublicV4.addSubnet(address,prefix,'ipv4');
-globalV6.addSubnet('2000::',3,'ipv6');
-for(const [address,prefix]of [['2001::',23],['2001:db8::',32],['2002::',16],['3fff::',20]])nonPublicV6.addSubnet(address,prefix,'ipv6');
 export function safeDouyinLink(url) {
   if (url.protocol !== 'https:' || url.port || url.username || url.password || !roomHosts.has(url.hostname)) throw new Error('请使用抖音直播间链接。');
   return url;
@@ -98,10 +94,7 @@ export function safeStreamRedirect(input,origin) {
   try {
     const url=new URL(input,origin),known=safeStreamUrl(url.href);if(known)return known;
     if(!['http:','https:'].includes(url.protocol)||url.port||url.username||url.password)return '';
-    const address=url.hostname.replace(/^\[|\]$/g,''),family=isIP(address);
-    const publicIp=family===4?!nonPublicV4.check(address,'ipv4')
-      :family===6&&globalV6.check(address,'ipv6')&&!nonPublicV6.check(address,'ipv6');
-    return publicIp?url.href:'';
+    return isPublicMediaIp(url.hostname)?url.href:'';
   }catch{return '';}
 }
 export function selectDouyinFlv(stream = {}) {

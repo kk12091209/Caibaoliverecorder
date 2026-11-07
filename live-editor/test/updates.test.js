@@ -239,7 +239,7 @@ test('已安装相同修订不提醒，历史下载缓存仍可手动清理',asy
   const f=await fixture(t,{current:{...current,revision:3}});await f.updates.check();assert.equal(f.updates.status,'current');assert.equal(f.updates.candidate,null);
 });
 test('安装路径仅通过授权桌面通道提供；Web 更新接口不接受路径或任意 URL',async t=>{
-  const next=packageInfo.version.split('.').map(Number);next[2]++;
+  const next=packageInfo.version.split('-')[0].split('.').map(Number);next[2]++;
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-update-api-'));const p=publication('win32-x64',1,next.join('.'));
   const app=await createApp({data:root,port:0,noRecorder:true,preparation:false,compact:false,updateOptions:{mirrorPublicKey:keys.publicKey,mirror:false,platform:'win32-x64',fetcher:async url=>url.includes('api.github.com')?Response.json(p.release):new Response(url.endsWith('caibao-update.json')?p.manifestBytes:p.bytes)}});
   app.ingestor.stop();t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});

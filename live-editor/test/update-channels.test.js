@@ -7,7 +7,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { Store } from '../server/store.js';
-import { Updates, CAIBAO_UPDATE_URL, UPDATE_REPOSITORY, packageName, caibaoFetch, validateMirrorUpdate } from '../server/updates.js';
+import { Updates, CAIBAO_UPDATE_URL, CAIBAO_BETA_UPDATE_URL, UPDATE_REPOSITORY, packageName, caibaoFetch, validateMirrorUpdate } from '../server/updates.js';
 import { UPDATE_KEY_ID } from '../server/update-trust.js';
 
 const keys = generateKeyPairSync('ed25519');
@@ -127,3 +127,39 @@ test('菜包宇宙链接在 Windows、Mac 桌面桥和浏览器中打开固定�
 });
 
 test('主源签名损坏不能触发备用源降级',async t=>{const f=await fixture(t);f.modes.check='tampered';await f.updates.check();assert.equal(f.updates.status,'error');assert.equal(f.updates.candidate,null);assert.equal(f.calls.length,1);});
+
+test('test mirror is opt-in, uses its own download path, and still allows the matching formal release', async t => {
+  const f = await fixture(t);
+  let stableVersion = '0.2.3';
+  const betaVersion = '0.2.4-beta.1';
+  const manifestFor = version => ({
+    ...f.manifest, version, platforms: Object.fromEntries(Object.entries(f.manifest.platforms)
+      .map(([platform,item]) => [platform,{...item,name:packageName(version,platform)}])),
+  });
+  const fetcher = f.updates.fetcher;
+  f.updates.fetcher = async (url, options) => {
+    if (url === CAIBAO_UPDATE_URL || url === CAIBAO_BETA_UPDATE_URL) {
+      f.calls.push(url);
+      return Response.json(signed(manifestFor(url === CAIBAO_UPDATE_URL ? stableVersion : betaVersion)));
+    }
+    const base = 'https://download.caibao.media/caibo-recorder/beta/';
+    if (url.startsWith(base)) {
+      f.calls.push(url);
+      return new Response(f.payloads.get(packageName('0.2.3','win32-x64')));
+    }
+    return fetcher(url,options);
+  };
+  await f.updates.check();
+  assert.deepEqual(f.calls,[CAIBAO_UPDATE_URL]);
+  const preview=await f.updates.setBetaEnabled(true);
+  assert.equal(preview.candidate.version,betaVersion);
+  assert.ok(f.calls.includes(CAIBAO_BETA_UPDATE_URL));
+  f.updates.download(preview.candidate.key);
+  await f.updates.downloadTask;
+  assert.equal(f.updates.status,'ready');
+  assert.equal(f.calls.at(-1),'https://download.caibao.media/caibo-recorder/beta/'+betaVersion+'/'+preview.candidate.name);
+  stableVersion='0.2.4';
+  f.advance(61000);
+  assert.equal((await f.updates.check()).candidate.version,'0.2.4');
+  assert.ok(f.calls.every(url=>!url.includes('github.com')));
+});

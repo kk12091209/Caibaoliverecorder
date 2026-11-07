@@ -1,3 +1,4 @@
+import {isPublicMediaIp} from './public-media-ip.js';
 import {parsePlatformJson} from './linkmic-sei.js';
 import {readBoundedResponse} from './douyin-room.js';
 
@@ -22,10 +23,15 @@ export function safeXiaohongshuStream(input){
   }catch{return '';}
 }
 export function safeXiaohongshuRedirect(input,origin){
-  if(!safeXiaohongshuStream(origin))return '';
+  const trustedOrigin=safeXiaohongshuStream(origin);
+  if(!trustedOrigin)return '';
   try{
-    const url=safeXiaohongshuStream(new URL(input,origin).href);
-    return url&&new URL(url).pathname===new URL(origin).pathname?url:'';
+    const source=new URL(trustedOrigin),target=new URL(input,source);
+    if(safeXiaohongshuStream(target.href)&&target.pathname===source.pathname)return target.href;
+    // CDN dispatch can put the original CDN hostname and FLV path after a
+    // public IP. Bind both parts to the trusted URL and never use account cookies.
+    if(!['http:','https:'].includes(target.protocol)||target.port||target.username||target.password||target.hash)return '';
+    return target.pathname==='/'+source.hostname+source.pathname&&isPublicMediaIp(target.hostname)?target.href:'';
   }catch{return '';}
 }
 export function parseXiaohongshuState(html){
