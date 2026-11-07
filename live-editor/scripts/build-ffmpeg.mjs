@@ -2,9 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {spawn, execFileSync} from 'node:child_process';
-import {Readable} from 'node:stream';
-import {pipeline} from 'node:stream/promises';
-import {createReadStream, createWriteStream} from 'node:fs';
+import {createReadStream} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -21,20 +19,25 @@ const output=path.join(tools,'ffmpeg-slim');
 try{await fs.lstat(output);throw Error('FFmpeg output already exists; use a fresh tools directory.');}catch(e){if(e.code!=='ENOENT')throw e;}
 const runtime=JSON.parse(await fs.readFile(new URL('release-runtime.json',import.meta.url),'utf8')).windows.ffmpeg;
 const assets=[runtime.toolchain,runtime.source];
+const fetchTool=fileURLToPath(new URL('fetch-tool.mjs',import.meta.url));
 async function hash(file){const h=crypto.createHash('sha256');for await(const b of createReadStream(file))h.update(b);return h.digest('hex');}
 for(const asset of assets){
   const file=path.join(work,asset.name);
   try{await fs.access(file);}catch{
-    let response;
-    for(let attempt=0;attempt<3;attempt++){
-      try{response=await fetch(asset.url,{signal:AbortSignal.timeout(240000)});break;}
+    const urls=asset===runtime.source
+      ? [asset.url,`https://download.videolan.org/pub/contrib/ffmpeg/${asset.name}`,`https://distfiles.macports.org/ffmpeg/${asset.name}`]
+      : [asset.url,asset.url,asset.url];
+    for(let attempt=0;attempt<urls.length;attempt++){
+      try{
+        console.log(`Fetching ${asset.name} from ${new URL(urls[attempt]).hostname}`);
+        execFileSync(process.execPath,[fetchTool,urls[attempt],file,asset.sha256],{stdio:'inherit',windowsHide:true});
+        break;
+      }
       catch(error){
-        if(attempt===2)throw error;
+        if(attempt===urls.length-1)throw error;
         await delay(1000*(attempt+1));
       }
     }
-    if(!response.ok)throw Error(`Download failed: ${asset.name} (${response.status})`);
-    await pipeline(Readable.fromWeb(response.body),createWriteStream(file,{flags:'wx'}));
   }
   if(await hash(file)!==asset.sha256)throw Error('Checksum mismatch: '+asset.name);
 }
