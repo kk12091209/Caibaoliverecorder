@@ -5,12 +5,22 @@ import {DouyinFlv as FlvNormalizer,DouyinStreamChange as StreamChange} from './d
 import {chatRate} from './chat-rules.js';
 
 export const xmlText=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
-export async function writeAll(file,bytes){bytes=Buffer.from(bytes);let offset=0;while(offset<bytes.length){const result=await file.write(bytes,offset,bytes.length-offset);if(!result.bytesWritten)throw new Error('录像写入失败。');offset+=result.bytesWritten;}}
-// XML handles are opened in append mode. A failed batch rolls back its
-// partial tail before the chat client retries; earlier messages stay intact.
+export async function writeAll(file, bytes, position = null) {
+  bytes = Buffer.from(bytes);
+  let written = 0;
+  while (written < bytes.length) {
+    const result = await file.write(bytes, written, bytes.length - written, position === null ? null : position + written);
+    if (!result.bytesWritten) throw new Error('录像写入失败。');
+    written += result.bytesWritten;
+  }
+}
+
+// Windows append-only handles cannot truncate. Create a new file exclusively
+// and append at explicit offsets so retries still work after a rollback.
+export const openChatXml = file => fs.open(file, 'wx+');
 export async function appendChatXml(file,bytes){
   const offset=(await file.stat()).size;
-  try{await writeAll(file,bytes);}
+  try{await writeAll(file,bytes,offset);}
   catch(error){
     try{await file.truncate(offset);}
     catch{throw Object.assign(new Error('弹幕文件无法恢复写入位置。'),{code:'CHAT_XML_ROLLBACK_FAILED'});}
@@ -157,8 +167,8 @@ export class FlvRecorder {
       this.store.setting('linkmic-owner:'+source.id,{id:metadata.ownerId||'',name:metadata.name,roomId:metadata.roomId});
       if(metadata.stream.cameraLayout)this.store.setting('recording-camera:'+source.id,metadata.stream.cameraLayout);
       room.sourceId=source.id;
-      xml=await fs.open(source.xml,'ax');
-      await writeAll(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="${this.platform}" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
+      xml=await openChatXml(source.xml);
+      await appendChatXml(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="${this.platform}" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
       this.store.run("UPDATE sessions SET status='recording',error='' WHERE id=?",session.id);room.recording=true;this.followCaptured?.(room);this.store.diagnostics?.record(this.label+'录制',`房间 ${room.webRid}：开始写入录像；素材 ${source.id}`);
       normalizer=new FlvNormalizer();room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
       try{const chatCredentials=this.resolver.cookie?await this.resolver.cookie(signal):room.metadata||metadata;this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
@@ -203,7 +213,7 @@ export class FlvRecorder {
       try{await response?.body?.cancel();}catch{}
       if(source){
         await this.chat.stop(source.id);
-        try{if(xml){await writeAll(xml,'</i>\n');await xml.sync();}await flv.sync();
+        try{if(xml){await appendChatXml(xml,'</i>\n');await xml.sync();}await flv.sync();
           if((await flv.stat()).size<13)recordError??=new Error('本次录制未收到完整画面。');
         }catch(error){recordError??=error;room.blocked=true;room.error='录像保存失败，请检查磁盘。';}
       }

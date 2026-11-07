@@ -38,6 +38,9 @@ jobs:
         run: |
           $version = (Get-Content live-editor/package.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Verify partial chat writes roll back on Windows
+        shell: pwsh
+        run: node --test --test-name-pattern 'a partial XML batch' live-editor/test/xiaohongshu-web.test.js
       - name: Prepare native desktop regression probes
         shell: pwsh
         env:

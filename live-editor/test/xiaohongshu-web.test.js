@@ -9,7 +9,7 @@ import {XiaohongshuWebSession} from '../server/xiaohongshu-web-session.js';
 import {XiaohongshuSocketChat} from '../server/xiaohongshu-socket-chat.js';
 import {XiaohongshuPlatform} from '../server/xiaohongshu-platform.js';
 import {Store} from '../server/store.js';
-import {appendChatXml, writeAll} from '../server/flv-recorder.js';
+import {appendChatXml, openChatXml} from '../server/flv-recorder.js';
 import {XiaohongshuResolver} from '../server/xiaohongshu-room.js';
 
 const uid = '1234567890abcdef12345678';
@@ -191,23 +191,23 @@ test('RWP write retries keep their batch, apply shared sampling and preserve XHS
 
 test('a partial XML batch is rolled back before retry and leaves earlier messages intact', async t => {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'xhs-xml-write-'));
-  const file = await fs.open(path.join(root, 'chat.xml'), 'ax');
+  const file = await openChatXml(path.join(root, 'chat.xml'));
   t.after(async () => {await file.close();await fs.rm(root, {recursive: true, force: true});});
-  await writeAll(file, '<i>\n');
+  await appendChatXml(file, '<i>\n');
   let writes = 0, fail = true;
   const writer = {
     stat: () => file.stat(), truncate: size => file.truncate(size),
-    write: async (bytes, offset, length) => {
+    write: async (bytes, offset, length, position) => {
       writes++;
       if (fail && writes === 2) throw Error('transient write failure');
-      return file.write(bytes, offset, fail ? Math.min(3, length) : length);
+      return file.write(bytes, offset, fail ? Math.min(3, length) : length, position);
     },
   };
-  await assert.rejects(appendChatXml(writer, '<d>正文</d>\n'));
+  await assert.rejects(appendChatXml(writer, '<d>正文</d>\n'), /transient write failure/);
   assert.equal(await fs.readFile(path.join(root, 'chat.xml'), 'utf8'), '<i>\n');
   fail = false;
   await appendChatXml(writer, '<d>正文</d>\n');
-  await writeAll(file, '</i>\n');
+  await appendChatXml(file, '</i>\n');
   assert.equal(await fs.readFile(path.join(root, 'chat.xml'), 'utf8'), '<i>\n<d>正文</d>\n</i>\n');
 });
 
