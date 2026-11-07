@@ -7,6 +7,7 @@ import {pipeline} from 'node:stream/promises';
 import {createReadStream, createWriteStream} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const {values}=parseArgs({options:{project:{type:'string'},tools:{type:'string'},work:{type:'string'},jobs:{type:'string',default:'4'},'skip-install':{type:'boolean'}}});
 const project=path.resolve(values.project),tools=path.resolve(values.tools),work=path.resolve(values.work);
@@ -24,7 +25,14 @@ async function hash(file){const h=crypto.createHash('sha256');for await(const b 
 for(const asset of assets){
   const file=path.join(work,asset.name);
   try{await fs.access(file);}catch{
-    const response=await fetch(asset.url,{signal:AbortSignal.timeout(240000)});
+    let response;
+    for(let attempt=0;attempt<3;attempt++){
+      try{response=await fetch(asset.url,{signal:AbortSignal.timeout(240000)});break;}
+      catch(error){
+        if(attempt===2)throw error;
+        await delay(1000*(attempt+1));
+      }
+    }
     if(!response.ok)throw Error(`Download failed: ${asset.name} (${response.status})`);
     await pipeline(Readable.fromWeb(response.body),createWriteStream(file,{flags:'wx'}));
   }

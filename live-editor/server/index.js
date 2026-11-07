@@ -175,7 +175,7 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/follow-users'&&req.method==='POST')return json(res,await recorder.douyin.following.add((await body(req)).url));
       if(p==='/api/anchors'&&req.method==='POST')return json(res,await recorder.addAnchor(await body(req)));
-      const anchorAction=p.match(/^\/api\/anchors\/((?:bilibili|douyin(?:-user)?|xiaohongshu):\d{1,20}|xiaohongshu-user:[a-f0-9]{24})\/(start|stop|remove)$/);
+      const anchorAction=p.match(/^\/api\/anchors\/([a-z-]+:\d{1,20}|xiaohongshu-user:[a-f0-9]{24})\/(start|stop|remove)$/);
       if(anchorAction&&req.method==='POST'&&recorder.platformForAnchor(anchorAction[1])){await recorder.anchorAction(anchorAction[1],anchorAction[2],await body(req));return json(res,{anchors:recorder.anchors});}
       const followAction=p.match(/^\/api\/follow-users\/(\d{1,20})\/(enable|remove)$/);
       if(followAction&&req.method==='POST'){const input=await body(req);if(followAction[2]==='enable')await recorder.douyin.following.enable(followAction[1],input.enabled);else await recorder.douyin.following.remove(followAction[1],input.confirmed);return json(res,{following:recorder.douyin.followingSnapshot});}

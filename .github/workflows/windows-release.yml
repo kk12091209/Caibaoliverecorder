@@ -41,6 +41,9 @@ jobs:
       - name: Verify partial chat writes roll back on Windows
         shell: pwsh
         run: node --test --test-name-pattern 'a partial XML batch' live-editor/test/xiaohongshu-web.test.js
+      - name: Verify monitor routes on Windows
+        shell: pwsh
+        run: node --test --test-name-pattern 'a registered provider|authenticated anchor API' live-editor/test/numeric-room-api.test.js live-editor/test/xiaohongshu.test.js
       - name: Prepare native desktop regression probes
         shell: pwsh
         env:
