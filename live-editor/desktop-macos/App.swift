@@ -403,7 +403,8 @@ enum RecordingPowerStatus {
         defer { repairing = false }
         try? JSONSerialization.data(withJSONObject: ["time": Date().timeIntervalSince1970]).write(to: ledger, options: .atomic)
         repairProgress = "正在检查官方修复包"; showRepairProgress(); logStartup("触发组件自动修复：\(reason)")
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CaiboReleaseVersion") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
         let repair = ComponentRepair(target: Bundle.main.bundleURL, data: backend.data, version: version, progress: { [weak self] message in
             self?.repairProgress = message; self?.showRepairProgress()
         }, log: { [weak self] message in self?.logStartup(message, forward: false) })

@@ -1,3 +1,4 @@
+import { decodeXML, chatEventPattern, xmlAttributes } from './chat-xml.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,7 +27,6 @@ export function tags(buffer) {
 }
 function videoData(b) { return b[0] === 9 && b.length > 16 && b[12] === 1; }
 function keyframe(b) { return videoData(b) && b[11] >> 4 === 1; }
-const decodeXML = s => s.replace(/&#x([0-9a-f]+);|&#(\d+);|&(lt|gt|quot|apos|amp);/gi, (_, x, d, n) => x || d ? String.fromCodePoint(Math.min(0x10ffff, parseInt(x || d, x ? 16 : 10))) : ({lt:'<',gt:'>',quot:'"',apos:"'",amp:'&'}[n] || ''));
 
 export class Ingestor {
   constructor(store, { now = Date.now, xmlRetryMs = 30000, maxBufferedBytes = 64 * 1024 * 1024, maxTotalBufferedBytes = 256 * 1024 * 1024, maxBufferedTags = 100000, stalledMediaMs = 30000 } = {}) {
@@ -174,12 +174,12 @@ export class Ingestor {
       const buffer = Buffer.alloc(Math.min(4 * 1024 * 1024, stat.size - current.xmlpos));
       const { bytesRead } = await file.read(buffer, 0, buffer.length, current.xmlpos);
       const text = buffer.subarray(0, bytesRead).toString('utf8');
-      const regex = /<(d|sc|gift|guard|density)\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/g;
+      const regex = chatEventPattern();
       let match, consumed = 0; const messages = [], lotteryMessages = [], density = [],gifts=[],senders=[];
       while ((match = regex.exec(text))) {
         // Keep paid messages out of the ordinary chat quota and index.
         consumed = regex.lastIndex;
-        const attributes = {}; for (const attr of match[2].matchAll(/([\w-]+)="([^"]*)"/g)) attributes[attr[1]] = decodeXML(attr[2]);
+        const attributes = xmlAttributes(match[2]);
         if(match[1]==='gift'||match[1]==='guard'||match[1]==='sc'){
           const offset=current.xmlpos+Buffer.byteLength(text.slice(0,match.index)),gift=giftFromXml(match[1],attributes,source,offset,match[1]==='sc'?decodeXML(match[3]||''):'');
           if(gift)gifts.push(gift);continue;

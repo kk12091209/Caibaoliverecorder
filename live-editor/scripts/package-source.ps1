@@ -137,7 +137,7 @@ foreach ($assetPath in $editorAssetPaths) {
     $source = Join-Path $AppRoot $assetPath.Substring('live-editor/'.Length)
     Add-Source $source $assetPath 'current-editor'
 }
-foreach ($name in @('package.json','package-lock.json','vite.config.js','index.html','launch.ps1','README.md','.gitignore')) {
+foreach ($name in @('package.json','package-lock.json','vite.config.js','eslint.config.js','index.html','launch.ps1','README.md','.gitignore')) {
     $source = Join-Path $AppRoot $name
     if (Test-Path -LiteralPath $source -PathType Leaf) { Add-Source $source ('live-editor/'+$name) 'current-editor' }
 }

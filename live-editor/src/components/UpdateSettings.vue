@@ -8,6 +8,15 @@ import { isDesktop } from '../desktop.js';
 const props=defineProps({ state:Object });
 const emit=defineEmits(['changed']);
 const busy=ref(false),message=ref(''),error=ref('');
+const betaVisible=ref(false);
+let versionClicks=0,lastVersionClick=0;
+function revealBeta(){
+  if(betaVisible.value)return;
+  const now=performance.now();
+  versionClicks=now-lastVersionClick>2000?1:versionClicks+1;
+  lastVersionClick=now;
+  if(versionClicks===10)betaVisible.value=true;
+}
 const update=computed(()=>props.state||{});
 const working=computed(()=>busy.value||['checking','downloading','installing'].includes(update.value.status));
 const percent=computed(()=>Math.min(100,Math.floor((update.value.received||0)/(update.value.candidate?.size||1)*100)));
@@ -16,19 +25,24 @@ async function action(name,input={}){
   if(busy.value)return;busy.value=true;error.value='';message.value='';
   try{emit('changed',await api('updates/'+name,input));}catch(e){error.value=e.message;}finally{busy.value=false;}
 }
-
+function changeBeta(event){
+  const betaEnabled=event.target.checked;
+  event.target.checked=update.value.betaEnabled===true;
+  return action('channel',{betaEnabled});
+}
 </script>
 
 <template>
   <section class="settings-group settings-group-static update-settings" aria-labelledby="settings-updates-title">
-    <div class="update-heading"><h3 id="settings-updates-title" tabindex="-1">{{ ui.updates.版本更新 }}</h3><span>{{ ui.updates.当前 }} {{ update.current?.version || '0.2.2' }}</span></div>
+    <div class="update-heading"><h3 id="settings-updates-title" tabindex="-1">{{ ui.updates.版本更新 }}</h3><button v-if="update.current?.version" type="button" class="text-button update-version" @click="revealBeta">{{ ui.updates.当前 }} {{ update.current.version }}<template v-if="update.current.version.includes('-beta.')"> · {{ ui.updates.测试版 }}</template></button></div>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>{{ ui.updates.自动检查更新并提醒 }}</label>
     <p class="muted">{{ ui.updates.发现新版本时提醒不中断录制或导出 }}</p>
+    <label v-if="betaVisible||update.betaEnabled" class="checkbox beta-update-toggle"><input type="checkbox" :checked="update.betaEnabled===true" :disabled="busy||update.status==='installing'||(update.status==='downloading'&&!update.candidate?.prerelease)" @change="changeBeta"/>{{ ui.updates.接收测试版本 }}</label>
     <div class="update-actions"><button class="button small" :disabled="working" @click="action('check')"><LoaderCircle v-if="update.status==='checking'" class="spin" :size="14"/><RefreshCw v-else :size="14"/>{{ ui.updates.检查更新 }}</button><small v-if="update.checkedAt">{{ ui.updates.上次检查 }} {{ new Date(update.checkedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}) }}</small></div>
     <p v-if="update.status!=='idle'" role="status">{{ status }}</p>
     <p v-if="update.checkNotice" class="muted" role="status">{{ update.checkNotice }}</p>
     <div v-if="update.candidate" class="update-available">
-      <strong>{{ update.candidate.version }}</strong>
+      <strong>{{ update.candidate.version }}<template v-if="update.candidate.prerelease"> · {{ ui.updates.测试版 }}</template></strong>
       <p v-if="update.ignored" class="muted">{{ ui.updates.延后更新提醒说明 }}</p>
       <ul><li v-for="(note,index) in update.candidate.notes" :key="index">{{ note }}</li></ul>
       <template v-if="update.status==='downloading'"><progress :value="update.received" :max="update.candidate.size" :aria-label="ui.updates.更新下载进度"/><p>{{ percent }}% · {{ (update.received/1048576).toFixed(1) }} / {{ (update.candidate.size/1048576).toFixed(1) }} MB</p><button class="button small" :disabled="busy" @click="action('cancel')">{{ ui.updates.取消下载 }}</button></template>
@@ -51,8 +65,9 @@ async function action(name,input={}){
 <style scoped>
 .update-settings{color:var(--text);font-size:13px;}
 .update-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
-.update-heading span,.update-actions small{color:var(--muted);font-size:12px;}
+.update-heading .update-version,.update-actions small{color:var(--muted);font-size:12px;}
 .update-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;}
+.beta-update-toggle{margin-top:10px;}
 .update-available{border-top:1px solid var(--line);padding-top:14px;margin-top:12px;}
 .update-available ul{padding-left:18px;line-height:1.7;margin:10px 0;overflow-wrap:anywhere;}
 progress{display:block;width:100%;height:10px;accent-color:var(--accent);margin:14px 0;}

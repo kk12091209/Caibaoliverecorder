@@ -10,11 +10,12 @@ if (!$ProjectRoot) { $ProjectRoot = Split-Path (Split-Path $PSScriptRoot -Parent
 if (!$Destination) { $Destination = Join-Path $ProjectRoot '.tools\release-tools' }
 $Destination = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+$pinned = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json).windows
 $assets = @(
     @{ name='7zr.exe'; url='https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe'; sha256='ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d' },
     @{ name='7z2603-x64.exe'; url='https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe'; sha256='0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd' },
     @{ name='innosetup-6.7.3.exe'; url='https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'; sha256='9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732' },
-    @{ name='NODE-LICENSE.txt'; url='https://raw.githubusercontent.com/nodejs/node/v24.12.0/LICENSE'; sha256='537308465103a306d0e3eecf42632b4ff1b48aaaec044e9fc10a78c81fd00b34' },
+    $pinned.node.license,
     @{ name='license-texts/Apache-2.0.txt'; url='https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt'; sha256='074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff' },
     @{ name='license-texts/BSD-2-Clause.txt'; url='https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/BSD-2-Clause.txt'; sha256='f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df' },
     @{ name='license-texts/BSD-3-Clause.txt'; url='https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/BSD-3-Clause.txt'; sha256='5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d' },

@@ -6,11 +6,14 @@ import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {PlatformCredentials,NativeCookieProtection,normalizePlatformCookie} from '../server/platform-credentials.js';
-import {testProtection,biliFixture,biliReplacement,douyinFixture} from './credential-fixtures.js';
+import {testProtection,biliFixture,biliReplacement,douyinFixture,xiaohongshuFixture} from './credential-fixtures.js';
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'cookie-vault-')),protection=testProtection(),vault=await new PlatformCredentials(root,{protection}).initialize();t.after(async()=>{await vault.close();await fs.rm(root,{recursive:true,force:true});});return {root,protection,vault};}
 test('Cookie input accepts a single header value and rejects injection, missing login fields and ambiguous duplicates',()=>{
  assert.equal(normalizePlatformCookie('bilibili','Cookie: '+biliFixture),biliFixture);
  assert.equal(normalizePlatformCookie('douyin',douyinFixture),douyinFixture);
+ assert.equal(normalizePlatformCookie('xiaohongshu',xiaohongshuFixture),xiaohongshuFixture);
+ assert.throws(()=>normalizePlatformCookie('xiaohongshu','a1=visitor-only'));
+ assert.throws(()=>normalizePlatformCookie('xiaohongshu','web_session=login-without-device'));
  assert.throws(()=>normalizePlatformCookie('douyin','ttwid=visitor-only'));
  assert.equal(normalizePlatformCookie('douyin','sessionid_ss=test-login'),'sessionid_ss=test-login');
  for(const value of [undefined,null,{},'',biliFixture+'\nX: bad',biliFixture+'\0',biliFixture+'; SESSDATA=other','SESSDATA=x; DedeUserID=no','x'.repeat(32769),'SESSDATA="secret"; DedeUserID=1'])assert.throws(()=>normalizePlatformCookie('bilibili',value));
@@ -43,14 +46,17 @@ test('symlinked private directories and symlinked entries never unlock another f
  await fs.unlink(vault.directory);await fs.mkdir(vault.directory);await fs.writeFile(path.join(elsewhere,'entry'),'not a credential');await fs.symlink(path.join(elsewhere,'entry'),vault.file('bilibili'));
  const linked=await new PlatformCredentials(root,{protection}).initialize();assert.equal(linked.get('bilibili'),'');assert.match(linked.snapshot().platforms.bilibili.error,/无法读取/);await linked.close();
 });
-test('both platform ciphertexts survive restart, stay isolated and support clearing one login',async t=>{
+test('three platform ciphertexts survive restart, stay isolated and support clearing one login',async t=>{
  const {root,vault,protection}=await fixture(t);await vault.save('bilibili',biliFixture);await vault.save('douyin',douyinFixture);
+ await vault.save('xiaohongshu',xiaohongshuFixture);
  const before=await fs.readFile(vault.file('douyin'));assert.ok(!before.includes(Buffer.from('synthetic')));
  const reopened=await new PlatformCredentials(root,{protection}).initialize();
- assert.equal(reopened.get('bilibili'),biliFixture);assert.equal(reopened.get('douyin'),douyinFixture);
- assert.deepEqual(Object.keys(reopened.snapshot().platforms),['bilibili','douyin']);
+ assert.equal(reopened.get('bilibili'),biliFixture);assert.equal(reopened.get('douyin'),douyinFixture);assert.equal(reopened.get('xiaohongshu'),xiaohongshuFixture);
+ assert.deepEqual(Object.keys(reopened.snapshot().platforms),['bilibili','douyin','xiaohongshu']);
  await assert.rejects(protection.run('open',vault.namespace,'bilibili',before));
  await reopened.remove('douyin');assert.equal(reopened.get('douyin'),'');assert.equal(reopened.get('bilibili'),biliFixture);
+ assert.equal(reopened.get('xiaohongshu'),xiaohongshuFixture);
+ await reopened.remove('xiaohongshu');
  assert.deepEqual(await fs.readdir(vault.directory),['bilibili.sealed']);await reopened.close();
 });
 test('a symlinked Douyin entry remains locked and preserves its outside target',async t=>{

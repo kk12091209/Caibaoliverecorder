@@ -8,7 +8,6 @@ import GiftIcon from './components/GiftIcon.vue';
 import MessageMatch from './components/MessageMatch.vue';
 import VirtualMessageList from './components/VirtualMessageList.vue';
 import MessageTimeNavigator from './components/MessageTimeNavigator.vue';
-import {messageTime,messageWindow} from '../shared/message-navigation.js';
 import {giftCards,giftPrice,normalizedGiftStyle,SUPER_CHAT_SECONDS} from '../shared/gifts.js';
 import {normalizedDanmakuStyle} from '../shared/danmaku-style.js';
 import {cacheWarningInGB,MAX_CACHE_WARNING_GB} from '../shared/cache-warning-units.js';
@@ -27,8 +26,11 @@ import { CAMERA_POSITIONS, normalizedRecordingStyle } from '../shared/recording-
 import { TIMESTAMP_STYLES, normalizedTimestampStyle, TIMESTAMP_POSITIONS, normalizedTimestampPosition } from '../shared/timestamp-style.js';
 import UpdateSettings from './components/UpdateSettings.vue';
 import PlatformCredentials from './components/PlatformCredentials.vue';
+import PlatformBadge from './components/PlatformBadge.vue';
+import {platformLabel} from '../shared/platforms.js';
 import UpdatePrompt from './components/UpdatePrompt.vue';
 import CacheWarning from './components/CacheWarning.vue';
+import CookieWarning from './components/CookieWarning.vue';
 import MonitoredAnchors from './components/MonitoredAnchors.vue';
 import PowerSettings from './components/PowerSettings.vue';
 import DanmakuStyleSettings from './components/DanmakuStyleSettings.vue';
@@ -42,14 +44,18 @@ import { recordingCoverage } from './recording-coverage.js';
 import { livePreparationView } from './preparation-state.js';
 import DismissibleNotice from './components/DismissibleNotice.vue';
 import appIcon from './assets/app-icon.png';
-import { formatVideoTime as format, formatFrameTime, formatFrameDuration, frameTimePosition, videoFrameRate, latestPreviewPosition, markPreviewPosition } from './video-time.js';
-import { recordingTimeAt, positionAtRecordingInput, toRecordingInput, recordingTimeBounds } from './recording-time.js';
+import { formatVideoTime as format, formatFrameTime, formatFrameDuration, videoFrameRate } from './video-time.js';
+import { toRecordingInput } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
 import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
 import { stateSync } from './state-sync.js';
 import { createBackdropClickGuard } from './backdrop-click.js';
-import { previewStream } from './preview-stream.js';
+import { usePreview } from './use-preview.js';
+import { useClipMarkers } from './use-clip-markers.js';
+import { useMessageBrowser } from './use-message-browser.js';
+import { useExportDialog } from './use-export-dialog.js';
+import { useSettingsNavigation } from './use-settings-navigation.js';
 import { Video, Radio, Film, Play, Pause, StepBack, StepForward, RotateCcw, Settings, Plus, Minus, MoreHorizontal, Search, Trash2, Download, X, ChevronUp, ChevronDown, Check, AlertCircle, LoaderCircle, Target, Scissors, Pencil, Trophy, FolderOpen, Volume2, Volume1, VolumeX } from 'lucide-vue-next';
 
 const state=ref({sessions:[],rooms:[],jobs:[],recorder:{online:false,error:''},dataPath:'',paths:{},preparation:{enabled:true,items:[]}} );
@@ -59,7 +65,8 @@ const timestampStyleSummary=computed(()=>TIMESTAMP_STYLES.find(style=>style.valu
 const timestampPositionSummary=computed(()=>TIMESTAMP_POSITIONS.find(position=>position.value===normalizedTimestampPosition(state.value.previewTimestampPosition)).label);
 const coreStatus=computed(()=>{
   const core=state.value.recorder;
-  if(core.biliOnline&&core.douyinOnline)return ui.workbench.录制服务就绪;
+  if(core.biliOnline&&core.douyinOnline&&core.xiaohongshuOnline)return ui.workbench.录制服务就绪;
+  if(core.xiaohongshuOnline)return ui.workbench.录制服务部分就绪;
   if(core.douyinOnline)return core.error?ui.workbench.B站正在恢复抖音就绪:ui.workbench.B站连接中抖音就绪;
   return core.biliOnline?ui.workbench.B站服务就绪:ui.workbench.录制服务未连接;
 });
@@ -68,14 +75,7 @@ const roomUrl=ref(''),addingRoom=ref(false),notice=ref(''),noticeKind=ref('error
 const noticeSequence=ref(0);
 const recoveryNoticeKey=computed(()=>{const r=state.value.recovery||{};return JSON.stringify([!!r.safeMode,!!r.recovering,r.isolatedRecords||0,!!r.coreConfigRecovered,r.error||'']);});
 const roomChoice=shallowRef(null),roomChoicePlatform=ref(''),roomChoiceError=ref('');
-const video=ref(null),previewUrl=ref(''),position=ref(0),previewBase=ref(0),isPlaying=ref(false),loading=ref(false),previewEnded=ref(false),scrubbing=ref(false);
-let previewTransport;
-const previewClient=crypto.randomUUID();
-const previewVolume=ref(1),previewMuted=ref(false);
-try{const saved=JSON.parse(localStorage.getItem('preview-audio')||'null');if(saved&&Number.isFinite(saved.volume))previewVolume.value=Math.min(1,Math.max(0,saved.volume));if(saved&&typeof saved.muted==='boolean')previewMuted.value=saved.muted;}catch{}
-let previewVolumeHold=previewVolume.value>0?previewVolume.value:1;
-const previewSlider=computed(()=>previewMuted.value?0:previewVolume.value);
-const giftRows=shallowRef([]),giftFeed=shallowRef([]),showGiftList=ref(false),exportGifts=ref(false);
+const giftFeed=shallowRef([]);
 const previewGifts=computed(()=>state.value.giftStyle?.preview===true);
 const savingPreviewGifts=ref(false);
 async function setPreviewGifts(event){
@@ -89,18 +89,16 @@ async function setPreviewGifts(event){
   finally{checkbox.checked=previewGifts.value;savingPreviewGifts.value=false;}
 }
 watch(previewGifts,enabled=>{if(enabled)void loadGiftOverlay();else giftFeed.value=[];});
-const startText=ref(''),endText=ref(''),startExact=ref(null),endExact=ref(null),query=ref(''),messages=shallowRef([]),showOverlay=ref(true),followMessages=ref(true),messageList=ref(null);
+const showOverlay=ref(true);
 watch(showOverlay,enabled=>{if(enabled)void loadOverlay();});
-const messagePage=ref({hasBefore:false,hasAfter:false}),messageLoading=ref(false),messageFollowPaused=ref(false);
-const feedKey=row=>`${row.type==='d'?'d':row.type==='lottery'?'l':'g'}:${row.id}`;
 const roomBusyIds=ref([]);
-const modal=ref(''),modalBusy=ref(false),exportMode=ref('dual'),materialDeleteError=ref('');
+const modal=ref(''),modalBusy=ref(false),materialDeleteError=ref('');
 const modalBackdropClick=createBackdropClickGuard();
 watch(modal,()=>modalBackdropClick.reset(),{flush:'sync'});
-const startMarked=ref(false),endMarked=ref(false),sessionMenu=ref(null),confirmTarget=ref(null);
+const sessionMenu=ref(null),confirmTarget=ref(null);
 const messageMenu=ref(null),senderFilter=ref(null);
 const messageEditTarget=ref(null);
-const lotteryRows=shallowRef([]),lotteryTarget=ref(null),lotteryEditing=ref(false),lotteryLoading=ref(false),lotteryError=ref('');
+const lotteryTarget=ref(null),lotteryEditing=ref(false),lotteryLoading=ref(false),lotteryError=ref('');
 let lotteryDetailRequest=0;
 const senderWarning=computed(()=>senderFilter.value?.mode==='approx'?ui.workbench.打码昵称匹配提示:senderFilter.value?.mode==='name'?ui.workbench.同名用户提示:'');
 const jobMenu=ref(null),jobDeleteTarget=ref(null),jobDeletePreview=shallowRef(null),jobPreviewLoading=ref(false),jobDeleteError=ref('');
@@ -111,25 +109,20 @@ const maxCacheWarningInputGB = Math.floor(MAX_CACHE_WARNING_GB);
 const cacheWarningDisplayGB = computed(() => cacheWarningInGB(state.value.preparation?.cache?.warningGiB));
 const cacheWarningKey=computed(()=>`${state.value.preparation?.cache?.warningGiB}:${state.value.preparation?.cache?.warningCycle}`);
 const cacheWarningVisible=computed(()=>connected.value&&state.value.preparation?.cache?.warningDue===true&&cacheWarningDismissed.value!==cacheWarningKey.value&&!modal.value&&!sessionMenu.value&&!jobMenu.value&&!messageMenu.value&&!timelineDragging.value&&!scrubbing.value);
+const cookieWarningBusy=ref(false),cookieWarningError=ref(''),cookieSettingsPlatform=ref('');
+const dismissedCookieWarnings=new Map();
+const cookieWarning=computed(()=>state.value.credentialWarnings?.find(warning=>dismissedCookieWarnings.get(warning.platform)!==warning.generation));
+const cookieWarningVisible=computed(()=>connected.value&&!!cookieWarning.value&&!cacheWarningVisible.value&&!modal.value&&!sessionMenu.value&&!jobMenu.value&&!messageMenu.value&&!timelineDragging.value&&!scrubbing.value);
+watch(()=>cookieWarning.value?.generation,()=>{cookieWarningError.value='';});
 const preparationBusyIds=ref([]),preparationErrors=ref({}),preparationSettingsBusy=ref(false),preparationSettingsError=ref(''),preparationEnabledDraft=ref(null),livePreparationEnabledDraft=ref(null);
 const closeActionBusy=ref(false),closeActionError=ref(''),closeActionDraft=ref(null);
-const positionMode=ref('video'),startDateText=ref(''),endDateText=ref('');
 const danmakuPreference=ref(true),bottomTab=ref('clips');
 const danmakuVisible=computed(()=>!!selected.value&&danmakuPreference.value);
 watch(selected,()=>{danmakuPreference.value=true;},{flush:'sync'});
-const exportScope=ref('clips'),exportTarget=ref(null),exportRanges=ref([]),exportExcluded=ref(0);
 const pendingCleanup=computed(()=>(state.value.pendingCleanup||[]).map(item=>({...item,task:state.value.deletions?.find(task=>task.id===item.id)})));
 const requestedDeletions=new Map();
-const expandedSettings = ref({});
-function openCleanup() { return openSettingsSection('.cleanup-settings', { group: 'storage' }); }
 function cleanupLabel(item){const task=item.task;if(!task)return item.purge_error?ui.workbench.等待重试:ui.workbench.等待清理;const count=task.total?`（${task.completed}/${task.total}）`:'';return ({resources:ui.workbench.正在释放占用,checking:ui.workbench.正在核对文件,files:ui.workbench.正在清理文件,cache:ui.workbench.正在清理缓存,temporary:ui.workbench.正在清理临时文件,records:ui.workbench.正在清理记录,waiting:ui.workbench.等待占用释放随后自动重试})[task.phase]+count;}
-const draftStart=computed(()=>markerTime('start',startMarked.value));
-const draftEnd=computed(()=>markerTime('end',endMarked.value));
-const draftDuration=computed(()=>draftStart.value!==null&&draftEnd.value!==null&&draftEnd.value>draftStart.value?draftEnd.value-draftStart.value:null);
-const clockBounds=computed(()=>recordingTimeBounds(activeSession.value,detail.value?.sources||[],duration.value));
 const selectionReady=computed(()=>!!selected.value&&detail.value?.id===selected.value);
-const canUseRecordingTime=computed(()=>selectionReady.value&&activeSession.value?.room>0&&!!clockBounds.value);
-const markerError=computed(()=>{for(const which of ['start','end']){if(!(which==='start'?startMarked.value:endMarked.value))continue;try{readMark(which);}catch(e){return (which==='start'?ui.workbench.起点:ui.workbench.终点)+e.message;}}return '';});
 const confirmation=computed(()=>['remove-room','delete-session','delete-job'].includes(modal.value));
 const jobMenuTarget=computed(()=>state.value.jobs.find(job=>job.id===jobMenu.value?.id));
 const retrySaveJob=computed(()=>state.value.jobs.find(job=>job.id===retrySaveTarget.value?.id));
@@ -152,7 +145,7 @@ const deleteBlock=computed(()=>{
   if(s.archive_status==='running'||state.value.jobs.some(j=>j.session===s.id&&['queued','running','finalizing','saving','cancelling'].includes(j.status)))return ui.workbench.素材使用中禁止删除;
   return '';
 });
-const modalTitle=computed(()=>({settings:ui.workbench.设置,'edit-message':ui.workbench.编辑文本,lottery:lotteryEditing.value?ui.workbench.编辑奖品备注:ui.workbench.天选时刻中奖名单,'danmaku-style':ui.workbench.调整弹幕样式,'recording-style':ui.workbench.调整录制样式,'cookie-management':ui.common.Cookie管理,export:exportScope.value==='full'?ui.workbench.导出完整素材:ui.workbench.导出选段,'choose-room':ui.workbench.选择主播,'remove-room':ui.common.移除监控主播,'delete-session':ui.workbench.删除已录制素材,'delete-job':ui.workbench.删除导出任务,'retry-save':ui.workbench.更换保存位置})[modal.value]||'');
+const modalTitle=computed(()=>({settings:ui.workbench.设置,'edit-message':ui.workbench.编辑文本,lottery:lotteryEditing.value?ui.workbench.编辑奖品备注:ui.workbench.天选时刻中奖名单,'danmaku-style':ui.workbench.调整弹幕样式,'recording-style':ui.workbench.调整录制样式,'cookie-management':ui.common.Cookie管理,'xiaohongshu-cookie-notice':ui.credentials.小红书采集提示标题,export:exportScope.value==='full'?ui.workbench.导出完整素材:ui.workbench.导出选段,'choose-room':ui.workbench.选择主播,'remove-room':ui.common.移除监控主播,'delete-session':ui.workbench.删除已录制素材,'delete-job':ui.workbench.删除导出任务,'retry-save':ui.workbench.更换保存位置})[modal.value]||'');
 const activeSession=computed(()=>state.value.sessions.find(s=>s.id===selected.value)||detail.value);
 const preparationEnabled=computed(()=>state.value.preparation?.enabled!==false);
 const livePreparationEnabled=computed(()=>state.value.preparation?.liveEnabled===true);
@@ -162,16 +155,6 @@ const selectedPreparationAction=computed(()=>preparationAction(selectedPreparati
 const selectedPreparationBlock=computed(()=>preparationActionBlock(activeSession.value));
 const preparationExpanded=computed(()=>selectedLivePreparation.value?.active||['queued','preparing','waiting','paused','error'].includes(selectedPreparation.value?.status)||!!preparationErrors.value[selected.value]||!!selectedPreparation.value?.error);
 const duration=computed(()=>activeSession.value?.duration||0);
-const messageWindowAnchor=ref(0),messageBrowseTime=ref(0),messageNavigationPinned=ref(false);
-const searchKeyword=computed(()=>query.value.trim());
-const searching=computed(()=>!!searchKeyword.value);
-const searchPattern=computed(()=>{
-  const keyword=searchKeyword.value.slice(0,200);
-  return keyword?new RegExp('('+keyword.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'):null;
-});
-const followMessageList=computed(()=>followMessages.value&&!searching.value);
-const activeSenderFilter=computed(()=>searching.value||showGiftList.value?null:senderFilter.value);
-const messageRange=computed(()=>messageWindow(duration.value,messageFollowPaused.value?messageWindowAnchor.value:position.value,followMessageList.value));
 const coverage=computed(()=>recordingCoverage(detail.value?.sources,duration.value));
 const timelineAutoFollow=ref(true),activeMarker=ref(null);
 const timelineWindow=ref(null),signals=shallowRef(null),signalsLoading=ref(false),signalsError=ref('');
@@ -205,48 +188,67 @@ const mergedMessages=computed(()=>[
 ].sort((a,b)=>a.time-b.time||(feedKey(a)<feedKey(b)?-1:feedKey(a)>feedKey(b)?1:0)));
 const visibleMessages=computed(()=>mergedMessages.value.filter(row=>Number.isFinite(row.time)&&
   (scrubbing.value||row.time>=messageRange.value.from&&row.time<=messageRange.value.to)));
-const overlayFeed=shallowRef([]),exportDirectory=ref(''),savedExportDirectory=ref('');
+const overlayFeed=shallowRef([]);
 let overlayBusy=false, overlayWindow=null;
 const myJobs=computed(()=>state.value.jobs.filter(j=>j.session===selected.value));
 const selectedRanges=computed(()=>edit.value.ranges.filter(r=>r.selected!==false));
 const allRangesSelected=computed(()=>edit.value.ranges.length>0&&selectedRanges.value.length===edit.value.ranges.length);
 const rangeDuration=computed(()=>selectedRanges.value.reduce((n,r)=>n+r.end-r.start,0));
-const versionDescription=computed(()=>({clean:ui.workbench.选项一个纯净版MP4,danmaku:ui.workbench.选项一个弹幕版MP4,dual:ui.workbench.纯净版和弹幕版两个MP4})[exportMode.value]);
-const exportSession=computed(()=>state.value.sessions.find(s=>s.id===exportTarget.value?.id));
-const exportCategory=computed(()=>exportScope.value==='full'?'完整素材':'导出片段');
-const exportDuration=computed(()=>exportScope.value==='full'?(exportSession.value?.duration||0):exportRanges.value.reduce((total,r)=>total+r.end-r.start,0));
-const exportBlock=computed(()=>{
-  if(!exportSession.value)return ui.workbench.素材已被删除无法导出;
-  if(exportScope.value==='full')return fullExportBlock(exportSession.value);
-  return exportRanges.value.length?'':ui.workbench.请先勾选至少一个选段;
-});
 const canPreview=computed(()=>selectionReady.value&&duration.value>0.1);
-let messageTimer,signalsTimer,queryTimer,noticeTimer,detailBusy=false,detailRefreshedAt=0,dmBusy=false,lastMessageKey='',generation=0,selectionGeneration=0;
-let messageRequest=0,overlayRequest=0,signalRequest=0,signalController=null,lastSignalKey='',lastSignalAt=0;
+const {
+  video, previewUrl, position, previewBase, isPlaying, loading, previewEnded, scrubbing,
+  previewVolume, previewMuted, previewSlider, previewVolumeOpen, setPreviewVolume, togglePreviewMute,
+  openPreviewVolume, leavePreviewVolume, previewVolumeDown, previewVolumeUp,
+  playFrom, playNext, pausePreview, togglePlay, played, loaded, paused, updateTime, step, returnToLatest, ended,
+  disposePreview, invalidatePreview, releasePagePreview
+}=usePreview({
+  selected, detail, duration, canPreview, fps, tell, loadOverlay
+});
+const {
+  positionMode, startText, endText, startDateText, endDateText, startMarked, endMarked,
+  draftStart, draftEnd, draftDuration, clockBounds, canUseRecordingTime, markerError,
+  readMark, inputMark, setPositionMode, commitMark, setMark, dragMark, previewMark, clearDraftMarks
+}=useClipMarkers({
+  selected, detail, activeSession, selectionReady, duration, canPreview,
+  position, frameRateAt, formatPosition, playFrom, tell
+});
+const {
+  query, messages, giftRows, lotteryRows, showGiftList, followMessages, messageList, feedKey,
+  messagePage, messageLoading, messageFollowPaused, messageBrowseTime, messageRange,
+  searchKeyword, searching, searchPattern, followMessageList, activeSenderFilter,
+  pauseMessageFollow, manualMessageScroll, syncMessageBrowseTime, jumpMessages, resumeMessageFollow,
+  startMessageNavigation, previewMessageNavigation, stopMessageDrag, shouldFollowPlayback,
+  loadMessages, loadMessagePage, searchChanged, changeGiftList, clearMessageSearch,
+  resetMessageKey, invalidateFeed, cancelPendingFollow, finishMessageScrub, closeMessageBrowser
+}=useMessageBrowser({
+  selected, selectionReady, selectionVersion:()=>selectionGeneration, duration, position, scrubbing,
+  danmakuVisible, messageMenu, modal, modalBusy, senderFilter, lotteryTarget, lotteryEditing,
+  refreshLotteryDetail, tell, visibleMessages
+});
+const {
+  exportMode, exportGifts, exportDirectory, savedExportDirectory, exportScope, exportTarget,
+  exportRanges, exportExcluded, versionDescription, exportCategory, exportDuration, exportBlock,
+  fullExportBlock, openExport, openFullExport, browseFolder, commitExportDirectory, openFolder, exportClip
+}=useExportDialog({
+  state, selected, selectedRanges, activeSession, edit, modal, modalBusy, tell, refresh, closeContext
+});
+const {
+  expandedSettings, openSettingsSection, openSettings, openCleanup, openUpdateSettings, openAbout
+}=useSettingsNavigation({
+  state, modal, savedExportDirectory, exportDirectory, closeActionError
+});
+let messageTimer,signalsTimer,noticeTimer,detailBusy=false,detailRefreshedAt=0,selectionGeneration=0;
+let overlayRequest=0,signalRequest=0,signalController=null,lastSignalKey='',lastSignalAt=0;
 let windowSignalTimer=null,lastWindowRequestAt=0,disposing=false;
 let jobPreviewRequest=0;
 
 
-function parse(text){
-  const fields=text.split(':');
-  if(fields.length===4&&fields.every(field=>/^\d+$/.test(field))){
-    const [hours,minutes,seconds,frame]=fields.map(Number),second=hours*3600+minutes*60+seconds;
-    const time=frameTimePosition(second,frame,frameRateAt(second));
-    if(minutes<60&&seconds<60&&Number.isFinite(time))return time;
-  }
-  const values=fields.map(Number);
-  if(fields.length<=3&&fields.every(field=>field.trim())&&values.every(value=>Number.isFinite(value)&&value>=0)){
-    const time=values.reduce((a,b)=>a*60+b,0);if(Number.isFinite(time))return time;
-  }
-  throw new Error(ui.workbench.视频时间格式错误);
-}
 function materialPeople(session,kind){const names=[...new Set((session.monitoring||[]).filter(entry=>(entry.kind==='guest'?'guest':'self')===kind).map(entry=>entry.name).filter(Boolean))];return names.join('、')||(kind==='guest'?'':session.hostName||'');}
 function date(text){return new Date(text).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'});}
 function categoryPath(root,category){const raw=String(root||''),value=raw.replace(/[\\/]+$/,'');return raw?value+(raw.startsWith('/')?'/':'\\')+category:category;}
 function formatBytes(bytes,base=1024){const size=Math.max(0,Number(bytes)||0);if(size<base)return size+ui.workbench.字节;const units=['KB','MB','GB','TB'],power=Math.min(4,Math.floor(Math.log(size)/Math.log(base)));return (size/base**power).toFixed(1)+' '+units[power-1];}
 function closeModal(){if(modalBusy.value)return;if(['danmaku-style','recording-style','cookie-management'].includes(modal.value)){const selector=modal.value==='cookie-management'?'.open-cookie-management':modal.value==='danmaku-style'?'.open-danmaku-style':'.open-recording-style';modal.value='settings';void nextTick(()=>document.querySelector(selector)?.focus());return;}const kind=modal.value,messageId=kind==='edit-message'?messageEditTarget.value?.message.id:kind==='lottery'?lotteryTarget.value?.record.id:null,jobId=kind==='delete-job'?jobDeleteTarget.value?.id:kind==='retry-save'?retrySaveTarget.value?.id:null;modal.value='';if(kind==='choose-room'){roomChoice.value=null;roomChoicePlatform.value='';roomChoiceError.value='';void nextTick(()=>document.querySelector('.room-form input')?.focus());}if(kind==='delete-job'){jobPreviewRequest++;jobPreviewLoading.value=false;jobDeleteTarget.value=null;jobDeletePreview.value=null;}if(kind==='retry-save'){retrySaveTarget.value=null;retrySaveError.value='';}if(kind==='lottery'){lotteryDetailRequest++;lotteryLoading.value=false;lotteryTarget.value=null;lotteryError.value='';if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.lottery-open')?.focus());}if(kind==='edit-message'){messageEditTarget.value=null;if(messageId)void nextTick(()=>document.getElementById('danmaku-'+messageId)?.querySelector('.message-more')?.focus());}if(jobId)void nextTick(()=>focusJob(jobId));}
 function dismissModalFromBackdrop(event){if(modalBackdropClick.click(event))closeModal();}
-function fullExportBlock(session){return session.status!=='finished'?ui.workbench.录制或整理完成后才能导出完整素材:!(session.duration>0)?ui.workbench.这份素材暂时没有可导出的画面:'';}
 function preparationFor(id){return state.value.preparation?.items?.find(item=>item.session===id);}
 function preparationStatus(entry){return ({queued:ui.workbench.等待预处理,preparing:ui.workbench.正在后台预处理,waiting:ui.workbench.暂缓预处理,paused:ui.workbench.预处理已暂停,ready:ui.workbench.预处理已完成,exported:ui.workbench.完整弹幕版已导出,error:ui.workbench.预处理未完成})[entry?.status]||ui.workbench.尚未预处理;}
 function preparationAction(entry){if(['space','disk','capacity','space-check'].includes(entry?.reason))return 'resume';return ['queued','preparing','waiting'].includes(entry?.status)?'pause':['ready','exported'].includes(entry?.status)?null:['paused','error'].includes(entry?.status)?'resume':'start';}
@@ -301,6 +303,25 @@ async function acknowledgeCacheWarning(manage=false){
   }catch(error){if(!disposing)cacheWarningError.value=error.message;}
   finally{cacheWarningBusy.value=false;}
 }
+async function acknowledgeCookieWarning(manage=false){
+  if(cookieWarningBusy.value||!cookieWarning.value)return;
+  const {platform,generation}=cookieWarning.value;
+  cookieWarningBusy.value=true;
+  cookieWarningError.value='';
+  try{
+    await api(`platform-credentials/${platform}/acknowledge`,{generation});
+    if(disposing)return;
+    dismissedCookieWarnings.set(platform,generation);
+    state.value.credentialWarnings=state.value.credentialWarnings?.filter(warning=>warning.platform!==platform||warning.generation!==generation);
+    if(manage){
+      openSettings();
+      expandedSettings.value.advanced=true;
+      cookieSettingsPlatform.value=platform;
+      modal.value='cookie-management';
+    }
+  }catch(error){if(!disposing)cookieWarningError.value=error.message;}
+  finally{cookieWarningBusy.value=false;}
+}
 async function clearPreparationCache(){
   if(preparationSettingsBusy.value)return;preparationSettingsBusy.value=true;preparationSettingsError.value='';
   try{applyPreparation(await api('preparation/cache/clear',{}));tell(ui.workbench.缓存清理成功,'success');}
@@ -332,7 +353,7 @@ function queueWindowSignals(immediate=false){
 }
 function endTimelineDrag(){activeMarker.value=null;scrubbing.value=false;timelineDragging.value=false;queueWindowSignals(true);}
 function resetTimelineNavigation(){clearTimeout(windowSignalTimer);windowSignalTimer=null;timelineDragging.value=false;timelineAutoFollow.value=true;activeMarker.value=null;timelineWindow.value=null;}
-function invalidateMessages(){stopMessageDrag();messageRequest++;overlayRequest++;dmBusy=false;overlayBusy=false;lastMessageKey='';overlayWindow=null;}
+function invalidateMessages(){invalidateFeed();overlayRequest++;overlayBusy=false;overlayWindow=null;}
 let pendingSignalKey='';
 function invalidateSignals(clear=false){signalRequest++;signalController?.abort();signalController=null;signalsLoading.value=false;lastSignalKey='';if(clear){pendingSignalKey='';signals.value=null;signalsError.value='';}}
 async function loadSignals(force=false){
@@ -349,50 +370,8 @@ async function loadSignals(force=false){
 }
 function signalsVisibility(){if(document.hidden){clearTimeout(windowSignalTimer);windowSignalTimer=null;invalidateSignals();}else void loadSignals(true);}
 
-function readMark(which){
-  if(!selectionReady.value)throw new Error(ui.workbench.请等待素材加载完成);
-  if(!(which==='start'?startMarked.value:endMarked.value))throw new Error(ui.workbench.请填写视频时间);
-  if(positionMode.value==='recording')return positionAtRecordingInput(which==='start'?startDateText.value:endDateText.value,activeSession.value,detail.value?.sources||[],duration.value,which==='start'?startExact.value:endExact.value);
-  const t=videoMark(which);if(t>duration.value+.000001)throw new Error(ui.workbench.超出已录制范围);return Math.min(t,duration.value);
-}
-function videoMark(which){
-  const text=(which==='start'?startText.value:endText.value).trim();
-  if(!text)throw new Error(ui.workbench.请填写视频时间);
-  const exact=which==='start'?startExact.value:endExact.value;
-  return Number.isFinite(exact)?exact:parse(text);
-}
-function markerTime(which,marked){if(!marked||!selected.value)return null;try{return readMark(which);}catch{return null;}}
-function inputMark(which,text){
-  const marked=!!text.trim(),recording=positionMode.value==='recording';
-  if(which==='start'){startMarked.value=marked;startExact.value=null;(recording?startDateText:startText).value=text;}
-  else{endMarked.value=marked;endExact.value=null;(recording?endDateText:endText).value=text;}
-}
-function markText(which,t){
-  const stamp=recordingTimeAt(t,activeSession.value,detail.value?.sources||[]),dateText=Number.isFinite(stamp)?toRecordingInput(stamp,false):'';
-  if(which==='start'){startMarked.value=true;startExact.value=t;startText.value=formatPosition(t);startDateText.value=dateText;}
-  else{endMarked.value=true;endExact.value=t;endText.value=formatPosition(t);endDateText.value=dateText;}
-}
-function setPositionMode(mode){
-  if(mode===positionMode.value||!selected.value||mode==='recording'&&!canUseRecordingTime.value)return;
-  for(const which of ['start','end']){
-    if(!(which==='start'?startMarked.value:endMarked.value))continue;
-    try{markText(which,readMark(which));}catch{}
-  }
-  positionMode.value=mode;
-}
-function commitMark(which){
-  if(!(which==='start'?startMarked.value:endMarked.value))return;
-  try{const t=readMark(which);markText(which,t);void playFrom(markPreviewPosition(t,detail.value?.sources||[]),false);}catch(e){tell(e.message);}
-}
-function setMark(which){if(canPreview.value)markText(which,position.value);}
-function dragMark(which,time){markText(which,time);}
-function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
-function clearDraftMarks(){
-  startMarked.value=false;endMarked.value=false;startExact.value=null;endExact.value=null;
-  startText.value='';endText.value='';startDateText.value='';endDateText.value='';
-}
 function resetSelection(){
-  previewTransport?.dispose();selectionGeneration++;generation++;senderFilter.value=null;selected.value=null;detail.value=null;
+  disposePreview();selectionGeneration++;invalidatePreview();senderFilter.value=null;selected.value=null;detail.value=null;
   invalidateMessages();invalidateSignals(true);resetTimelineNavigation();pausePreview();
   previewUrl.value='';loading.value=false;previewEnded.value=false;previewBase.value=0;scrubbing.value=false;
   edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;
@@ -554,8 +533,8 @@ async function choose(id){
   if(selected.value===id){closeContext();resetSelection();return;}
   const version=++selectionGeneration;senderFilter.value=null;
   detail.value=null;invalidateMessages();invalidateSignals(true);resetTimelineNavigation();
-  previewTransport?.dispose();overlayWindow=null;closeContext();clearDraftMarks();generation++;video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
-  try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;if(!canUseRecordingTime.value)positionMode.value='video';query.value='';lastMessageKey='';await Promise.all([loadMessages(true),loadOverlay()]);}
+  disposePreview();overlayWindow=null;closeContext();clearDraftMarks();invalidatePreview();video.value?.pause();previewUrl.value='';isPlaying.value=false;loading.value=false;selected.value=id;detail.value=null;edit.value={revision:0,ranges:[],excluded:[],undo:[]};messages.value=[];giftRows.value=[];lotteryRows.value=[];giftFeed.value=[];overlayFeed.value=[];position.value=0;previewEnded.value=false;
+  try{const result=await api(`sessions/${id}`);if(selected.value!==id||version!==selectionGeneration)return;detail.value=result;edit.value=result.edit;if(!canUseRecordingTime.value)positionMode.value='video';query.value='';resetMessageKey();await Promise.all([loadMessages(true),loadOverlay()]);}
   catch(e){if(version===selectionGeneration)tell(e.message);}
 }
 async function save(){if(saving.value||!selectionReady.value)return false;const id=selected.value,version=selectionGeneration;saving.value=true;try{const result=await api(`sessions/${id}/edit`,{...edit.value,filterLottery:true});if(selected.value===id&&version===selectionGeneration){edit.value=result;return true;}return false;}catch(e){tell(e.message);if(selected.value===id&&version===selectionGeneration){const result=await api(`sessions/${id}`);if(selected.value===id&&version===selectionGeneration)edit.value=result.edit;}return false;}finally{saving.value=false;}}
@@ -565,66 +544,19 @@ async function addRoom(){
     const result=await api('anchors',{url:entered});if(disposing)return;
     if(result.needsSelection){roomChoice.value={...result,entered};roomChoicePlatform.value='';roomChoiceError.value='';modal.value='choose-room';await nextTick();document.querySelector('.room-choice-options input')?.focus();return;}
     if(roomUrl.value.trim()===entered)roomUrl.value='';tell(ui.workbench.主播已添加已开启自动监控,'success');await refresh();
+    if(!disposing&&result.platform==='xiaohongshu'&&result.needsCookie)modal.value='xiaohongshu-cookie-notice';
   }catch(e){if(!disposing)tell(e.message);}finally{addingRoom.value=false;}
 }
 async function confirmRoomChoice(){
   const candidate=roomChoice.value?.candidates.find(room=>room.platform===roomChoicePlatform.value);if(modalBusy.value||!candidate)return;
   const entered=roomChoice.value.entered;modalBusy.value=true;roomChoiceError.value='';
   try{
-    await api('anchors',{url:candidate.url});if(disposing)return;
+    const result=await api('anchors',{url:candidate.url});if(disposing)return;
     if(roomUrl.value.trim()===entered)roomUrl.value='';modal.value='';roomChoice.value=null;roomChoicePlatform.value='';tell(ui.workbench.主播已添加已开启自动监控,'success');await refresh();
+    if(!disposing&&result.platform==='xiaohongshu'&&result.needsCookie)modal.value='xiaohongshu-cookie-notice';
   }catch(e){if(!disposing)roomChoiceError.value=e.message;}finally{modalBusy.value=false;}
 }
 async function roomAction(anchor,action,data={}){if(roomBusyIds.value.includes(anchor.key))return;roomBusyIds.value.push(anchor.key);try{await api(`anchors/${anchor.key}/${action}`,data);await refresh();}catch(e){tell(e.message);}finally{roomBusyIds.value=roomBusyIds.value.filter(id=>id!==anchor.key);}}
-function containsTime(ranges,time){for(let i=0;i<ranges.length;i++)if(time>=ranges.start(i)&&time<ranges.end(i)-.05)return true;return false;}
-async function playFrom(time,play=true,{allowTail=false}={}){
-  if(!canPreview.value)return;
-  const available=detail.value?.sources||[];let target=Math.max(0,Math.min(time,Math.max(0,duration.value-(allowTail?0:.1))));
-  let s=available.find(x=>x.start<=target+.02&&x.start+x.duration>=target-.02);
-  if(!s){s=available.find(x=>x.start>target);if(!s){tell(ui.workbench.该位置暂时没有录制画面);return;}target=s.start;tell(ui.workbench.已跳过直播断流的空缺区间,'success');}
-  const player=video.value,version=++generation;
-  // Paused seeks must update the controls immediately, including while buffering.
-  if(!play)pausePreview();
-  const local=target-previewBase.value;
-  // Growing fragmented MP4 can have buffered data but an empty seekable range.
-  if(player&&previewUrl.value&&!previewEnded.value&&containsTime(player.buffered,local)&&containsTime(player.seekable,local)){
-    player.currentTime=local;position.value=target;
-    if(play){isPlaying.value=true;await player.play().catch(e=>{if(version===generation&&e.name!=='AbortError'){isPlaying.value=false;tell(e.message);}});}
-    return;
-  }
-  previewBase.value=target;position.value=target;loading.value=true;previewEnded.value=false;isPlaying.value=play;void loadOverlay();
-  previewTransport?.dispose();
-  previewTransport=previewStream(`/api/sessions/${selected.value}/preview?start=${target.toFixed(4)}&v=${version}`,{client:previewClient,sequence:version,onError(error){if(version===generation){loading.value=false;isPlaying.value=false;previewEnded.value=true;tell(error.message);}}});
-  previewUrl.value=previewTransport.url;
-  await nextTick();if(version!==generation)return;
-  video.value.load();applyPreviewAudio();previewTransport.start();
-  if(play)await video.value.play().catch(e=>{if(version===generation&&e.name!=='AbortError'){isPlaying.value=false;loading.value=false;tell(ui.workbench.预览尚未就绪请稍后重试);}});
-}
-function applyPreviewAudio(){const player=video.value;if(!player)return;player.volume=previewVolume.value;player.muted=previewMuted.value||previewVolume.value===0;}
-function rememberPreviewAudio(){const volume=previewVolume.value>0?previewVolume.value:previewVolumeHold;try{localStorage.setItem('preview-audio',JSON.stringify({volume,muted:previewMuted.value}));}catch{}}
-function togglePreviewMute(){if(previewMuted.value||previewVolume.value===0){previewMuted.value=false;if(!(previewVolume.value>0))previewVolume.value=previewVolumeHold>0?previewVolumeHold:1;}else{previewVolumeHold=previewVolume.value;previewMuted.value=true;}applyPreviewAudio();rememberPreviewAudio();}
-function setPreviewVolume(event){const value=Math.min(1,Math.max(0,Number(event.target.value)/100));if(value>0){previewVolume.value=value;previewVolumeHold=value;previewMuted.value=false;}else{previewVolumeHold=previewVolumeDragging&&previewVolumeAtDrag>0?previewVolumeAtDrag:previewVolume.value>0?previewVolume.value:previewVolumeHold;previewVolume.value=previewVolumeHold>0?previewVolumeHold:1;previewMuted.value=true;}applyPreviewAudio();rememberPreviewAudio();}
-const previewVolumeOpen=ref(false);
-let previewVolumeInside=false,previewVolumeDragging=false,previewVolumeAtDrag=1;
-function openPreviewVolume(){previewVolumeInside=true;previewVolumeOpen.value=true;}
-function leavePreviewVolume(){previewVolumeInside=false;if(!previewVolumeDragging)closePreviewVolume();}
-function closePreviewVolume(){previewVolumeOpen.value=false;const active=document.activeElement;if(active instanceof HTMLElement&&active.closest('.preview-volume'))active.blur();}
-function previewVolumeDown(){previewVolumeDragging=true;previewVolumeAtDrag=previewVolume.value>0?previewVolume.value:previewVolumeHold;}
-function previewVolumeUp(){if(!previewVolumeDragging)return;previewVolumeDragging=false;if(!previewVolumeInside)closePreviewVolume();}
-function pausePreview(){isPlaying.value=false;video.value?.pause();}
-function releasePagePreview(){previewTransport?.dispose();generation++;pausePreview();loading.value=false;previewEnded.value=true;}
-async function togglePlay(){if(isPlaying.value){pausePreview();return;}if(!previewUrl.value||previewEnded.value){await playFrom(position.value,true);return;}const version=generation;isPlaying.value=true;await video.value.play().catch(e=>{if(version===generation&&e.name!=='AbortError'){isPlaying.value=false;tell(ui.workbench.暂时无法播放请重新定位后重试);}});}
-function played(){isPlaying.value=!!video.value&&!video.value.paused;}
-function loaded(){loading.value=false;applyPreviewAudio();if(!isPlaying.value)video.value?.pause();}
-function paused(){if(video.value?.paused&&!loading.value&&!video.value.ended)isPlaying.value=false;}
-function updateTime(){if(video.value&&!scrubbing.value)position.value=Math.min(duration.value,previewBase.value+video.value.currentTime);}
-function step(direction){pausePreview();void playFrom(position.value+direction/fps.value,false,{allowTail:true});}
-function returnToLatest(){
-  const target=latestPreviewPosition(detail.value?.sources||[],duration.value);
-  if(target!==null)void playFrom(target,true,{allowTail:true});
-}
-function playNext(){const available=detail.value?.sources||[];const same=available.find(s=>s.start<=position.value&&s.start+s.duration>position.value+.15);if(same){void playFrom(position.value+1/fps.value,true);return;}const next=available.find(s=>s.start>previewBase.value+.1&&s.start>=position.value-.3&&s.duration>0);if(next)void playFrom(next.start,true);}
-function ended(){previewEnded.value=true;loading.value=false;if(isPlaying.value)playNext();}
 async function addRange(){if(saving.value||!canPreview.value||draftDuration.value===null)return;const id=selected.value,version=selectionGeneration;try{const start=readMark('start'),end=readMark('end');if(start<0||end<=start||end>duration.value+.05)throw new Error(ui.workbench.请选择已录制范围内的起点和终点);edit.value.ranges.push({start,end:Math.min(end,duration.value),selected:true});if(await save()&&selected.value===id&&version===selectionGeneration)clearDraftMarks();}catch(e){tell(e.message);}}
 async function selectRange(index,value){edit.value.ranges[index].selected=value;await save();}
 async function selectAllRanges(value){for(const range of edit.value.ranges)range.selected=value;await save();}
@@ -632,53 +564,11 @@ async function removeRange(index){edit.value.ranges.splice(index,1);await save()
 async function moveRange(index,direction){const list=edit.value.ranges,[item]=list.splice(index,1);list.splice(index+direction,0,item);await save();}
 async function toggleMessage(message){if(message.type==='lottery')return;const id=selected.value,version=selectionGeneration;if(excluded.value.has(message.id))edit.value.excluded=edit.value.excluded.filter(x=>x!==message.id);else {edit.value.excluded.push(message.id);edit.value.undo.push(message.id);}await save();if(id===selected.value&&version===selectionGeneration)void loadSignals(true);}
 async function undoMessage(){const sessionId=selected.value,version=selectionGeneration,id=edit.value.undo.pop();if(!id)return;edit.value.excluded=edit.value.excluded.filter(x=>x!==id);await save();if(sessionId===selected.value&&version===selectionGeneration)void loadSignals(true);}
-let automaticMessageRequest=false;
-function pauseMessageFollow(){if(followMessageList.value&&!messageFollowPaused.value){messageWindowAnchor.value=position.value;messageFollowPaused.value=true;}if(automaticMessageRequest&&dmBusy){messageRequest++;dmBusy=false;messageLoading.value=false;}}
-// Keep the user's rail target through async loading and virtual-row measurement.
-// Only an explicit list gesture or resuming follow can hand control back.
-function startMessageNavigation(){messageNavigationPinned.value=true;pauseMessageFollow();}
-function manualMessageScroll(){stopMessageDrag();messageNavigationPinned.value=false;pauseMessageFollow();}
-function syncMessageBrowseTime(time){
-  if(!messageNavigationPinned.value&&(!followMessageList.value||messageFollowPaused.value))messageBrowseTime.value=time;
-}
-function jumpMessages(time){stopMessageDrag();startMessageNavigation();const target=messageTime(time,duration.value);messageBrowseTime.value=target;void loadMessages(true,undefined,target);}
-function resumeMessageFollow(){stopMessageDrag();messageNavigationPinned.value=false;messageFollowPaused.value=false;void loadMessages(true);}
-let messageDragFrame=0,messageDragRequest=null;
-function stopMessageDrag(){
-  cancelAnimationFrame(messageDragFrame);messageDragFrame=0;
-  messageDragRequest?.abort();messageDragRequest=null;
-}
-function previewMessageNavigation(time){
-  if(!selectionReady.value||!danmakuVisible.value||document.hidden)return;
-  const target=messageTime(time,duration.value);messageBrowseTime.value=target;
-  const rows=visibleMessages.value;
-  if(rows[0]?.time<=target&&target<=rows.at(-1)?.time){
-    stopMessageDrag();messageList.value?.scrollToTime(target,true);return;
-  }
-  if(messageDragFrame||messageDragRequest)return;
-  // Reuse cached rows and keep one page request in flight while dragging.
-  messageDragFrame=requestAnimationFrame(async()=>{
-    messageDragFrame=0;
-    const controller=new AbortController();
-    const requested=messageBrowseTime.value;
-    messageDragRequest=controller;
-    try{await loadMessages(true,undefined,requested,controller.signal);}
-    finally{
-      if(messageDragRequest===controller){
-        messageDragRequest=null;
-        if(messageBrowseTime.value!==requested)previewMessageNavigation(messageBrowseTime.value);
-      }
-    }
-  });
-}
-function shouldFollowPlayback(){
-  return followMessageList.value&&!messageFollowPaused.value&&!messageMenu.value&&!modal.value&&danmakuVisible.value;
-}
 function startPlaybackScrub(){
   scrubbing.value=true;
   timelineDragging.value=true;
   timelineAutoFollow.value=false;
-  if(shouldFollowPlayback()&&dmBusy){messageRequest++;dmBusy=false;messageLoading.value=false;}
+  cancelPendingFollow();
 }
 function movePlaybackScrub(time){
   position.value=time;
@@ -687,71 +577,9 @@ function movePlaybackScrub(time){
 function finishPlaybackScrub(){
   stopMessageDrag();
   endTimelineDrag();
-  if(shouldFollowPlayback()){
-    messageBrowseTime.value=position.value;
-    void loadMessages(true,undefined,position.value);
-  }
+  finishMessageScrub();
 }
-function assignFeed(rows){messages.value=rows.filter(row=>row.type==='d');giftRows.value=rows.filter(row=>row.type!=='d'&&row.type!=='lottery');lotteryRows.value=rows.filter(row=>row.type==='lottery');}
-async function loadMessages(force=false,direction,at,dragSignal){
-  if(!selectionReady.value||!danmakuVisible.value||document.hidden)return;
-  if(dmBusy){if(!force)return;messageRequest++;dmBusy=false;}
-  const scope={...messageRange.value},target=at!==undefined?Math.max(scope.from,Math.min(scope.to,at)):followMessageList.value?messageTime(position.value,duration.value):undefined;
-  if(!force&&!direction&&(queryTimer||scrubbing.value||messageFollowPaused.value||messageMenu.value||modal.value))return;
-  const id=selected.value,version=selectionGeneration;
-  const mode=searching.value?'search':showGiftList.value?'gifts':'chat';
-  const key=JSON.stringify([id,followMessageList.value?Math.floor(position.value/5):'all',searchKeyword.value,mode,activeSenderFilter.value]);
-  if(!force&&!direction&&key===lastMessageKey)return;
-  const request=++messageRequest;dmBusy=true;messageLoading.value=true;automaticMessageRequest=!force&&!direction;
-  const anchor=messageList.value?.capture(),current=()=>!dragSignal?.aborted&&request===messageRequest&&version===selectionGeneration&&id===selected.value;
-  try{
-    const params=new URLSearchParams({q:searchKeyword.value,gifts:mode==='chat'?'0':'1',onlyGifts:mode==='gifts'?'1':'0',from:String(scope.from),to:String(scope.to)});
-    if(activeSenderFilter.value)params.set('sender',JSON.stringify(activeSenderFilter.value));
-    if(direction){const row=direction==='before'?visibleMessages.value[0]:visibleMessages.value.at(-1);if(row)params.set('cursor',JSON.stringify({time:row.time,key:feedKey(row)}));params.set('direction',direction);}
-    else if(target!==undefined)params.set('at',String(target));
-    const result=await api(`sessions/${id}/feed?${params}`,undefined,{signal:dragSignal});if(!current())return;
-    let rows=result.rows;
-    if(!dragSignal&&!direction&&followMessageList.value){
-      // Follow mode queries only the current +/- 60 second window.
-      // Dense windows stay paginated; no chat timestamp sets media duration.
-      while(result.hasBefore&&rows.length<2400&&rows[0]?.time>scope.from){
-        params.delete('at');params.set('direction','before');params.set('cursor',JSON.stringify(result.before));
-        const previous=await api(`sessions/${id}/feed?${params}`);if(!current())return;
-        rows=[...previous.rows,...rows];result.before=previous.before;result.hasBefore=previous.hasBefore;if(!previous.rows.length)break;
-      }
-    }
-    if(!dragSignal&&!direction&&followMessageList.value){
-      while(result.hasAfter&&rows.length+300<=3000&&rows.at(-1)?.time<scope.to){
-        params.delete('at');params.set('direction','after');params.set('cursor',JSON.stringify(result.after));
-        const next=await api(`sessions/${id}/feed?${params}`);if(!current())return;
-        rows=[...rows,...next.rows];result.after=next.after;result.hasAfter=next.hasAfter;if(!next.rows.length)break;
-      }
-    }
-    if(direction){
-      const merged=new Map([...visibleMessages.value,...rows].map(row=>[feedKey(row),row]));
-      rows=[...merged.values()].sort((a,b)=>a.time-b.time||(feedKey(a)<feedKey(b)?-1:1));
-      const page={...messagePage.value};
-      if(direction==='before'){page.before=result.before||page.before;page.hasBefore=result.hasBefore;if(rows.length>3000){rows=rows.slice(0,3000);page.hasAfter=true;}}
-      else {page.after=result.after||page.after;page.hasAfter=result.hasAfter;if(rows.length>3000){rows=rows.slice(-3000);page.hasBefore=true;}}
-      const cursor=row=>row?{time:row.time,key:`${row.type==='d'?'d':row.type==='lottery'?'l':'g'}:${row.id}`}:null;
-      page.before=cursor(rows[0]);page.after=cursor(rows.at(-1));messagePage.value=page;
-    }else messagePage.value={before:result.before,after:result.after,hasBefore:result.hasBefore,hasAfter:result.hasAfter};
-    assignFeed(rows);lastMessageKey=key;
-    await nextTick();if(!current())return;
-    if(at!==undefined){messageList.value?.scrollToTime(target,!!dragSignal);}else if(direction||messageFollowPaused.value)await messageList.value?.restore(anchor);else if(followMessageList.value)followMessagePosition();else messageList.value?.reset();
-    const lottery=lotteryTarget.value,summary=lottery&&lotteryRows.value.find(x=>x.id===lottery.record.id);
-    if(modal.value==='lottery'&&!lotteryEditing.value&&!modalBusy.value&&summary&&(summary.state!==lottery.record.state||summary.winnerCount!==lottery.record.winnerCount||summary.revision!==lottery.record.revision))void refreshLotteryDetail();
-  }catch(e){if(current())tell(e.message);}finally{if(request===messageRequest){dmBusy=false;messageLoading.value=false;}}
-}
-function loadMessagePage(direction){pauseMessageFollow();return loadMessages(false,direction);}
 function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user&&m.senderId===b[i].senderId&&m.senderPlatform===b[i].senderPlatform&&m.edited===b[i].edited&&m.originalUser===b[i].originalUser&&m.originalText===b[i].originalText);}
-function followMessagePosition(){
-  if(scrubbing.value||!shouldFollowPlayback())return;
-  messageBrowseTime.value=position.value;messageList.value?.scrollToTime(position.value);
-}
-watch([position,followMessageList,danmakuVisible],followMessagePosition,{flush:'post'});
-watch(danmakuVisible,value=>{if(value)void loadMessages(true);});
-watch(selected,()=>{messageFollowPaused.value=false;messageWindowAnchor.value=0;messageBrowseTime.value=0;messageNavigationPinned.value=false;messagePage.value={hasBefore:false,hasAfter:false};});
 let giftFeedBusy=false;
 async function loadGiftOverlay(){
   if(!previewGifts.value||!selectionReady.value||giftFeedBusy){if(!previewGifts.value)giftFeed.value=[];return;}
@@ -783,55 +611,8 @@ watch(()=>[state.value.updates?.status,state.value.updates?.autoInstall,state.va
   catch(error){tell(error.message);if(!/已有任务|等待当前|有录制任务/.test(error.message))await api('updates/cancel',{}).catch(()=>{});}
   finally{applyingUpdate=false;}
 });
-function openUpdateSettings() { return openSettingsSection('#settings-updates-title', { focus: '#settings-updates-title' }); }
-function openAbout() { return openSettingsSection('#settings-about-title', { focus: '#settings-about-title' }); }
-async function openSettingsSection(selector, { group, focus } = {}) {
-  openSettings();
-  if (group) expandedSettings.value[group] = true;
-  await nextTick();
-  document.querySelector(selector)?.scrollIntoView({ block: 'center' });
-  if (focus) document.querySelector(focus)?.focus({ preventScroll: focus === selector });
-}
-function openSettings() {
-  const current = state.value.paths?.exports || '';
-  savedExportDirectory.value = current;
-  exportDirectory.value = current;
-  closeActionError.value = '';
-  expandedSettings.value = {};
-  modal.value = 'settings';
-}
 async function applyDanmakuSettings(result){const rateChanged=state.value.danmakuPerSecond!==result.danmakuPerSecond;state.value={...state.value,highlightStyle:result.highlightStyle,danmakuStyle:result.danmakuStyle,danmakuPerSecond:result.danmakuPerSecond,danmakuFont:result.danmakuFont};if(rateChanged){invalidateMessages();invalidateSignals(true);await Promise.all([loadMessages(true),loadOverlay()]);}}
 async function setCloseAction(value){if(closeActionBusy.value)return;closeActionBusy.value=true;closeActionDraft.value=value;closeActionError.value='';try{const result=await api('settings',{closeAction:value});state.value={...state.value,closeAction:result.closeAction};await refresh();}catch(e){closeActionError.value=e.message;}finally{closeActionDraft.value=null;closeActionBusy.value=false;}}
-function openExport(){if(!selected.value||!selectedRanges.value.length){tell(ui.workbench.请先勾选至少一个选段);return;}exportScope.value='clips';exportTarget.value={id:selected.value,title:activeSession.value?.title};exportRanges.value=selectedRanges.value.map(r=>({start:r.start,end:r.end}));exportExcluded.value=edit.value.excluded.length;exportMode.value='dual';exportGifts.value=state.value.giftStyle?.export===true;exportDirectory.value=state.value.paths?.exports||'';modal.value='export';}
-function openFullExport(session){const latest=state.value.sessions.find(s=>s.id===session.id),blocked=latest?fullExportBlock(latest):ui.workbench.素材已被删除;if(blocked){tell(blocked);return;}closeContext();exportScope.value='full';exportTarget.value={id:latest.id,title:latest.title};exportRanges.value=[];exportExcluded.value=0;exportMode.value='dual';exportGifts.value=state.value.giftStyle?.export===true;exportDirectory.value=state.value.paths?.exports||'';modal.value='export';}
-async function browseFolder(){try{const value=await pickExportFolder(exportDirectory.value);if(!value)return;exportDirectory.value=value;if(modal.value==='settings')await commitExportDirectory();}catch(e){tell(e.message);}}
-async function commitExportDirectory(){if(modal.value!=='settings'||modalBusy.value)return;const value=exportDirectory.value.trim();if(!value){if(exportDirectory.value!==savedExportDirectory.value)tell(ui.workbench.请填写导出文件夹的完整路径);return;}if(value===savedExportDirectory.value)return;modalBusy.value=true;try{const result=await api('settings',{exportDirectory:value});const saved=result.paths?.exports||value;savedExportDirectory.value=saved;exportDirectory.value=saved;await refresh();tell(ui.workbench.默认导出文件夹已保存,'success');}catch(e){tell(e.message);}finally{modalBusy.value=false;}}
-async function openFolder(input){try{await api('folders/open',input);}catch(e){tell(e.message);}}
-function searchChanged(){
-  stopMessageDrag();
-  messageNavigationPinned.value=false;
-  messageBrowseTime.value=followMessageList.value?position.value:0;
-  lastMessageKey='';
-  messageFollowPaused.value=false;
-  messageRequest++;
-  dmBusy=false;
-  assignFeed([]);
-  messagePage.value={hasBefore:false,hasAfter:false};
-  messageLoading.value=selectionReady.value;
-  clearTimeout(queryTimer);
-  queryTimer=setTimeout(()=>{queryTimer=null;void loadMessages(true);},250);
-}
-function changeGiftList(enabled){
-  if(searching.value||showGiftList.value===enabled)return;
-  showGiftList.value=enabled;
-  searchChanged();
-}
-function clearMessageSearch(){
-  query.value='';
-  searchChanged();
-  document.getElementById('message-search')?.focus();
-}
-async function exportClip(){if(modalBusy.value)return;if(exportBlock.value){tell(exportBlock.value);return;}modalBusy.value=true;const target=exportTarget.value.id,scope=exportScope.value;try{const result=await api(`sessions/${target}/export`,{scope,mode:exportMode.value,giftsEnabled:exportMode.value!=='clean'&&exportGifts.value,...(scope==='clips'?{ranges:exportRanges.value}:{}),exportDirectory:exportDirectory.value});modal.value='';tell(scope==='full'?ui.workbench.完整素材已加入导出队列:ui.workbench.导出任务已创建(result.jobs?.length??1),'success');await refresh();}catch(e){tell(e.message);}finally{modalBusy.value=false;}}
 function onKey(e){if(e.key==='Escape'){const jobId=jobMenu.value?.id;closeContext();closeModal();if(jobId)focusJob(jobId);return;}if(sessionMenu.value||jobMenu.value||messageMenu.value)return;if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||modal.value)return;if(e.code==='Space'){e.preventDefault();void togglePlay();}else if(e.code==='ArrowLeft'){e.preventDefault();step(-1);}else if(e.code==='ArrowRight'){e.preventDefault();step(1);}else if(e.key.toLowerCase()==='i')setMark('start');else if(e.key.toLowerCase()==='o')setMark('end');}
 watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(true);});
 watch(()=>[selected.value,previewUrl.value],()=>{recordingCameraEvents.value=[];});
@@ -842,7 +623,7 @@ function interactivePriority(){if(Date.now()-lastInteraction<1000||!state.value.
 onMounted(()=>{window.addEventListener('pointerdown',interactivePriority,{passive:true});window.addEventListener('wheel',interactivePriority,{passive:true});stateTransport.start();messageTimer=setInterval(()=>{void loadMessages(false);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);window.addEventListener('blur',modalBackdropClick.reset);});
 onMounted(()=>window.addEventListener('pagehide',releasePagePreview));
 onBeforeUnmount(()=>window.removeEventListener('pagehide',releasePagePreview));
-onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriority);window.removeEventListener('wheel',interactivePriority);previewTransport?.dispose();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();stateTransport.close();clearInterval(messageTimer);clearInterval(signalsTimer);clearTimeout(queryTimer);clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);window.removeEventListener('blur',modalBackdropClick.reset);modalBackdropClick.reset();});
+onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriority);window.removeEventListener('wheel',interactivePriority);disposePreview();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();stateTransport.close();clearInterval(messageTimer);clearInterval(signalsTimer);closeMessageBrowser();clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);window.removeEventListener('blur',modalBackdropClick.reset);modalBackdropClick.reset();});
 </script>
 
 <template>
@@ -865,7 +646,7 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
         </section>
         <section class="recording-section"><div class="section-heading"><h2><Film :size="17"/>{{ ui.workbench.录像素材 }}</h2></div>
           <div v-if="!state.sessions.length" class="rail-empty">{{ ui.workbench.暂无录像素材 }}</div>
-          <div v-for="session in state.sessions" :key="session.id" class="session-item" :class="{selected:selected===session.id}" @contextmenu.prevent="showContext($event,session)" @keydown.shift.f10.prevent="showContext($event,session)" @keydown.context-menu.prevent="showContext($event,session)" ><button type="button" class="session-select" :aria-pressed="selected===session.id" @click="choose(session.id)" :title="selected===session.id?ui.workbench.再次点击取消选中右键管理素材:ui.workbench.点击选择素材右键管理素材"><Film :size="20"/><span><strong :title="session.title||session.hostName">{{ session.title||session.hostName }}</strong><small v-if="session.captureKinds?.length||session.hostName" class="session-origin"><span v-for="kind in session.captureKinds?.length?session.captureKinds:['self']" :key="kind" class="session-origin-group" :title="materialPeople(session,kind)"><span class="session-origin-kind">{{ kind==='guest'?ui.workbench.连麦:ui.workbench.直播 }}</span><span v-if="materialPeople(session,kind)" class="session-origin-name">{{ materialPeople(session,kind) }}</span></span></small><small>{{ date(session.created) }}</small><span class="session-meta"><i v-if="session.status==='recording'" class="live-dot online"/>{{ statusText(session.status) }} · {{ format(session.duration) }}</span></span></button><button type="button" class="icon-button session-more" :aria-label="ui.workbench.素材操作" :title="ui.workbench.素材操作" aria-haspopup="menu" :aria-expanded="sessionMenu?.session.id===session.id" @keydown.stop @click.stop="showContext($event,session)"><MoreHorizontal :size="16"/></button></div>
+          <div v-for="session in state.sessions" :key="session.id" class="session-item" :class="{selected:selected===session.id}" @contextmenu.prevent="showContext($event,session)" @keydown.shift.f10.prevent="showContext($event,session)" @keydown.context-menu.prevent="showContext($event,session)" ><button type="button" class="session-select" :aria-pressed="selected===session.id" @click="choose(session.id)" :title="selected===session.id?ui.workbench.再次点击取消选中右键管理素材:ui.workbench.点击选择素材右键管理素材"><PlatformBadge v-if="session.platform&&session.platform!=='unknown'" :platform="session.platform" compact/><Film v-else :size="20"/><span><strong :title="session.title||session.hostName">{{ session.title||session.hostName }}</strong><small v-if="session.captureKinds?.length||session.hostName" class="session-origin"><span v-for="kind in session.captureKinds?.length?session.captureKinds:['self']" :key="kind" class="session-origin-group" :title="materialPeople(session,kind)"><span class="session-origin-kind">{{ kind==='guest'?ui.workbench.连麦:ui.workbench.直播 }}</span><span v-if="materialPeople(session,kind)" class="session-origin-name">{{ materialPeople(session,kind) }}</span></span></small><small>{{ date(session.created) }}</small><span class="session-meta"><i v-if="session.status==='recording'" class="live-dot online"/>{{ statusText(session.status) }} · {{ format(session.duration) }}</span></span></button><button type="button" class="icon-button session-more" :aria-label="ui.workbench.素材操作" :title="ui.workbench.素材操作" aria-haspopup="menu" :aria-expanded="sessionMenu?.session.id===session.id" @keydown.stop @click.stop="showContext($event,session)"><MoreHorizontal :size="16"/></button></div>
         </section>
         <footer class="library-quick-links"><button type="button" class="library-about-link" aria-haspopup="dialog" @click="openAbout">{{ ui.workbench.联系我们 }}</button></footer>
       </aside>
@@ -1048,7 +829,8 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
       <p v-if="jobRemovalBlock(jobMenuTarget)" class="context-hint">{{ jobRemovalBlock(jobMenuTarget) }}</p>
     </div>
     <CacheWarning v-if="cacheWarningVisible" :usage="formatBytes(state.preparation.cache.usedBytes,1000)" :threshold="cacheWarningDisplayGB" :busy="cacheWarningBusy" :error="cacheWarningError" @acknowledge="acknowledgeCacheWarning"/>
-    <UpdatePrompt :state="state.updates" :blocked="!!modal||!!sessionMenu||!!jobMenu||cacheWarningVisible" @changed="state.updates=$event" @started="tell($event,'success')" @manage="openUpdateSettings"/>
+    <CookieWarning v-if="cookieWarningVisible" :key="cookieWarning.generation" :platform="cookieWarning.platform" :busy="cookieWarningBusy" :error="cookieWarningError" @acknowledge="acknowledgeCookieWarning"/>
+    <UpdatePrompt :state="state.updates" :blocked="!!modal||!!sessionMenu||!!jobMenu||cacheWarningVisible||cookieWarningVisible" @changed="state.updates=$event" @started="tell($event,'success')" @manage="openUpdateSettings"/>
     <div v-if="modal" class="modal-backdrop" @pointerdown.capture="modalBackdropClick.pointerDown" @pointermove.capture="modalBackdropClick.pointerMove" @pointerup.capture="modalBackdropClick.pointerUp" @pointercancel.capture="modalBackdropClick.reset" @click.self="dismissModalFromBackdrop"><section class="modal" :class="{'danmaku-style-modal':modal==='danmaku-style','settings-modal':modal==='settings'}" :role="confirmation?'alertdialog':'dialog'" aria-modal="true" :aria-label="modalTitle"><button class="icon-button close-modal" :aria-label="ui.workbench.关闭窗口" :disabled="modalBusy" @click="closeModal"><X :size="20"/></button>
       <template v-if="confirmation"><h2><Trash2 :size="22"/>{{ modalTitle }}</h2>
         <template v-if="modal==='remove-room'"><p>{{ ui.workbench.确认移除 }}{{ confirmTarget.name||ui.workbench.这位主播 }}{{ ui.workbench.的监控 }}</p><p>{{ ui.workbench.移除主播影响 }}</p></template>
@@ -1068,8 +850,8 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
       </template>
       <template v-else-if="modal==='choose-room'"><h2><Radio :size="22"/>{{ ui.workbench.选择主播 }}</h2>
         <p v-if="roomChoice.candidates.length>1">{{ ui.workbench.找到同号房间请选择主播 }}</p><p v-else>{{ ui.workbench.请确认要添加的主播 }}</p>
-        <p v-if="roomChoice.unavailable?.length" class="inline-warning">{{ roomChoice.unavailable.map(platform=>platform==='bilibili'?ui.common.B站:ui.common.抖音).join('、') }}{{ ui.workbench.暂时无法查询可重试或使用完整链接 }}</p>
-        <div class="room-choice-options" role="radiogroup" :aria-label="ui.workbench.选择直播间"><label v-for="room in roomChoice.candidates" :key="room.platform" class="room-choice-option" :class="{chosen:roomChoicePlatform===room.platform}"><input v-model="roomChoicePlatform" type="radio" name="room-platform" :value="room.platform" :disabled="modalBusy" :aria-label="(room.platform==='bilibili'?ui.common.B站:ui.common.抖音)+' · '+room.name"/><span><strong>{{ room.name }}</strong><small>{{ room.platform==='bilibili'?ui.common.B站:ui.common.抖音 }} · {{ room.roomNumber }} · {{ room.streaming?ui.workbench.直播中:ui.workbench.未开播 }}</small><small v-if="room.title" class="room-choice-title" :title="room.title">{{ room.title }}</small></span></label></div>
+        <p v-if="roomChoice.unavailable?.length" class="inline-warning">{{ roomChoice.unavailable.map(platformLabel).join('、') }}{{ ui.workbench.暂时无法查询可重试或使用完整链接 }}</p>
+        <div class="room-choice-options" role="radiogroup" :aria-label="ui.workbench.选择直播间"><label v-for="room in roomChoice.candidates" :key="room.platform" class="room-choice-option" :class="{chosen:roomChoicePlatform===room.platform}"><input v-model="roomChoicePlatform" type="radio" name="room-platform" :value="room.platform" :disabled="modalBusy" :aria-label="platformLabel(room.platform)+' · '+room.name"/><PlatformBadge :platform="room.platform" compact/><span><strong>{{ room.name }}</strong><small>{{ room.roomNumber }} · {{ room.streaming?ui.workbench.直播中:ui.workbench.未开播 }}</small><small v-if="room.title" class="room-choice-title" :title="room.title">{{ room.title }}</small></span></label></div>
         <p v-if="roomChoiceError" class="inline-warning" role="alert">{{ roomChoiceError }}</p>
         <div class="confirm-actions"><button class="button" :disabled="modalBusy" @click="closeModal">{{ ui.common.取消 }}</button><button class="button primary" :disabled="modalBusy||!roomChoicePlatform" @click="confirmRoomChoice"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>{{ ui.workbench.确认添加 }}</button></div>
       </template>
@@ -1077,24 +859,29 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
       <template v-else-if="modal==='edit-message' && messageEditTarget"><h2>{{ ui.workbench.编辑文本 }}</h2><MessageTextEditor :message="messageEditTarget.message" :busy="modalBusy" @save="saveMessageText" @close="closeModal"/></template>
       <template v-else-if="modal==='danmaku-style'"><h2><Settings :size="23"/>{{ ui.workbench.调整弹幕样式 }}</h2><DanmakuStyleSettings :style="state.danmakuStyle" :highlight-style="state.highlightStyle" :font="state.danmakuFont" :rate="state.danmakuPerSecond??50" @changed="applyDanmakuSettings" @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='recording-style'"><h2><Settings :size="23"/>{{ ui.workbench.调整录制样式 }}</h2><RecordingSettings :preview-timestamp="state.previewTimestamp===true" :preview-timestamp-style="state.previewTimestampStyle" :preview-timestamp-position="state.previewTimestampPosition" :recording-style="state.recordingStyle" :gift-style="state.giftStyle" @changed="state.previewTimestamp=$event.previewTimestamp;state.previewTimestampStyle=$event.previewTimestampStyle;state.previewTimestampPosition=$event.previewTimestampPosition;state.recordingStyle=$event.recordingStyle;state.giftStyle=$event.giftStyle" @busy="modalBusy=$event" @close="closeModal"/></template>
-      <template v-else-if="modal==='cookie-management'"><h2><Settings :size="23"/>{{ ui.common.Cookie管理 }}</h2><PlatformCredentials @busy="modalBusy=$event" @close="closeModal"/></template>
+      <template v-else-if="modal==='xiaohongshu-cookie-notice'">
+        <h2><PlatformBadge platform="xiaohongshu" compact decorative/>{{ ui.credentials.小红书采集提示标题 }}</h2>
+        <p>{{ ui.credentials.小红书采集提示内容 }}</p>
+        <div class="confirm-actions"><button type="button" class="button" @click="cookieSettingsPlatform='xiaohongshu';modal='cookie-management'">{{ ui.credentials.去填写小红书Cookie }}</button><button type="button" class="button primary" @click="closeModal">{{ ui.credentials.我已知晓 }}</button></div>
+      </template>
+      <template v-else-if="modal==='cookie-management'"><h2><Settings :size="23"/>{{ ui.common.Cookie管理 }}</h2><PlatformCredentials :initial-platform="cookieSettingsPlatform" @busy="modalBusy=$event" @close="closeModal"/></template>
       <template v-else-if="modal==='settings'"><h2><Settings :size="23"/>{{ ui.workbench.设置 }}</h2>
         <div class="settings-content">
-          <SettingsGroup name="styles" title="弹幕与录制样式" v-model:open="expandedSettings.styles">
+          <SettingsGroup name="styles" :title="ui.workbench.设置弹幕与录制样式" v-model:open="expandedSettings.styles">
             <section class="danmaku-style-entry"><div><strong>{{ ui.workbench.弹幕样式 }}</strong><p class="settings-style-summary"><span>{{ state.danmakuFont?.family||ui.common.默认字体 }} · {{ ui.workbench.字号 }} {{ normalizedDanmakuStyle(state.danmakuStyle).size.toFixed(1) }} {{ ui.workbench.倍 }}</span><span>{{ ui.workbench.不透明度 }} {{ state.danmakuStyle?.opacity??100 }}% · {{ ui.workbench.速度 }} {{ (state.danmakuStyle?.speed??1).toFixed(1) }} {{ ui.workbench.倍 }} · {{ state.danmakuStyle?.fps??60 }} {{ ui.workbench.帧 }}</span></p></div><button class="button open-danmaku-style" :disabled="modalBusy" @click="modal='danmaku-style'"><Settings :size="16"/>{{ ui.workbench.调整弹幕样式 }}</button></section>
             <section class="danmaku-style-entry"><div><strong>{{ ui.common.录制样式 }}</strong><p class="settings-style-summary"><span>{{ ui.workbench.独立摄像头 }}{{ recordingStyleSummary }}</span><span>{{ ui.workbench.时间戳 }}{{ state.previewTimestamp?timestampStyleSummary+' · '+timestampPositionSummary:ui.common.关闭 }}</span></p></div><button class="button open-recording-style" :disabled="modalBusy" @click="modal='recording-style'"><Settings :size="16"/>{{ ui.workbench.调整录制样式 }}</button></section>
           </SettingsGroup>
-          <SettingsGroup name="general" title="常规" v-model:open="expandedSettings.general">
+          <SettingsGroup name="general" :title="ui.workbench.设置常规" v-model:open="expandedSettings.general">
             <fieldset v-if="isDesktop" class="export-versions" :aria-label="ui.workbench.关闭窗口时"><legend>{{ ui.workbench.关闭窗口时 }}</legend><label v-for="choice in [{value:'ask',label:ui.workbench.每次询问},{value:'exit',label:ui.workbench.退出},{value:'background',label:ui.workbench.后台运行}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
             <PowerSettings v-if="isMacDesktop"/>
           </SettingsGroup>
-          <SettingsGroup name="storage" title="导出与存储" v-model:open="expandedSettings.storage">
+          <SettingsGroup name="storage" :title="ui.workbench.设置导出与存储" v-model:open="expandedSettings.storage">
             <div class="directory-settings"><label class="field-label">{{ ui.workbench.默认导出根目录 }}<div class="path-picker"><input v-model="exportDirectory" :aria-label="ui.workbench.默认导出文件夹" :placeholder="ui.workbench.填写完整的文件夹路径" :disabled="modalBusy" @change="commitExportDirectory" @keydown.enter.prevent="commitExportDirectory"/><button v-if="isDesktop" type="button" class="button" :disabled="modalBusy" @click="browseFolder"><FolderOpen :size="16"/>{{ ui.workbench.选择 }}</button></div></label><p class="muted">{{ ui.workbench.导出目录说明 }}</p><div class="export-destinations"><span>{{ ui.workbench.完整素材 }}</span><code>{{ categoryPath(exportDirectory,'完整素材') }}</code><span>{{ ui.workbench.导出片段 }}</span><code>{{ categoryPath(exportDirectory,'导出片段') }}</code></div><div class="directory-actions"><button class="button" type="button" @click="openFolder({kind:'exports'})"><FolderOpen :size="16"/>{{ ui.workbench.打开文件目录 }}</button></div></div>
             <div v-if="state.recovery?.safeMode" class="setting-info"><span>{{ ui.workbench.安全启动前的旧录像已保留 }}</span><code>{{ state.paths?.retained }}</code><button class="button" @click="openFolder({kind:'retained'})"><FolderOpen :size="16"/>{{ ui.workbench.查看旧录像 }}</button><p class="muted">{{ ui.workbench.旧素材索引异常 }}</p></div>
             <div class="setting-info"><span>{{ ui.workbench.完整原始录像与弹幕 }}</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">{{ ui.workbench.打开原始素材文件夹 }}</button></div>
             <section v-if="pendingCleanup.length" class="cleanup-settings" :aria-label="ui.workbench.素材清理进度"><strong>{{ ui.workbench.素材清理进度素材清理进度 }}{{ pendingCleanup.length }}）</strong><p class="muted">{{ ui.workbench.文件占用释放后自动重试 }}</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p role="status">{{ cleanupLabel(item) }}</p><small v-if="item.task?.detail">{{ item.task.detail }}</small><p v-if="item.purge_error&&!item.task" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="modalBusy||!!item.task" @click="requestDelete(item)">{{ item.task?ui.workbench.清理中:ui.workbench.重试清理 }}</button></div></section>
           </SettingsGroup>
-          <SettingsGroup name="advanced" title="高级" v-model:open="expandedSettings.advanced">
+          <SettingsGroup name="advanced" :title="ui.workbench.设置高级" v-model:open="expandedSettings.advanced">
             <section class="preparation-settings" :aria-label="ui.workbench.自动预处理设置">
               <div class="preparation-option">
               <label class="checkbox"><input type="checkbox" :checked="preparationEnabledDraft??preparationEnabled" :disabled="preparationSettingsBusy||modalBusy" @change="setPreparationEnabled($event.target.checked)"/>{{ ui.workbench.录制完成后自动预处理 }}<LoaderCircle v-if="preparationSettingsBusy" class="spin" :size="14"/></label>
@@ -1117,11 +904,11 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
               <p v-if="preparationSettingsError" class="inline-warning" role="alert">{{ preparationSettingsError }}</p>
             </section>
             <div class="setting-info"><span>{{ ui.workbench.运行日志北京时间每天一份TXT }}</span><code>{{ state.paths?.logs }}</code><button class="button" @click="openFolder({kind:'logs'})"><FolderOpen :size="16"/>{{ ui.workbench.点击查看日志文件 }}</button><p class="muted">{{ ui.workbench.日志保留说明 }}</p><p v-if="state.diagnostics?.error" class="inline-warning">{{ ui.workbench.日志暂时无法保存 }}{{ state.diagnostics.error }}</p></div>
-            <section class="danmaku-style-entry cookie-management-entry"><strong>{{ ui.common.Cookie管理 }}</strong><button class="button open-cookie-management" :disabled="modalBusy" @click="modal='cookie-management'">{{ ui.workbench.管理Cookie }}</button></section>
+            <section class="danmaku-style-entry cookie-management-entry"><strong>{{ ui.common.Cookie管理 }}</strong><button class="button open-cookie-management" :disabled="modalBusy" @click="cookieSettingsPlatform='';modal='cookie-management'">{{ ui.workbench.管理Cookie }}</button></section>
           </SettingsGroup>
           <UpdateSettings :state="state.updates" @changed="state.updates=$event"/>
           <section class="settings-group settings-group-static" aria-labelledby="settings-about-title">
-            <h3 id="settings-about-title" tabindex="-1">关于</h3>
+            <h3 id="settings-about-title" tabindex="-1">{{ ui.workbench.设置关于 }}</h3>
             <div class="about-credit"><p>{{ ui.workbench.软件作者瞌睡小菜包 }}</p><p>{{ ui.workbench.技术支持藤椒麦旋风 }}</p><p>{{ ui.workbench.菜包宇宙 }}<a href="https://www.caibao.media/" @click.prevent="openStudioPage">www.caibao.media</a></p><p><a href="https://space.bilibili.com/5162836" @click.prevent="openAuthorPage">{{ ui.workbench.联系我们 }}</a></p></div>
           </section>
         </div>

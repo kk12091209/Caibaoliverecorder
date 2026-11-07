@@ -36,13 +36,13 @@ const roomNumber=anchor=>anchor.ownWebRid||(anchor.platform==='douyin'?(anchor.l
 .anchor-heading strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;line-height:1.6}
 .anchor-room{margin-top:2px;font-size:11px;line-height:1.6;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .anchor-remove{display:grid;place-items:center;width:24px;height:24px;flex-shrink:0;margin-right:-4px;padding:0;border:0;border-radius:var(--radius-control);background:transparent;color:var(--faint)}
-.anchor-remove:hover{background:rgba(122,62,82,.08);color:var(--text)}
+.anchor-remove:hover{background:var(--anchor-remove-hover);color:var(--text)}
 .anchor-summary{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:5px;min-height:26px}
 .anchor-state{display:flex;flex-wrap:wrap;align-items:center;gap:5px 7px;min-width:0}
 .anchor-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:18px;color:var(--muted)}
 .anchor-status i{width:5px;height:5px;flex-shrink:0;border-radius:50%;background:var(--faint);opacity:.6}
 .anchor-status i.is-enabled{background:var(--icon);opacity:1}.anchor-status i.is-recording{background:var(--danger);opacity:1}
 .anchor-toggle{display:inline-flex;align-items:center;justify-content:center;gap:3px;flex-shrink:0;min-height:26px;padding:3px 6px;border:1px solid var(--line);border-radius:var(--radius-control);background:transparent;font-size:11px;line-height:18px;color:var(--muted)}
-.anchor-toggle:hover{background:rgba(122,62,82,.06);border-color:var(--line-strong)}.anchor-toggle.is-stopped{color:var(--accent-dark);background:var(--selected);border-color:rgba(189,70,90,.22)}
+.anchor-toggle:hover{background:var(--anchor-toggle-hover);border-color:var(--line-strong)}.anchor-toggle.is-stopped{color:var(--accent-dark);background:var(--selected);border-color:rgba(189,70,90,.22)}
 .anchor-warning{font-size:11px;line-height:1.55;color:var(--warning-text);margin:7px 0 0;overflow-wrap:anywhere}
 </style>

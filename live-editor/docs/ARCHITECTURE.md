@@ -18,12 +18,21 @@
 
 ## 后台职责
 
-`index.js` 创建服务、注册路由和维护定时器。具体工作交给以下模块：
+`index.js` 负责装配服务、认证和路由分发。系统/凭据、设置、素材/消息/导出路由分别在 `system-routes.js`、`settings-routes.js`、`material-routes.js`，共用 `http-response.js`。`app-activity.js` 提供录制、索引和导出状态事实，`workbench-snapshot.js` 生成页面状态，`app-lifecycle.js` 负责恢复和关闭顺序。
+
+工作台主题由 `src/theme.css` 提供，波形和密度 Canvas 读取同一套颜色。平台图标和视频叠加、导出样式独立管理。固定界面文案仍在 `shared/ui-copy.js`。播放器、打点、消息浏览、设置导航和导出弹窗的状态由各自的 `src/use-*.js` 管理，`App.vue` 负责把它们接入工作台。
+
+具体工作交给以下模块：
 
 | 模块 | 职责 |
 | --- | --- |
 | `recorder.js`、`bilibili-rooms.js`、`local-endpoint.js`、`service-runtime.js` | 连接录制核心、持久保存 B 站房间启停状态、本机地址与服务实例管理 |
-| `multi-platform-recorder.js`、`room-lookup.js`、`douyin-room.js`、`douyin-recorder.js`、`douyin-flv.js` | 链接平台识别、数字房间号核对及主播选择；抖音房间监控、直写原片与时间戳规范化；B 站下载保持原核心 |
+| `multi-platform-recorder.js`、`bilibili-platform.js`、`douyin-platform.js`、`xiaohongshu-platform.js`、`room-lookup.js` | 分发链接、数字房间查找和启停操作。平台适配器负责各自的监控、状态与 Cookie 应用 |
+| `flv-recorder.js`、`douyin-flv.js` | 抖音、小红书共用的 FLV 写盘、媒体时间推进检测、重连和封口。平台提供解析器、弹幕客户端与地址校验 |
+| `douyin-room.js`、`douyin-recorder.js` | 抖音房间解析、独立摄像头流选择及平台默认依赖 |
+| `xiaohongshu-room.js`、`xiaohongshu-platform.js`、`xiaohongshu-chat.js` | 小红书分享核验、稳定 UID 开播监控、公开 H5 视频及弹幕客户端切换。能力限制见 [PLATFORMS.md](PLATFORMS.md) |
+| `xiaohongshu-web-session.js`、`xiaohongshu-browser.js`、`xiaohongshu-protocol.js` | 隔离后台浏览器、官方网页会话和有界协议解析。Cookie 经本机管道注入无痕上下文，视频请求被阻止 |
+| `xiaohongshu-socket-chat.js`、`xiaohongshu-h5-chat.js` | 已登录的 RWP 弹幕、匿名 H5 回退、写入重试和独立收尾 |
 | `douyin-chat.js`、`douyin-chat-worker.js`、`douyin-websocket.js`、`douyin-protocol.js`、`douyin-signing.js` | 有界 IPC、独立线程解析、WebSocket 保活/重连、最小 protobuf 解码和本地签名 |
 | `chat-intake.js`、`chat-rules.js`、`lottery-activities.js` | 每房间独立配额、共用长消息/同文规则、分批索引、活动口令与有效窗口 |
 | `desktop-exit.js` | 用户确认退出、保存任务恢复标记、异步停止及收尾 |
@@ -43,6 +52,10 @@
 | `temp-workspaces.js` | 按素材及进程归属管理临时工作文件 |
 | `waveform.js`、`density.js`、`chat-filter.js` | 音频波形、弹幕密度、抽奖及表情包占位过滤 |
 | `directories.js`、`output-names.js` | 中文导出目录与按录制时间命名、防止覆盖 |
+
+平台适配器向协调器提供房间、主播快照以及房间查找、添加和启停接口。查找结果只对界面公开平台、房间号、标题、主播名和直播状态等选择所需信息。抖音的用户跟随、连麦转接和弹幕更新由抖音适配器负责，B 站适配器继续通过独立录制核心工作。协调器保留两路服务的启动和退出顺序。
+
+素材身份单独处理。读旧库时，无法确认来源的素材可以显示「未知来源」，继续使用原有文件和索引播放、剪辑与导出。新录制由实际接入的平台写明来源，已有素材不根据缺失字段猜测平台。
 
 保持平铺后台模块，是因为运行包和服务构建标识直接收集 `server/*.js`。若将模块搬入子目录，必须同时更新桌面构建标识、发布白名单和验证脚本，不能只移动文件。
 
@@ -135,7 +148,7 @@ macOS 的可用内存按系统 `memory_pressure -Q` 返回的空闲比例估算�
 
 ## 开发与发布
 
-先在当前 PowerShell 中点调用 `scripts/dev-env.ps1`，再恢复依赖、运行测试或构建。开发数据、工具缓存和发布验证目录位于源码仓库 `.tools`，不要对运行中的真实 `data` 创建 `Store` 来检查内容。
+先在当前 PowerShell 中点调用 `scripts/dev-env.ps1`，再恢复依赖、运行测试或构建。`npm run lint` 检查 Vue 界面以及本轮整理的前后端模块；既有业务模块仍由相应回归测试覆盖。开发数据、工具缓存和发布验证目录位于源码仓库 `.tools`，不要对运行中的真实 `data` 创建 `Store` 来检查内容。
 
 `npm run dev` 通过 `scripts/dev.js` 动态创建隔离服务及 Vite 代理；Vite 配置不再保留指向旧固定端口的备用代理。`npm run build` 清理并重新生成自身的 `dist`。
 

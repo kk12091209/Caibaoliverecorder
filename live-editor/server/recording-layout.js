@@ -7,10 +7,46 @@ export function biliCameraLayout(value) {
   const one=position=>{const cells=crops.filter(c=>c?.position===position);if(cells.length!==1)return null;const c=cells[0];return {x:c.x,y:c.y,w:c.cx,h:c.cy};};
   return cameraLayout({main:one(0),camera:one(1)});
 }
+
+function multiViewCameraLayout(value) {
+  if (typeof value === 'string') {
+    if (value.length > 64 * 1024) return null;
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  const { inputs, displays } = value || {};
+  if (!Array.isArray(inputs) || inputs.length > 32 ||
+      !Array.isArray(displays) || displays.length > 16) return null;
+
+  // display_rect is the webpage composition. Crop the video using the
+  // matching inputs' rect values, which are in the source frame coordinates.
+  const priority = display => display?.display_id === 'live_2204' ? 0 : display?.display_id === 'live_2104' ? 1 : 2;
+  for (const display of [...displays].sort((a,b)=>priority(a)-priority(b))) {
+    if(typeof display?.display_id!=='string'||displays.filter(other=>other?.display_id===display.display_id).length!==1)continue;
+    const outputs = display.outputs;
+    if (!Array.isArray(outputs) || outputs.length !== 2) continue;
+    const ids = outputs.map(output => output?.id);
+    const cameraId = ids.find(id => id === 'camera_full' || id === 'camera_horizontal_clip');
+    if (!ids.includes('game_full') || !cameraId) continue;
+    const rectFor = id => {
+      const matches = inputs.filter(input => input?.id === id);
+      if (matches.length !== 1) return null;
+      const input = matches[0];
+      return input.visible === true && (input.rotate ?? 0) === 0 ? input.rect : null;
+    };
+    const layout = cameraLayout({ main: rectFor('game_full'), camera: rectFor(cameraId) });
+    if (layout) return layout;
+  }
+  return null;
+}
+
 export function douyinCameraLayout(value) {
-  if(!value||!['game_clip','camera_clip'].some(key=>Object.hasOwn(value,key)))return undefined;
+  if(typeof value==='string'){
+    if(value.length>128*1024)return null;
+    try{value=JSON.parse(value);}catch{return null;}
+  }
+  if (!value || !['game_clip', 'camera_clip', 'multi_view_data'].some(key => Object.hasOwn(value, key))) return undefined;
   if(value.camera_hidden!==undefined&&value.camera_hidden!==0)return null;
-  return cameraLayout({main:value.game_clip,camera:value.camera_clip});
+  return cameraLayout({main:value.game_clip,camera:value.camera_clip}) ?? multiViewCameraLayout(value.multi_view_data);
 }
 
 // One-input/one-output fragment, compatible with both -vf and the dual-output

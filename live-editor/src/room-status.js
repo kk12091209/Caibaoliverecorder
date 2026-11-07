@@ -1,6 +1,7 @@
 import { ui } from '../shared/ui-copy.js';
 // The editor persists start/stop intent separately from automatic recording.
 export function roomAvailable(room, recorder) {
+  if(room.platform==='xiaohongshu')return !!recorder.xiaohongshuOnline;
   return room.platform === 'douyin'
     ? !!recorder.douyinOnline
     : !!(recorder.biliOnline ?? recorder.online);

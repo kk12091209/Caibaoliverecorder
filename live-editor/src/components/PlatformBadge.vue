@@ -1,8 +1,9 @@
 <script setup>
 import { computed } from 'vue';
-import { ui } from '../../shared/ui-copy.js';
 import bilibiliIcon from '../assets/platform-bilibili.svg';
 import douyinIcon from '../assets/platform-douyin.svg';
+import xiaohongshuIcon from '../assets/platform-xiaohongshu.svg';
+import {platformLabel} from '../../shared/platforms.js';
 
 const props = defineProps({
   platform: { type: String, required: true },
@@ -10,8 +11,8 @@ const props = defineProps({
   decorative: Boolean,
 });
 
-const isDouyin = computed(() => props.platform === 'douyin');
-const label = computed(() => isDouyin.value ? ui.common.抖音 : ui.common.B站);
+const icon = computed(() => ({bilibili:bilibiliIcon,douyin:douyinIcon,xiaohongshu:xiaohongshuIcon})[props.platform]);
+const label = computed(() => platformLabel(props.platform));
 </script>
 
 <template>
@@ -21,7 +22,7 @@ const label = computed(() => isDouyin.value ? ui.common.抖音 : ui.common.B站)
     :aria-hidden="decorative || undefined"
     :title="decorative ? undefined : label"
   >
-    <img :src="isDouyin ? douyinIcon : bilibiliIcon" :alt="decorative ? '' : label"/>
+    <img v-if="icon" :src="icon" :alt="decorative ? '' : label"/>
   </span>
 </template>
 
@@ -34,7 +35,7 @@ const label = computed(() => isDouyin.value ? ui.common.抖音 : ui.common.B站)
   flex: 0 0 var(--badge-size);
   width: var(--badge-size);
   height: var(--badge-size);
-  border: 1px solid rgba(255, 255, 255, .4);
+  border: 1px solid var(--platform-badge-edge);
   border-radius: 50%;
   background: var(--panel);
 }

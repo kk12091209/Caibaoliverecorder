@@ -143,6 +143,16 @@ export function selectDouyinIndependentFlv(stream={}) {
 
 export class DouyinResolver {
   constructor({ request = fetch, now = Date.now, credentials } = {}) { this.request = request; this.now = now; this.credentials=credentials;this.visitor = null; this.refreshing = null; }
+  async verifyCookie({cookie=this.credentials?.get('douyin'),signal=AbortSignal.timeout(8000)}={}){
+    const query=new URLSearchParams({room_id:'0',aid:'6383',app_name:'douyin_web',live_id:'1',device_platform:'web'});
+    const response=await this.request('https://live.douyin.com/webcast/user/me/?'+query,{
+      signal,redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.douyin.com/',Cookie:cookie},
+    });
+    const result=parsePlatformJson(await readBoundedResponse(response,64*1024));
+    if(result?.status_code===20003&&result.data?.message==="User doesn't login")return false;
+    if(result?.status_code===0&&/^[1-9]\d{0,19}$/.test(String(result.data?.id_str||result.data?.id||'')))return true;
+    throw new Error('抖音暂时无法确认登录状态。');
+  }
   async cookie(signal) {
     const saved=this.credentials?.get('douyin')||'';
     const hasVisitor=/(?:^|;\s*)ttwid=[^;]+/.test(saved);
@@ -174,7 +184,9 @@ export class DouyinResolver {
   async room(webRid, { signal } = {}) {
     if (!/^\d{1,20}$/.test(webRid)) throw new Error('抖音房间编号无效。');
     signal ||= AbortSignal.timeout(15000);
-    const visitor = await this.cookie(signal),login=this.credentials?.get('douyin')||'';
+    const login=this.credentials?.get('douyin')||'';
+    const visitor=await this.cookie(signal);
+    if(login!==(this.credentials?.get('douyin')||''))return this.room(webRid,{signal});
     const query = new URLSearchParams({ aid: '6383', app_name: 'douyin_web', live_id: '1', device_platform: 'web',
       language: 'zh-CN', web_rid: webRid, browser_name: 'Chrome', browser_version: '140.0.0.0', browser_language: 'zh-CN',
       browser_platform: 'Win32', is_need_double_stream: 'true', msToken: '' });
@@ -205,10 +217,24 @@ export class DouyinResolver {
     const query=new URLSearchParams({aid:'6383',app_name:'douyin_web',live_id:'1',device_platform:'web',
       room_id:roomId,anchor_id:anchorId,...(audience?{}:{channel_id:channel,offset:'0',count:'50',link_status:'4',
         scene:version===2?'1':'7',request_source:version===2?'audience_enter_room':'receive_multi_linker_sei'})});
-    const endpoint=audience?'/webcast/linkmic_audience/list/v2/':'/webcast/linkmic/list/';
-    const response=await this.request('https://live.douyin.com'+endpoint+'?'+query+'&a_bogus='+encodeURIComponent(signRoomQuery(query.toString(),DOUYIN_USER_AGENT)),
-      {signal,redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.douyin.com/',Cookie:visitor.cookie}});
-    const result=parsePlatformJson(await readBoundedResponse(response,2*1024*1024));
+    const requestRoster=async endpoint=>{
+      signal.throwIfAborted();
+      const response=await this.request('https://live.douyin.com'+endpoint+'?'+query+'&a_bogus='+encodeURIComponent(signRoomQuery(query.toString(),DOUYIN_USER_AGENT)),
+        {signal,redirect:'error',headers:{'User-Agent':DOUYIN_USER_AGENT,Referer:'https://live.douyin.com/',Cookie:visitor.cookie}});
+      return parsePlatformJson(await readBoundedResponse(response,2*1024*1024));
+    };
+    let result=await requestRoster(audience?'/webcast/linkmic_audience/list/v2/':'/webcast/linkmic/list/');
+    // New video-link rooms report "linkmic has closed" on v2 even while the
+    // guest is on screen. Their web player uses v3's occupied positions. Do
+    // not retry network/auth/rate-limit failures or infer membership from names.
+    if(audience&&result.status_code===31001){
+      const current=await requestRoster('/webcast/linkmic_audience/list/v3/'),basic=current.data?.basic;
+      if(current.status_code!==0||String(basic?.owner_user_id||'')!==anchorId||!Array.isArray(basic?.positions))throw new Error('连麦名单暂时不可用。');
+      result={status_code:0,data:{user:basic.positions.slice(0,64)
+        .filter(position=>position?.status===1&&String(position.user?.linker_room_id||'')===roomId)
+        .map(({user})=>({linkmic_id_str:user.linkmic_id_str,user:{id_str:user.user_id,nickname:user.nickname,
+          avatar_medium:{url_list:[user.avatar_medium_url,user.avatar_thumb_url]}}}))}};
+    }
     if(result.status_code!==0||!Array.isArray(result.data?.user))throw new Error('连麦名单暂时不可用。');
     return result.data.user.slice(0,64).map(entry=>({linkId:String(entry.linkmic_id_str||''),id:String(entry.user?.id_str||''),name:labelText(entry.user?.nickname),avatarUrl:avatarUrl(entry.user),...(/^[1-9]\d{0,19}$/.test(entry.user?.web_rid||'')?{webRid:entry.user.web_rid}:{})}))
       .filter(person=>/^[\w-]{1,100}$/.test(person.linkId)&&/^\d{1,20}$/.test(person.id));

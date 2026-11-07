@@ -92,11 +92,16 @@ onBeforeUnmount(() => observer?.disconnect());
   display: grid;
   gap: .25em;
   background: rgba(255, 227, 205, .88);
-  color: var(--text);
+  outline: 1px solid rgba(205, 151, 116, .52);
+  outline-offset: -1px;
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: 0 1px 5px rgba(74, 36, 50, .10);
+  color: #4a2432;
 }
 .gift-super-chat-header { display: flex; justify-content: space-between; gap: .5em; }
-.gift-super-chat-header span { color: var(--accent-dark); }
-.gift-sender { font-size: .85em; color: var(--muted); }
+.gift-super-chat-header span { color: #e23b62; }
+.gift-sender { font-size: .85em; color: #7d4b5c; }
 .gift-comment {
   display: -webkit-box;
   -webkit-box-orient: vertical;

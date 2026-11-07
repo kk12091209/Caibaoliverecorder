@@ -2,11 +2,13 @@
 param(
     [Parameter(Mandatory=$true)][string]$Stage,
     [Parameter(Mandatory=$true)][string]$ToolsRoot,
-    [string]$Version = '0.2.3',
+    [string]$Version = '',
     [string]$ProjectRoot = '',
     [string]$QaInstaller = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release-version.ps1')
+$Version = Get-CaiboVersion -AppRoot (Split-Path $PSScriptRoot -Parent) -Expected $Version
 if (!$ProjectRoot) { $ProjectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 . (Join-Path $PSScriptRoot 'dev-env.ps1') -ProjectRoot $ProjectRoot
 $qaId = 'Caibo.QA.' + [Guid]::NewGuid().ToString('N')

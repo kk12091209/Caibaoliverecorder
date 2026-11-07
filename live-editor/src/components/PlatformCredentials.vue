@@ -3,16 +3,24 @@ import { ui } from '../../shared/ui-copy.js';
 
 import {ref,onMounted,onBeforeUnmount,nextTick} from 'vue';
 import {api} from '../api.js';
+import PlatformBadge from './PlatformBadge.vue';
+const props=defineProps({initialPlatform:String});
 const emit=defineEmits(['busy','close']);
 const status=ref(null),busy=ref(false),error=ref(''),notice=ref(''),editing=ref(''),draft=ref('');
 const platforms=[{id:'bilibili',name:ui.credentials.B站,url:'https://api.bilibili.com/x/web-interface/nav'},
-  {id:'douyin',name:ui.common.抖音,url:'https://live.douyin.com/'}];
+  {id:'douyin',name:ui.common.抖音,url:'https://live.douyin.com/'},
+  {id:'xiaohongshu',name:ui.common.小红书,url:'https://www.xiaohongshu.com/explore'}];
 const state=id=>status.value?.platforms?.[id];
 async function copyUrl(platform){
   try{await navigator.clipboard.writeText(platform.url);notice.value=ui.credentials.网址已复制(platform.name);}
   catch{const input=document.querySelector(`[data-cookie-url="${platform.id}"]`);input?.focus();input?.select();notice.value=ui.credentials.请复制已选中的网址;}
 }
-onMounted(async()=>{try{status.value=await api('platform-credentials');}catch{error.value=ui.credentials.暂时无法读取保存状态请返回后重试;}});
+onMounted(async()=>{
+  try{
+    status.value=await api('platform-credentials');
+    if(status.value.available&&platforms.some(platform=>platform.id===props.initialPlatform))await begin(props.initialPlatform);
+  }catch{error.value=ui.credentials.暂时无法读取保存状态请返回后重试;}
+});
 onBeforeUnmount(()=>{draft.value='';});
 async function begin(id){if(busy.value)return;draft.value='';editing.value=id;error.value='';notice.value='';await nextTick();document.querySelector(`[data-cookie-input="${id}"]`)?.focus();}
 function cancel(){if(busy.value)return;draft.value='';editing.value='';error.value='';}
@@ -23,8 +31,8 @@ async function act(id,action){
   try{
     status.value=await api(`platform-credentials/${id}/${action}`,action==='save'?{cookie:draft.value}:{});
     draft.value='';editing.value='';
-    notice.value=action==='delete'?ui.credentials.已清除本机保存的登录信息:action==='unlock'?ui.credentials.已解锁将继续使用保存的Cookie:ui.credentials.已加密保存原文不会回显;
-    if(id==='douyin'&&action!=='delete')notice.value+=status.value.checks?.douyin==='pending'?ui.credentials.弹幕连接暂未刷新将自动重试:ui.credentials.将用于后续弹幕和礼物采集;
+    notice.value=action==='delete'?ui.credentials.已清除本机保存的登录信息:action==='unlock'?(state(id)?.expired?ui.credentials.失效说明:ui.credentials.已解锁将继续使用保存的Cookie):ui.credentials.已加密保存原文不会回显;
+    if(id==='douyin'&&action!=='delete'&&!state(id)?.expired)notice.value+=status.value.applyStatus==='pending'?ui.credentials.弹幕连接暂未刷新将自动重试:ui.credentials.将用于后续弹幕和礼物采集;
     await nextTick();document.querySelector(`[data-cookie-platform="${id}"]`)?.focus();
   }catch(e){error.value=e.message;notice.value='';}
   finally{busy.value=false;emit('busy',false);}
@@ -35,8 +43,10 @@ async function act(id,action){
     <p class="muted">{{ ui.credentials.本机保存说明 }}</p>
     <p v-if="status?.available===false" class="inline-warning" role="alert">{{ ui.credentials.安全存储不可用 }}</p>
     <section v-for="platform in platforms" :key="platform.id" class="credential-card" :aria-label="platform.name+' Cookie'">
-      <div class="credential-row"><div><strong>{{ platform.name }}</strong><span class="credential-state">{{ status?state(platform.id)?.configured?ui.credentials.已保存:ui.credentials.未填写:ui.credentials.读取中 }}</span></div><button class="button" :data-cookie-platform="platform.id" :disabled="busy||!status||status.available===false" @click="begin(platform.id)">{{ state(platform.id)?.configured?ui.credentials.去更换:ui.credentials.去填写 }}</button></div>
+      <div class="credential-row"><div class="credential-platform"><PlatformBadge :platform="platform.id" compact/><strong>{{ platform.name }}</strong><span class="credential-state">{{ status?state(platform.id)?.expired?ui.credentials.已失效:state(platform.id)?.configured?ui.credentials.已保存:ui.credentials.未填写:ui.credentials.读取中 }}</span></div><button class="button" :data-cookie-platform="platform.id" :disabled="busy||!status||status.available===false" @click="begin(platform.id)">{{ state(platform.id)?.configured?ui.credentials.去更换:ui.credentials.去填写 }}</button></div>
+      <p v-if="state(platform.id)?.expired" class="inline-warning">{{ ui.credentials.失效说明 }}</p>
       <p v-if="platform.id==='douyin'" class="muted">{{ ui.credentials.抖音登录用途 }}</p>
+      <p v-if="platform.id==='xiaohongshu'" class="muted">{{ ui.credentials.小红书登录用途 }}</p>
       <form v-if="editing===platform.id" class="credential-editor" @submit.prevent="act(platform.id,'save')">
         <label class="field-label">{{ state(platform.id)?.configured?ui.credentials.粘贴新的Cookie:ui.credentials.粘贴Cookie }}
           <input :data-cookie-input="platform.id" v-model="draft" type="password" :aria-label="platform.name+' Cookie'" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="32768" :disabled="busy" :placeholder="ui.credentials.粘贴请求头中的Cookie值"/>
@@ -52,10 +62,11 @@ async function act(id,action){
       <details class="cookie-guide"><summary>{{ ui.credentials.如何获取 }} {{ platform.name }} Cookie</summary>
         <ol>
           <li>{{ ui.credentials.登录浏览器步骤 }}{{ platform.name }}。</li>
-          <li>{{ platform.id==='bilibili'?ui.credentials.打开B站页面步骤:ui.credentials.打开抖音页面步骤 }}
+          <li>{{ platform.id==='bilibili'?ui.credentials.打开B站页面步骤:platform.id==='xiaohongshu'?ui.credentials.打开小红书页面步骤:ui.credentials.打开抖音页面步骤 }}
             <div class="cookie-guide-address"><input :data-cookie-url="platform.id" :value="platform.url" type="text" readonly :aria-label="platform.name+ui.credentials.Cookie获取网址" spellcheck="false" @focus="$event.target.select()"/><button type="button" class="button" @click="copyUrl(platform)">{{ ui.credentials.复制网址 }}</button></div>
           </li>
           <li v-if="platform.id==='bilibili'">{{ ui.credentials.选择B站请求步骤 }} <code>nav</code> {{ ui.credentials.请求 }}</li>
+          <li v-else-if="platform.id==='xiaohongshu'">{{ ui.credentials.选择小红书请求步骤 }}</li>
           <template v-else>
             <li>{{ ui.credentials.选择抖音文档步骤 }}</li>
             <li>{{ ui.credentials.核对抖音请求步骤 }} <code>{{ ui.credentials.抖音页面地址示例 }}</code>{{ ui.credentials.无需搜索接口名称 }}</li>
@@ -75,5 +86,6 @@ async function act(id,action){
   </section>
 </template>
 <style scoped>
+.credential-platform{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .platform-credentials p{line-height:1.6}.credential-card{border:1px solid var(--line);border-radius:var(--radius-card);padding:16px;margin-top:14px}.credential-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.credential-state{font-size:12px;color:var(--muted);margin-left:12px}.credential-editor{margin-top:16px}.credential-editor input{width:100%;min-width:0;box-sizing:border-box}.credential-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.cookie-guide{margin-top:12px;font-size:13px}.cookie-guide summary{cursor:pointer;color:var(--rose-dark)}.cookie-guide ol{padding-left:20px;line-height:1.7}.cookie-guide li{margin:6px 0}.cookie-guide code{overflow-wrap:anywhere}.cookie-guide-address{display:flex;align-items:center;gap:8px;margin-top:8px}.cookie-guide-address input{min-width:0;flex:1;font-size:12px}.cookie-guide-address button{flex-shrink:0;font-size:12px;padding:8px 10px}@media(max-width:520px){.cookie-guide-address{align-items:stretch;flex-direction:column}.cookie-guide-address input{flex:auto;width:100%;box-sizing:border-box}}
 </style>

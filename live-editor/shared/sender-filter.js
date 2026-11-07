@@ -1,8 +1,9 @@
 import { ui } from './ui-copy.js';
 const uid=value=>typeof value==='string'&&/^[1-9]\d{0,30}$/.test(value);
+const platformUid=(platform,value)=>platform==='xiaohongshu'?typeof value==='string'&&/^[a-f0-9]{24}$/.test(value):['bilibili','douyin'].includes(platform)&&uid(value);
 export function senderFilterFor(message){
   const originalName=message.originalUser??message.user;
-  if(uid(message.senderId)&&['bilibili','douyin'].includes(message.senderPlatform))return {mode:'uid',platform:message.senderPlatform,uid:message.senderId,name:originalName};
+  if(platformUid(message.senderPlatform,message.senderId))return {mode:'uid',platform:message.senderPlatform,uid:message.senderId,name:originalName};
   const name=String(originalName||'').trim();if(!name||['观众','匿名','匿名用户'].includes(name))return null;
   const parts=name.split(/[*＊]{2,}|…+|\.{3,}/u);
   return parts.length===2&&parts[0]&&parts[1]?{mode:'approx',name,prefix:parts[0],suffix:parts[1]}:{mode:'name',name};
@@ -10,7 +11,7 @@ export function senderFilterFor(message){
 export function validateSenderFilter(value){
   if(value==null)return null;
   if(typeof value!=='object'||Array.isArray(value)||typeof value.name!=='string'||!value.name.trim()||value.name.length>200)throw new Error(ui.messageEditor.发送者筛选无效);
-  if(value.mode==='uid'&&uid(value.uid)&&['bilibili','douyin'].includes(value.platform)&&Object.keys(value).every(k=>['mode','name','uid','platform'].includes(k)))return {mode:'uid',name:value.name,uid:value.uid,platform:value.platform};
+  if(value.mode==='uid'&&platformUid(value.platform,value.uid)&&Object.keys(value).every(k=>['mode','name','uid','platform'].includes(k)))return {mode:'uid',name:value.name,uid:value.uid,platform:value.platform};
   if(value.mode==='name'&&Object.keys(value).every(k=>['mode','name'].includes(k)))return {mode:'name',name:value.name};
   if(value.mode==='approx'&&Object.keys(value).every(k=>['mode','name','prefix','suffix'].includes(k))&&[value.prefix,value.suffix].every(x=>typeof x==='string'&&x.length>0&&x.length<=200))return {mode:'approx',name:value.name,prefix:value.prefix,suffix:value.suffix};
   throw new Error(ui.messageEditor.发送者筛选无效);

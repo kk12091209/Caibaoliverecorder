@@ -15,7 +15,7 @@ test('HTTP auto-detects Douyin; namespaced actions preserve numeric Bilibili roo
  const app=await createApp({noRecorder:true,preparation:false,compact:false,data:path.join(root,'data'),port:0,ffmpeg:'not-executed',ffprobe:'not-executed',
   douyin:{resolver:{room:async()=>({platform:'douyin',webRid:'837518741716',roomId:'7691637058724547364',name:'主播',title:'测试',streaming:false,cookie:'ttwid=secret'})},chat:{close:async()=>{}}}});
  t.after(async()=>{await app.close();assert.ok(root.startsWith(path.resolve(os.tmpdir())+path.sep));await fs.rm(root,{recursive:true,force:true});});
- app.recorder.douyin.start();app.recorder.rooms=[{roomId:1016,recording:false,autoRecord:true}];
+ app.recorder.douyin.start();app.recorder.bilibili.rooms=[{roomId:1016,recording:false,autoRecord:true}];
  const request=async(route,input)=>{const response=await fetch(`http://127.0.0.1:${app.port}/api/${route}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});return {status:response.status,body:await response.json()};};
  const added=await request('rooms',{url:'https://live.douyin.com/837518741716?tracking=1'});assert.equal(added.status,200);assert.equal(added.body.platform,'douyin');
  let snapshot=app.snapshot();assert.equal(snapshot.rooms.length,2);assert.equal(snapshot.recorder.douyinOnline,true);assert.equal(JSON.stringify(snapshot).includes('ttwid'),false);
@@ -42,8 +42,8 @@ test('the state API exposes observed chat health without credentials or message 
  const chat=new DouyinChat({createWorker:()=>worker});
  const app=await createApp({noRecorder:true,preparation:false,compact:false,data:root,port:0,ffmpeg:'not-executed',ffprobe:'not-executed',douyin:{chat}});
  t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
- app.recorder.douyin.started=true;
- const room=app.recorder.douyin.entry({webRid:'123'});room.recording=true;room.sourceId='source';room.metadata={cookie:'private-cookie',userUniqueId:'private-user'};app.recorder.douyin.entries.set('123',room);
+ app.recorder.douyin.core.started=true;
+ const room=app.recorder.douyin.core.entry({webRid:'123'});room.recording=true;room.sourceId='source';room.metadata={cookie:'private-cookie',userUniqueId:'private-user'};app.recorder.douyin.core.entries.set('123',room);
  chat.start('source',{cookie:'private-cookie',userUniqueId:'private-user'},{write:async()=>{}});
  const read=async()=>{const response=await fetch(`http://127.0.0.1:${app.port}/api/state`);assert.equal(response.status,200);const value=await response.json();assert.doesNotMatch(JSON.stringify(value),/private-/);return value.rooms.find(room=>room.platform==='douyin').chatStatus;};
  assert.equal((await read()).connection,'connecting');

@@ -1,16 +1,19 @@
-import {messageFeed} from './message-feed.js';
+import { closeAppWith, recoverAppTasks } from './app-lifecycle.js';
+import { appActivity, hasRecording, hasIndexing } from './app-activity.js';
+import { workbenchSettings, workbenchSnapshot } from './workbench-snapshot.js';
+import { json, body, sendFile } from './http-response.js';
+import { handleSystemRoutes } from './system-routes.js';
+import { handleSettingsRoutes } from './settings-routes.js';
+import { handleMaterialRoutes } from './material-routes.js';
+import { LotteryRecorder } from './lottery-records.js';
+import fs from 'node:fs/promises';
 import {requireLocalAccess} from './local-access.js';
 import http from 'node:http';
-import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openRecoveredStore } from './data-recovery.js';
-import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { Ingestor } from './ingest.js';
-import {giftMessages} from './gifts.js';
 import {GiftIcons} from './gift-icons.js';
-import {GIFT_SETTING,savedGiftStyle,validateGiftStyle} from '../shared/gifts.js';
 import { CompactStorage } from './compact-storage.js';
 import { Media } from './media.js';
 import { MAX_FONT_BYTES } from './danmaku-font.js';
@@ -27,26 +30,17 @@ import { SessionDeletion } from './session-deletion.js';
 import { WaveformService } from './waveform.js';
 import { DensityService } from './density.js';
 import { MultiPlatformRecorder } from './multi-platform-recorder.js';
-import { directories, writableDirectory, openDirectory } from './directories.js';
-import { exportedJobFile } from './output-names.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
 import { Updates } from './updates.js';
 import { AutoUpdate } from './auto-update.js';
 import { DailyDiagnostics } from './diagnostics.js';
-import { savedDanmakuStyle, validateDanmakuStyle, DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
 import { listenLocal } from './local-endpoint.js';
 import { DanmakuStylePreview } from './danmaku-style-preview.js';
 import { LinkmicIndex } from './linkmic.js';
-import { savedRecordingStyle, validateRecordingStyle, RECORDING_STYLE_SETTING } from '../shared/recording-style.js';
-import { savedTimestampStyle, validateTimestampStyle, TIMESTAMP_STYLE_SETTING, savedTimestampPosition, validateTimestampPosition, TIMESTAMP_POSITION_SETTING } from '../shared/timestamp-style.js';
-import {PlatformCredentials} from './platform-credentials.js';
-import { OVERLAY_MESSAGE_LIMIT, PANEL_MESSAGE_LIMIT } from '../shared/message-limits.js';
-import {HIGHLIGHT_SETTING,savedHighlightStyle,validateHighlightStyle} from '../shared/highlight-style.js';
-import {validateSenderFilter} from '../shared/sender-filter.js';
-import {messageEditsKey} from '../shared/message-edits.js';
-import {LotteryRecorder,lotteryMessages,lotteryRecord,saveLotteryNote} from './lottery-records.js';
+import {PlatformCredentials,COOKIE_PLATFORMS} from './platform-credentials.js';
+import {PlatformCookieValidation} from './platform-cookie-validation.js';
 
 const appRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function createApp(options={}) {
@@ -72,20 +66,20 @@ async function createManagedApp(options,runtime) {
   const executable=options.noRecorder?'':resolveRuntimeTool(projectRoot,'recorder',{override:options.recorder,required:false});
   await runtime.startup('打开素材数据库');
   const store=await openRecoveredStore(root,diagnostics);
-  const credentials=await new PlatformCredentials(root,{diagnostics,...options.credentialOptions}).initialize();
+  const credentials=await new PlatformCredentials(root,{diagnostics,...options.credentialOptions,store}).initialize();
   if(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT)store.defaultExportRoot=path.resolve(options.defaultExportRoot||process.env.EDITOR_EXPORT_ROOT);
   store.projectRoot=path.resolve(options.projectRoot??(options.data?path.dirname(root):projectRoot));
   const ingestor=new Ingestor(store),media=new Media(store,{ffmpeg,ffprobe}),storage=new CompactStorage(store),jobDeletion=new JobDeletion(store);
   store.giftIcons=new GiftIcons(store,{ffmpeg});
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
-  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
+  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,xiaohongshu:options.xiaohongshu,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
   const lotteries=new LotteryRecorder(store,options.lotteryOptions);
-  const credentialChecks={bilibili:'unknown',douyin:'unknown'};
-  const credentialSnapshot=()=>({...credentials.snapshot(),checks:{...credentialChecks},bilibiliCore:{...recorder.credentialStatus}});
-  media.isRecording=()=>recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
+  const cookieValidation=new PlatformCookieValidation(credentials,recorder.platforms,{diagnostics});
+  const credentialSnapshot=()=>({...credentials.snapshot(),checks:Object.fromEntries(COOKIE_PLATFORMS.map(platform=>[platform,cookieValidation.status(platform)])),bilibiliCore:{...recorder.bilibili.credentialStatus}});
+  media.isRecording=()=>hasRecording(store,recorder);
   const linkmic=new LinkmicIndex(store,{resolver:recorder.douyin.resolver,ffmpeg});store.linkmic=linkmic;
-  const clients=new Set(); let closing=false,app,closePromise,startupRecovery;
+  const clients=new Set(); let closing=false,app,startupRecovery;
   store.recovery.recovering=true;
   const deletingSessions=new SessionDeletion({store,storage,waveform,media,density,idleMs:options.deletionIdleMs??30000,retryMs:options.deletionRetryMs??1000});
   let autoUpdate;
@@ -93,7 +87,7 @@ async function createManagedApp(options,runtime) {
   const liveHealth=new LiveRecordingHealth({store,recorder,ingestor,media,resources:liveResources,
     blocked:()=>closing||store.recovery.recovering||autoUpdate?.applying||storage.busy||
       (!options.noRecorder&&recorder.connectionPending)||media.hasForegroundWork?.()||
-      !!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1")});
+      hasIndexing(store)});
   const preparation=new BackgroundPreparation(store,media,{
     ...options.preparationOptions,
     liveOptions:{...liveOptions,context:liveOptions.context||(()=>liveHealth.context()),policy:liveOptions.policy||new LivePreparationPolicy({resources:liveResources})},
@@ -102,8 +96,8 @@ async function createManagedApp(options,runtime) {
       if(!options.noRecorder&&recorder.connectionPending)return 'connection';
       if(media.hasForegroundWork?.({includeInteractive:false}))return 'export';
       if(storage.busy)return 'compaction';
-      if(store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1"))return 'indexing';
-      if(recorder.rooms.some(room=>room.recording)||store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1"))return 'recording';
+      if(hasIndexing(store))return 'indexing';
+      if(hasRecording(store,recorder))return 'recording';
       return '';
     }
   });
@@ -112,23 +106,9 @@ async function createManagedApp(options,runtime) {
   store.temporaryWorkspaces=media.temporaryWorkspaces;
   const closeAction=()=>{const saved=store.setting('window-close-action');return ['exit','background'].includes(saved)?saved:'ask';};
   const previewTimestamp=()=>store.setting('preview-timestamp')===true;
-  function settingsSnapshot(){return {
-    paths:directories(store),closeAction:closeAction(),previewTimestamp:previewTimestamp(),
-    previewTimestampStyle:savedTimestampStyle(store),previewTimestampPosition:savedTimestampPosition(store),
-    recordingStyle:savedRecordingStyle(store),giftStyle:savedGiftStyle(store),danmakuPerSecond:chatRate(store),
-    danmakuStyle:savedDanmakuStyle(store),highlightStyle:savedHighlightStyle(store),danmakuFont:media.fonts.snapshot()
-  };}
+  const settingsSnapshot=()=>workbenchSettings(store,media,closeAction,previewTimestamp);
   function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
-  function activity(){
-    const recording=recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('recording','waiting') LIMIT 1");
-    const processing=media.hasForegroundWork({includeInteractive:false})||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
-    const preparing=!!preparation.active||!!store.get("SELECT session FROM preparation_jobs WHERE paused=0 AND status IN ('queued','preparing') LIMIT 1");
-    const organising=ingestor.busy||storage.busy||deletingSessions.size>0||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status IN ('importing','finishing') LIMIT 1");
-    const monitoring=[...recorder.following.targets.values()].some(target=>target.enabled)||recorder.rooms.some(room=>room.recordingEnabled!==false&&(room.autoRecord||room.recordingEnabled===true));
-    const busy=recording||processing||preparing||organising||!!recorder.starting||recorder.pollBusy||!!recorder.douyin.polling;
-    const exporting=media.processing||media.enqueues.size>0||media.saves.size>0||media.savePreparations.size>0||!!store.get("SELECT id FROM jobs WHERE status IN ('queued','running','finalizing','saving','cancelling') LIMIT 1");
-    return {updateBusy:store.recovery.recovering||recording||processing||organising||!!preparation.active||media.fonts.changing||!!recorder.starting, busy:busy||store.recovery.recovering,background:busy||monitoring||store.recovery.recovering,requiresExitConfirmation:recording||exporting,reason:store.recovery.recovering?'任务恢复':recording?'录制':processing?'导出':preparing?'预处理':organising?'素材整理':monitoring?'监控':'',recorderPort:recorder.port};
-  }
+  const activity=()=>appActivity({store,media,recorder,preparation,storage,ingestor,deletingSessions});
   const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
   const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
   await runtime.startup('检查上次更新状态');
@@ -138,31 +118,16 @@ async function createManagedApp(options,runtime) {
   const deleteMaterial=(id,options)=>deletingSessions.delete(id,options);
   const deletionMaintenance=new DeletionMaintenance(store,{remove:deleteMaterial,busy:()=>closing||deletingSessions.size>0||ingestor.busy||storage.busy||waveform.active||!!preparation.active||media.previews.size>0||media.hasForegroundWork()||recorder.rooms.some(room=>room.recording)||!!store.get("SELECT id FROM sessions WHERE deleted_at='' AND status<>'finished' LIMIT 1")});
   autoUpdate=new AutoUpdate({updates,runtime,appRoot,projectRoot,activity,quit:()=>desktopExit.request(false)});
-  function snapshot(){return {recovery:{...store.recovery,isolatedRecords:store.recoveryCount},diagnostics:{error:diagnostics.lastError},updates:updates.snapshot(),sessions:recorder.materialOrigins(store.sessions()),rooms:recorder.rooms,anchors:recorder.anchors,following:recorder.following.snapshot,recorder:{online:recorder.available,biliOnline:recorder.online,douyinOnline:recorder.douyin.started&&!recorder.douyin.closed,error:recorder.error},preparation:preparation.snapshot(),jobs:store.all("SELECT jobs.id,session,jobs.created,jobs.status,progress,file,jobs.error,mode,data FROM jobs LEFT JOIN sessions ON sessions.id=jobs.session WHERE jobs.session IS NULL OR sessions.deleted_at='' ORDER BY jobs.created DESC,jobs.rowid ASC LIMIT 100").map(job=>{const {data,...entry}=job,details=store.jobDetails(job);return {...entry,scope:details.scope||'clips',clipIndex:details.clipIndex,clipCount:details.clipCount,danmaku_file:exportedJobFile(job,'danmaku')||'',canRetrySave:details.canRetrySave===true,canRetryExport:['failed','interrupted'].includes(job.status)&&!details.recoveryInvalid,hasProcessingRecovery:!!details.processingRecovery,savedExportSteps:details.processingRecovery?.completedSteps||0,hasRetainedFiles:!!(details.processingRecovery||details.pendingPublication),automaticRetries:details.automaticRetries||0,resumedExportSteps:details.resumedExportSteps||0,exportDirectory:details.outputRoot||''};}),deletions:deletingSessions.snapshot(),pendingCleanup:store.pendingCleanup(),dataPath:root,...settingsSnapshot()};}
-  function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
-  async function body(req,maxBytes=8*1024*1024){
-    if(!req.headers['content-type']?.startsWith('application/json')){const e=new Error('请求必须为 JSON。');e.status=415;throw e;}
-    const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>maxBytes)throw new Error('请求数据过大。');chunks.push(chunk);}
-    try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw new Error('JSON 请求格式无效。');}
-  }
-  async function sendFile(req,res,file){
-    const stat=await fs.stat(file);let start=0,end=stat.size-1,status=200;
-    const range=req.headers.range;
-    if(range){const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}start=Number(match[1]);end=match[2]?Math.min(end,Number(match[2])):end;status=206;}
-    if(start>end||start>=stat.size){res.writeHead(416,{'Content-Range':`bytes */${stat.size}`});return res.end();}
-    const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.mkv':'video/x-matroska','.flv':'video/x-flv','.xml':'application/xml; charset=utf-8','.json':'application/json','.ass':'text/plain; charset=utf-8','.ttf':'font/ttf','.otf':'font/otf'};
-    const headers={'Content-Type':mime[path.extname(file)]||'application/octet-stream','Content-Length':end-start+1,'Accept-Ranges':'bytes','X-Content-Type-Options':'nosniff'};
-    if(['.html','.js','.css'].includes(path.extname(file)))headers['Cache-Control']='no-store';
-    if(status===206)headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`;
-    res.writeHead(status,headers);if(req.method==='HEAD')return res.end();
-    const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
-  }
+  const snapshot=()=>workbenchSnapshot({
+    store,recorder,diagnostics,updates,preparation,deletingSessions,root,settingsSnapshot,credentialWarnings:credentials.warnings()
+  });
   const server=http.createServer(async(req,res)=>{
     try {
       let match;
       const host=req.headers.host||'';
       if(!new Set([`127.0.0.1:${port}`,`localhost:${port}`]).has(host)){json(res,{error:'无效的本机访问地址。'},403);return;}
       const url=new URL(req.url,`http://${host}`),p=url.pathname;
+      const request={req,res,url,p};
       // Record only the operation name, never query strings or request bodies.
       if(req.method==='POST'&&p.startsWith('/api/'))res.once('finish',()=>{const parts=p.split('/');diagnostics.record('操作结果',`${parts[2]} / ${parts.length>4?parts.at(-1):''}；HTTP ${res.statusCode}`,{level:res.statusCode>=400?'警告':'信息'});});
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
@@ -186,40 +151,7 @@ async function createManagedApp(options,runtime) {
       }
       if(store.recovery.recovering&&req.method==='POST'&&p.startsWith('/api/')&&!['/api/folders/open'].includes(p))return json(res,{error:'正在恢复上次任务，请稍候；原始素材已保留。'},503);
       if((runtime.stopping||autoUpdate.applying)&&req.method==='POST'&&p!=='/internal/recorder-event')return json(res,{error:'后台正在安全切换，请稍后再试。'},503);
-      if(p==='/api/updates/apply'&&req.method==='POST'){const input=await body(req);return json(res,updates.requestInstall(input?.key));}
-      if(p==='/api/updates/check'&&req.method==='POST'){await body(req);return json(res,await updates.check());}
-      if(p==='/api/updates/download'&&req.method==='POST'){const input=await body(req);return json(res,updates.download(input.key,input.autoInstall===true),202);}
-      if(p==='/api/updates/clear'&&req.method==='POST'){await body(req);return json(res,await updates.clearCache());}
-      if(p==='/api/updates/cancel'&&req.method==='POST'){await body(req);return json(res,updates.cancel());}
-      if(p==='/api/updates/defer'&&req.method==='POST'){await body(req);return json(res,updates.defer());}
-      if(p==='/api/updates/ignore'&&req.method==='POST'){
-        const input=await body(req);
-        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||!('key' in input))throw new Error('版本提醒设置无效。');
-        return json(res,updates.ignoreVersion(input.key));
-      }
-      if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
-      if(p==='/api/platform-credentials'&&req.method==='GET')return json(res,credentialSnapshot());
-      if((match=/^\/api\/platform-credentials\/(bilibili|douyin)\/(save|delete|verify|unlock)$/.exec(p))&&req.method==='POST'){
-        const [,platform,action]=match,input=await body(req,65536);
-        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>action!=='save'||key!=='cookie'))throw new Error('登录信息请求无效。');
-        if(action==='save')await credentials.save(platform,input.cookie);
-        else if(action==='delete')await credentials.remove(platform);
-        else if(action==='unlock')await credentials.unlock(platform);
-        else {
-          if(platform==='douyin')throw new Error('抖音 Cookie 保存后会用于弹幕和礼物连接；请以直播间实际采集结果确认。');
-          if(!credentials.get(platform))throw new Error('请先保存 Cookie。');
-          const before=credentials.get(platform);
-          try{const valid=await recorder.bilibiliResolver.verifyCookie();if(before===credentials.get(platform))credentialChecks[platform]=valid?'valid':'invalid';}
-          catch{if(before===credentials.get(platform))credentialChecks[platform]='unavailable';}
-          return json(res,credentialSnapshot());
-        }
-        credentialChecks[platform]='unknown';
-        if(platform==='douyin'){
-          try{await recorder.douyin.applyCredentials();credentialChecks.douyin='applied';}
-          catch{credentialChecks.douyin='pending';diagnostics.record('抖音 Cookie','已更新安全保存项；当前弹幕连接刷新失败，将在后续连接时重试。',{level:'警告'});}
-        }else if(recorder.online)await recorder.applyCredentials();else recorder.credentialStatus={applied:false,error:credentials.get(platform)?'已安全保存，连接录制核心后应用。':''};
-        return json(res,credentialSnapshot());
-      }
+      if(await handleSystemRoutes(request,{updates,credentials,recorder,cookieValidation,credentialSnapshot}))return;
       if((match=/^\/api\/danmaku-font\/([a-f0-9]{64})$/.exec(p))&&req.method==='GET')return await sendFile(req,res,await media.fonts.file({id:match[1]}));
       if((p==='/api/danmaku-font'||p==='/api/danmaku-font/draft')&&req.method==='POST'){
         const draft=p.endsWith('/draft');let imported;
@@ -238,15 +170,15 @@ async function createManagedApp(options,runtime) {
         res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write(`data: ${JSON.stringify(snapshot())}\n\n`);clients.add(res);res.on('close',()=>clients.delete(res));return;
       }
       if(p==='/internal/recorder-event'&&req.method==='POST'){
-        if(url.searchParams.get('token')!==recorder.webhookSecret)return json(res,{error:'无效事件来源。'},403);
-        await recorder.event(await body(req));return json(res,{ok:true});
+        if(url.searchParams.get('token')!==recorder.bilibili.webhookSecret)return json(res,{error:'无效事件来源。'},403);
+        await recorder.bilibili.event(await body(req));return json(res,{ok:true});
       }
-      if(p==='/api/follow-users'&&req.method==='POST')return json(res,await recorder.following.add((await body(req)).url));
+      if(p==='/api/follow-users'&&req.method==='POST')return json(res,await recorder.douyin.following.add((await body(req)).url));
       if(p==='/api/anchors'&&req.method==='POST')return json(res,await recorder.addAnchor(await body(req)));
-      const anchorAction=p.match(/^\/api\/anchors\/((?:bilibili:|douyin:|douyin-user:)\d{1,20})\/(start|stop|remove)$/);
-      if(anchorAction&&req.method==='POST'){await recorder.anchorAction(anchorAction[1],anchorAction[2],await body(req));return json(res,{anchors:recorder.anchors});}
+      const anchorAction=p.match(/^\/api\/anchors\/([a-z-]+:\d{1,20})\/(start|stop|remove)$/);
+      if(anchorAction&&req.method==='POST'&&recorder.platformForAnchor(anchorAction[1])){await recorder.anchorAction(anchorAction[1],anchorAction[2],await body(req));return json(res,{anchors:recorder.anchors});}
       const followAction=p.match(/^\/api\/follow-users\/(\d{1,20})\/(enable|remove)$/);
-      if(followAction&&req.method==='POST'){const input=await body(req);if(followAction[2]==='enable')await recorder.following.enable(followAction[1],input.enabled);else await recorder.following.remove(followAction[1],input.confirmed);return json(res,{following:recorder.following.snapshot});}
+      if(followAction&&req.method==='POST'){const input=await body(req);if(followAction[2]==='enable')await recorder.douyin.following.enable(followAction[1],input.enabled);else await recorder.douyin.following.remove(followAction[1],input.confirmed);return json(res,{following:recorder.douyin.followingSnapshot});}
       if(p==='/api/rooms'&&req.method==='POST'){
         const input=await body(req),result=await recorder.addRoom(input);diagnostics.record('用户操作',`添加监控；平台 ${result?.platform||'bilibili'}；房间 ${result?.roomId||result?.webRid||'见房间状态'}；自动录制=${input.autoRecord!==false}`);return json(res,result);
       }
@@ -302,172 +234,11 @@ async function createManagedApp(options,runtime) {
         }
         return json(res,preparation.snapshot());
       }
-      if((match=/^\/api\/rooms\/(\d+|douyin:\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
+      if((match=/^\/api\/rooms\/(\d+|(?:douyin|xiaohongshu):\d{1,20})\/(start|stop|auto|remove)$/.exec(p))&&req.method==='POST'){
         const input=await body(req);diagnostics.record('用户操作',`直播间 ${match[1]}：${{start:'手动开始录制',stop:'停止录制与监控',auto:'设置自动录制',remove:'移除监控'}[match[2]]}${match[2]==='auto'?`；启用=${input.enabled===true}`:''}`);try{await recorder.action(match[1],match[2],input);diagnostics.record('监控操作完成',`直播间 ${match[1]}：${match[2]} 已成功执行`);}catch(error){diagnostics.record(`直播间 ${match[1]} ${match[2]} 操作失败`,error,{level:'错误'});throw error;}return json(res,{ok:true});
       }
-      if(p==='/api/danmaku-style/preview'&&req.method==='POST'){
-        const input=await body(req),controller=new AbortController();res.once('close',()=>controller.abort());
-        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(input.motion===true?30000:15000)]);
-        const result=await stylePreview.render(input,signal);
-        if(!result){if(res.destroyed)return;throw new Error('样式预览超时，请重试。');}
-        const {bytes,samples,contentType}=result;
-        res.writeHead(200,{'Content-Type':contentType,'Cache-Control':'no-store','Content-Length':bytes.length,'X-Danmaku-Preview-Count':samples});return res.end(bytes);
-      }
-      if(p==='/api/settings'&&req.method==='POST'){
-        const input=await body(req);
-        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['exportDirectory','closeAction','danmakuPerSecond','danmakuStyle','highlightStyle','danmakuFont','previewTimestamp','previewTimestampStyle','previewTimestampPosition','recordingStyle','giftStyle'].includes(key)))throw new Error('不支持的设置项。');
-        const giftStyle='giftStyle' in input?validateGiftStyle(input.giftStyle):null;
-        const highlightStyle='highlightStyle' in input?validateHighlightStyle(input.highlightStyle):null;
-        if('closeAction' in input)validateCloseAction(input.closeAction);
-        if('previewTimestamp' in input&&typeof input.previewTimestamp!=='boolean')throw new Error('请选择是否显示预览时间戳。');
-        const timestampStyle='previewTimestampStyle' in input?validateTimestampStyle(input.previewTimestampStyle):undefined;
-        const timestampPosition='previewTimestampPosition' in input?validateTimestampPosition(input.previewTimestampPosition):undefined;
-        if('danmakuPerSecond' in input)validateChatRate(input.danmakuPerSecond);
-        const style='danmakuStyle' in input?validateDanmakuStyle(input.danmakuStyle):null;
-        const recordingStyle='recordingStyle' in input?validateRecordingStyle(input.recordingStyle):null;
-        if(media.fonts.changing)throw new Error('正在保存字体，请稍后重试。');
-        media.fonts.changing=true;
-        try{
-          const font='danmakuFont' in input?await media.fonts.selection(input.danmakuFont):undefined;
-          const directory='exportDirectory' in input?await writableDirectory(input.exportDirectory):undefined;
-          const changed=(style&&JSON.stringify(style)!==JSON.stringify(savedDanmakuStyle(store)))||
-            (highlightStyle&&JSON.stringify(highlightStyle)!==JSON.stringify(savedHighlightStyle(store)))||
-            (recordingStyle&&JSON.stringify(recordingStyle)!==JSON.stringify(savedRecordingStyle(store)))||
-            (font!==undefined&&(font?.id||null)!==(media.fonts.snapshot()?.id||null))||
-            ('danmakuPerSecond' in input&&input.danmakuPerSecond!==chatRate(store));
-          store.transaction(()=>{
-            if(directory!==undefined)store.setting('export-directory',directory);
-            if('closeAction' in input)store.setting('window-close-action',input.closeAction);
-            if('previewTimestamp' in input)store.setting('preview-timestamp',input.previewTimestamp);
-            if(timestampStyle!==undefined)store.setting(TIMESTAMP_STYLE_SETTING,timestampStyle);
-            if(timestampPosition!==undefined)store.setting(TIMESTAMP_POSITION_SETTING,timestampPosition);
-            if('danmakuPerSecond' in input)store.setting(CHAT_RATE_SETTING,input.danmakuPerSecond);
-            if(style)store.setting(DANMAKU_STYLE_SETTING,style);
-            if(highlightStyle)store.setting(HIGHLIGHT_SETTING,highlightStyle);
-            if(recordingStyle)store.setting(RECORDING_STYLE_SETTING,recordingStyle);
-            if(giftStyle)store.setting(GIFT_SETTING,giftStyle);
-            if(font!==undefined)store.setting('danmaku-font',font);
-          });
-          if('danmakuPerSecond' in input)recorder.douyin.chat.setRateLimit(input.danmakuPerSecond);
-          if(changed)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
-          return json(res,{ok:true,...settingsSnapshot()});
-        }finally{media.fonts.changing=false;}
-      }
-      if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
-      if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){
-        const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
-        const sources=store.sources(session.id).map(s=>({id:s.id,start:s.start,wall:s.wall,duration:s.duration,closed:s.closed,error:s.error,path:s.path,metadata:store.setting('metadata:'+s.id)}));
-        for(const source of sources)if(!source.metadata&&source.duration>0){void media.probeSource(store.get('SELECT * FROM sources WHERE id=?',source.id)).catch(()=>{});}
-        return json(res,{...session,sources,edit:store.edit(session.id),chunks:store.get('SELECT COUNT(*) AS count FROM chunks WHERE source IN (SELECT id FROM sources WHERE session=?)',session.id).count});
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/linkmic-avatars\/([\w-]+)\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){
-        const asset=store.session(match[1])&&store.get('SELECT a.png FROM linkmic_avatars a JOIN sources s ON s.id=a.source WHERE s.session=? AND a.source=? AND a.hash=?',match[1],match[2],match[3]);
-        if(!asset)return json(res,{error:'头像不存在。'},404);
-        res.writeHead(200,{'Content-Type':'image/png','Content-Length':asset.png.length,'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'});
-        return res.end(Buffer.from(asset.png));
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/linkmic$/.exec(p))&&req.method==='GET'){
-        const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
-        const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||from+60);
-        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from||to-from>120)throw new Error('名牌预览范围无效。');
-        linkmic.request(session.id);
-        return json(res,{events:linkmic.events(session.id,from,to),cameraEvents:linkmic.cameraEvents(session.id,from,to)});
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/edit$/.exec(p))&&req.method==='POST'){
-        const id=match[1],previous=store.edit(id),saved=store.saveEdit(id,await body(req));
-        const visibility=edit=>JSON.stringify([edit.filterLottery!==false,[...edit.excluded].sort(),[...(edit.highlighted||[])].sort(),messageEditsKey(edit.messageEdits)]);
-        if(visibility(previous)!==visibility(saved))await preparation.invalidate(id);
-        return json(res,saved);
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST'){
-        const input=await body(req),id=match[1];
-        if(input.confirmed!==true)throw new Error('请先确认是否永久删除这份素材。');
-        if(input.background===true)return json(res,deletingSessions.start(id).accepted,202);
-        if(deletingSessions.has(id))throw new Error('这份素材正在删除，请等待完成。');
-        const session=store.get('SELECT * FROM sessions WHERE id=?',id);
-        if(!session||session.purged_at)throw new Error('素材不存在或已经彻底删除。');
-        if(session.status!=='finished'||store.get('SELECT id FROM sources WHERE session=? AND closed<2',id))throw new Error('这份素材仍在录制或整理中，请结束后再删除。');
-        if(session.archive_status==='running'||store.get("SELECT id FROM jobs WHERE session=? AND status IN ('queued','running','finalizing','saving','cancelling')",id))throw new Error('这份素材正在导出或保存，请完成后再删除。');
-        if(store.get("SELECT id FROM jobs WHERE session=? AND status='save_failed'",id))throw new Error('这份素材还有编码完成但尚未保存的导出，请先重试保存。');
-        const controller=new AbortController(),disconnected=()=>{if(!res.writableFinished)controller.abort();};
-        res.once('close',disconnected);
-        try{return json(res,await deleteMaterial(id,{signal:controller.signal}));}
-        finally{res.removeListener('close',disconnected);}
-      }
-      if((match=/^\/api\/gift-icons\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){
-        const png=await store.giftIcons.get(match[1]);if(!png)return json(res,{error:'暂无礼物图标。'},404);
-        res.writeHead(200,{'Content-Type':'image/png','Content-Length':png.length,'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'});return res.end(png);
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/lotteries(?:\/([a-f0-9]{32})(\/note)?)?$/.exec(p))){
-        const [,sessionId,recordId,noteRoute]=match;
-        if(!store.session(sessionId))return json(res,{error:'素材不存在或已删除。'},404);
-        if(recordId){
-          if(req.method==='POST'&&noteRoute)return json(res,saveLotteryNote(store,sessionId,recordId,await body(req,8192)));
-          if(req.method==='GET'&&!noteRoute){const record=lotteryRecord(store,sessionId,recordId);return record?json(res,record):json(res,{error:'天选记录不存在。'},404);}
-        }else if(req.method==='GET'){
-          const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
-          if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('天选记录时间范围无效。');
-          return json(res,lotteryMessages(store,sessionId,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200)}));
-        }
-        return json(res,{error:'请求方式无效。'},405);
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/gifts$/.exec(p))&&req.method==='GET'){
-        const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
-        const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
-        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('礼物时间范围无效。');
-        const includeSuperChat = url.searchParams.get('includeSuperChat') === '1';
-        const events=giftMessages(store,id,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style:savedGiftStyle(store),includeSuperChat});
-        void store.giftIcons.enrich(events).catch(()=>{});
-        return json(res,events);
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/feed$/.exec(p))&&req.method==='GET'){
-        const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
-        const params=url.searchParams,at=params.has('at')?Number(params.get('at')):undefined;
-        if(at!==undefined&&(!Number.isFinite(at)||at<0))throw new Error('列表定位时间无效。');
-        const sender=validateSenderFilter(params.has('sender')?JSON.parse(params.get('sender')):null);
-        const search=(params.get('q')||'').trim().slice(0,200);
-        await store.chatRules.prepare(id);await store.senders.prepare(id);
-        if(/^[1-9]\d{0,30}$/.test(search))await store.senders.prepare(id,true);
-        const page=messageFeed(store,id,{at,sender,from:params.has('from')?Number(params.get('from')):0,to:params.has('to')?Number(params.get('to')):undefined,search,gifts:params.get('gifts')==='1',onlyGifts:params.get('onlyGifts')==='1',
-          cursor:params.has('cursor')?JSON.parse(params.get('cursor')):undefined,direction:params.get('direction')||'after'});
-        void store.giftIcons.enrich(page.rows.filter(row=>row.type!=='d'&&row.type!=='lottery')).catch(()=>{});
-        return json(res,page);
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/messages$/.exec(p))&&req.method==='GET'){
-        if(!store.session(match[1]))return json(res,{error:'素材不存在或已删除。'},404);
-        const from=Math.max(0,Number(url.searchParams.get('from')||0)),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),search=(url.searchParams.get('q')||'').slice(0,200);
-        if(!Number.isFinite(from)||!Number.isFinite(to))throw new Error('时间范围无效。');
-        const atParameter=url.searchParams.get('at'),at=atParameter===null?undefined:Number(atParameter),overlay=url.searchParams.get('overlay')==='1';
-        if(atParameter!==null&&(!atParameter.trim()||!Number.isFinite(at)||at<from||at>to))throw new Error('弹幕跟随时间无效。');
-        await store.chatRules.prepare(match[1]);
-        const sender=overlay?null:validateSenderFilter(url.searchParams.has('sender')?JSON.parse(url.searchParams.get('sender')):null);
-        if(!overlay)await store.senders.prepare(match[1]);
-        return json(res,store.messages(match[1],from,to,search,overlay?OVERLAY_MESSAGE_LIMIT:PANEL_MESSAGE_LIMIT,undefined,!overlay&&!search&&!sender?at:undefined,sender));
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/signals$/.exec(p))&&req.method==='GET'){
-        const id=match[1],session=store.session(id);
-        if(!session)return json(res,{error:'素材不存在或已删除。'},404);
-        if(deletingSessions.has(id))throw new Error('素材正在删除，请稍后再试。');
-        const from=Number(url.searchParams.get('from')??0),to=Number(url.searchParams.get('to')??session.duration),bins=Number(url.searchParams.get('bins')??600);
-        if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from||to>session.duration+.05||!Number.isInteger(bins)||bins<1||bins>1000)throw new Error('波形时间范围无效。');
-        const window={from,to:Math.min(to,session.duration),bins};
-        return json(res,{from:window.from,to:window.to,audio:waveform.request(id,window),density:density.request(id,window)});
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/preview$/.exec(p))&&req.method==='GET'){
-        const start=Number(url.searchParams.get('start')||0);if(!Number.isFinite(start)||start<0)throw new Error('播放位置无效。');
-        const client=url.searchParams.get('client'),sequence=Number(url.searchParams.get('sequence'));
-        if(!client&&url.searchParams.has('sequence'))throw new Error('预览请求标识无效。');
-        const abort=new AbortController();res.on('close',()=>abort.abort());await media.preview(match[1],start,res,abort.signal,{client,sequence});return;
-      }
-      if((match=/^\/api\/previews\/([a-zA-Z0-9_-]+)\/stop$/.exec(p))&&req.method==='POST'){
-        const input=await body(req);media.previewRequests.stop(match[1],input?.sequence);return json(res,{ok:true});
-      }
-      if((match=/^\/api\/sessions\/([\w-]+)\/export$/.exec(p))&&req.method==='POST')return json(res,await media.enqueue(match[1],await body(req)));
-      if((match=/^\/api\/jobs\/([\w-]+)\/retry-save$/.exec(p))&&req.method==='POST')return json(res,await media.retrySave(match[1],await body(req)));
-      if((match=/^\/api\/jobs\/([\w-]+)\/retry$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.retryExport(match[1]));}
-      if((match=/^\/api\/jobs\/([\w-]+)\/cancel$/.exec(p))&&req.method==='POST'){await body(req);return json(res,await media.cancelExport(match[1]));}
-      if((match=/^\/api\/jobs\/([\w-]+)\/delete-preview$/.exec(p))&&req.method==='GET')return json(res,await jobDeletion.preview(match[1]));
-      if((match=/^\/api\/jobs\/([\w-]+)\/delete$/.exec(p))&&req.method==='POST')return json(res,await jobDeletion.delete(match[1],await body(req)));
+      if(await handleSettingsRoutes(request,{store,media,stylePreview,settingsSnapshot,validateCloseAction,recorder,preparation}))return;
+      if(await handleMaterialRoutes(request,{store,media,preparation,deletingSessions,deleteMaterial,recorder,jobDeletion,waveform,density,linkmic}))return;
       if(p.startsWith('/api/')||p.startsWith('/internal/'))return json(res,{error:'接口不存在。'},404);
       if(!['GET','HEAD'].includes(req.method))return json(res,{error:'请求方式无效。'},405);
       const dist=path.join(appRoot,'dist');let target=path.resolve(dist,'.'+decodeURIComponent(p));
@@ -479,7 +250,7 @@ async function createManagedApp(options,runtime) {
   await runtime.startup('连接本地界面服务');
   try{port=await listenLocal(server,port);}
   catch(error){liveHealth.close();media.close();await recorder.close();await credentials.close();store.close();throw error;}
-  port=server.address().port;recorder.editorPort=port;
+  port=server.address().port;recorder.bilibili.editorPort=port;
   try{await runtime.publish(port);await runtime.startup('本地界面服务已就绪',{ready:true});}
   catch(error){liveHealth.close();media.close();await recorder.close();await media.waitForSaves();await new Promise(resolve=>server.close(resolve));await credentials.close();store.close();throw error;}
 
@@ -515,9 +286,12 @@ async function createManagedApp(options,runtime) {
   },1000);
   const diagnosticPoll=()=>{
     if(closing)return;
+    if(!options.noRecorder)void cookieValidation.tick().catch(()=>{
+      diagnostics.record('Cookie 校验','暂时未能刷新弹幕登录状态，将在后续检查时重试。',{level:'警告'});
+    });
     try{
-      diagnostics.rooms(recorder.rooms,{biliOnline:recorder.online});
-      diagnostics.observe('core',`B站核心：${recorder.online?'已连接':recorder.error||'正在连接'}`,recorder.online?'信息':'警告');
+      diagnostics.rooms(recorder.rooms,{biliOnline:recorder.bilibili.online});
+      diagnostics.observe('core',`B站核心：${recorder.bilibili.online?'已连接':recorder.bilibili.error||'正在连接'}`,recorder.bilibili.online?'信息':'警告');
       diagnostics.observe('activity',`后台工作：${activity().reason||'空闲'}`);
       for(const source of store.all('SELECT id,error,closed FROM sources ORDER BY rowid DESC LIMIT 16'))if(source.error)diagnostics.observe('source:'+source.id,`素材 ${source.id} 错误：${source.error}`,'错误');
       for(const job of store.all('SELECT id,status,error FROM jobs ORDER BY rowid DESC LIMIT 32'))diagnostics.observe('job:'+job.id,`导出 ${job.id}：${job.status}${job.error?'；'+job.error:''}`,job.error?'错误':'信息');
@@ -527,40 +301,17 @@ async function createManagedApp(options,runtime) {
     }catch(error){diagnostics.record('运行检查',error,{level:'错误'});}
   };
   const diagnosticTimer=setInterval(diagnosticPoll,30000);diagnosticPoll();
-  if(!options.noRecorder){void recorder.start().catch(e=>{recorder.error=e.message;});}
-  app={credentials,diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,lotteries,runtime,desktopExit,activity,server,port,root,snapshot,close(){return closePromise??=(async()=>{
-    closing=true;liveHealth.close();await lotteries.close();await updates.close();clearInterval(timer);clearInterval(maintenanceTimer);clearInterval(runtimeTimer);clearInterval(diagnosticTimer);ingestor.stop();media.close();const recorderClosed=recorder.close();await linkmic.close();
-    const deletionsClosed=Promise.allSettled([deletionMaintenance.close(),deletingSessions.close()]);
-    const preparationClosed=preparation.close();
-    const waveformClosed=waveform.close();density.close();
-    for(const client of clients)client.end();
-    const httpClosed=new Promise(resolve=>server.close(resolve));
-    await storage.close();
-    await waveformClosed;
-    await preparationClosed;
-    await deletionsClosed;
-    await startupRecovery;
-    await media.waitForSaves();
-    await Promise.allSettled([...media.probes,...media.enqueues,...media.previews.values()].map(operation=>operation.done));
-    await httpClosed;
-    await recorderClosed;
-    while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
-    await credentials.close();
-    await diagnostics.close();
-    store.close();
-    await runtime.release();
-  })();}};
-  startupRecovery=(async()=>{
-    // Publish the workbench before inspecting historical output files. A bad
-    // task must not keep the native window on the startup failure page.
-    try{
-      diagnostics.record('数据恢复','开始恢复上次任务',{important:true});
-      await media.recoverPendingSaves();
-      if(!closing)await media.recoverInterruptedExports();
-    }catch(error){store.recovery.error='部分旧任务恢复未完成，可以重新导出；原文件已保留。';diagnostics.record('任务恢复',error,{level:'警告',important:true});}
-    finally{store.recovery.recovering=false;}
-    if(!closing){ingestor.start();void media.work();if(options.preparation!==false)preparation.start();if(!options.noRecorder&&options.lotteries!==false)lotteries.start();maintain();}
-  })();
+  if(!options.noRecorder){void recorder.start().catch(e=>{recorder.bilibili.error=e.message;});}
+  const close=closeAppWith({
+    beginClosing:()=>{closing=true;cookieValidation.close();}, timers:[timer,maintenanceTimer,runtimeTimer,diagnosticTimer],
+    liveHealth,lotteries,updates,ingestor,media,recorder,linkmic,deletionMaintenance,deletingSessions,
+    preparation,waveform,density,clients,server,storage,getStartupRecovery:()=>startupRecovery,
+    credentials,diagnostics,store,runtime,
+  });
+  app={credentials,cookieValidation,diagnostics,updates,store,ingestor,media,storage,waveform,density,preparation,deletionMaintenance,deletingSessions,recorder,lotteries,runtime,desktopExit,activity,server,port,root,snapshot,close};
+  startupRecovery=recoverAppTasks({
+    diagnostics,media,store,isClosing:()=>closing,ingestor,preparation,lotteries,options,maintain,
+  });
   app.startupRecovery=startupRecovery;
   return app;
 }

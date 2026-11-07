@@ -8,11 +8,11 @@ export const CHAT_LIMITS = Object.freeze({ perRoomPerSecond: 50, roomMessages: 2
 // One bounded reservoir per receipt second. Retain messages across a burst,
 // rather than keeping only its beginning. Text equality is never deduplication.
 export class ChatIntake {
-  constructor({ now = Date.now, random = Math.random, limits = {}, filterLottery = () => false } = {}) {
+  constructor({ now = Date.now, random = Math.random, limits = {}, filterLottery = () => false, validSenderId = id => /^[1-9]\d{0,30}$/.test(id || '') } = {}) {
     this.now = now; this.random = random; this.limits = { ...CHAT_LIMITS, ...limits };
     for (const value of Object.values(this.limits)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('弹幕限制无效。');
     validateChatRate(this.limits.perRoomPerSecond);
-    this.filterLottery = filterLottery; this.rooms = new Map(); this.bytes = 0;
+    this.validSenderId = validSenderId; this.filterLottery = filterLottery; this.rooms = new Map(); this.bytes = 0;
   }
   start(room,{start=this.now()}={}) {
     if (typeof room !== 'string' || !room.length || room.length > 128) throw new Error('直播间标识无效。');
@@ -55,7 +55,7 @@ export class ChatIntake {
     }
     // Copy only the common fields: do not retain raw protobuf frames or profiles.
     window.items[index] = { size, message: { id, time: message.time, text: message.text,
-      user: String(message.user || '观众'), color: message.color || '16777215', timestamp: message.timestamp,...(/^[1-9]\d{0,30}$/.test(message.senderId||'')?{senderId:message.senderId}:{}) } };
+      user: String(message.user || '观众'), color: message.color || '16777215', timestamp: message.timestamp,...(this.validSenderId(message.senderId)?{senderId:message.senderId}:{}) } };
     state.bytes += delta; this.bytes += delta;
     if (!old) state.count++; else state.limited++;
     return true;

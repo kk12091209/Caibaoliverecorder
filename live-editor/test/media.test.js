@@ -282,12 +282,12 @@ test('编辑服务漏收事件后从原始目录找回录制，不依赖 webhook
 test('本机 HTTP 接口支持直播素材播放、导出与来源限制',async()=>{
   const app=await createApp({automaticClean:false,preparation:false,port:17968,data:path.join(root,'http'),noRecorder:true,ffmpeg,ffprobe});
   try{
-    const origin='http://127.0.0.1:17968',recorded=path.join(app.recorder.directory,'http-recording.flv');
-    await fs.mkdir(app.recorder.directory,{recursive:true});await fs.copyFile(fixture,recorded);await fs.copyFile(fixture.replace('.flv','.xml'),recorded.replace('.flv','.xml'));
+    const origin='http://127.0.0.1:17968',recorded=path.join(app.recorder.bilibili.directory,'http-recording.flv');
+    await fs.mkdir(app.recorder.bilibili.directory,{recursive:true});await fs.copyFile(fixture,recorded);await fs.copyFile(fixture.replace('.flv','.xml'),recorded.replace('.flv','.xml'));
     const eventData={RoomId:42,RelativePath:path.basename(recorded),FileOpenTime:new Date().toISOString(),Title:'HTTP 测试直播录像'};
-    await app.recorder.event({EventId:'http-opening',EventType:'FileOpening',EventData:eventData});
-    await app.recorder.event({EventId:'http-closed',EventType:'FileClosed',EventData:eventData});
-    await app.recorder.event({EventId:'http-ended',EventType:'StreamEnded',EventData:eventData});
+    await app.recorder.bilibili.event({EventId:'http-opening',EventType:'FileOpening',EventData:eventData});
+    await app.recorder.bilibili.event({EventId:'http-closed',EventType:'FileClosed',EventData:eventData});
+    await app.recorder.bilibili.event({EventId:'http-ended',EventType:'StreamEnded',EventData:eventData});
     const session=app.store.sessions()[0];let response;
     for(let n=0;n<8;n++){await app.ingestor.tick();await new Promise(r=>setTimeout(r,100));}
     response=await fetch(origin+`/api/sessions/${session.id}/preview?start=4.25`);assert.equal(response.status,200);const output=Buffer.from(await response.arrayBuffer());assert.ok(output.length>10000);assert.ok(output.toString('ascii',4,8)==='ftyp');const preview=path.join(root,'preview.mp4');await fs.writeFile(preview,output);assert.equal(probe(preview).streams.length,2);

@@ -12,3 +12,5 @@ export function testProtection(){
 export const biliFixture='SESSDATA=synthetic-bili-secret-v1; DedeUserID=12345; bili_jct=synthetic-csrf-v1';
 export const biliReplacement='SESSDATA=synthetic-bili-secret-v2; DedeUserID=12345; bili_jct=synthetic-csrf-v2';
 export const douyinFixture='sessionid=synthetic-douyin-secret-v1; ttwid=synthetic-visitor-v1';
+
+export const xiaohongshuFixture='a1=synthetic-xhs-device; web_session=synthetic-xhs-session';

@@ -7,6 +7,7 @@ import {aggregateAudio,aggregateDensity,audioStateLabel,densityStateLabel,timeAt
 const props=defineProps({kind:{type:String,default:'audio'},audio:Object,density:Object,from:{type:Number,default:0},to:{type:Number,default:0},dataFrom:{type:Number,default:0},dataTo:{type:Number,default:0},position:{type:Number,default:0},selected:Boolean,loading:Boolean,error:String,disabled:Boolean});
 const emit=defineEmits(['seek']);
 const host=ref(null),canvas=ref(null),width=ref(0);let observer,frame=0;
+let palette;
 const label=computed(()=>props.kind==='audio'?audioStateLabel(props.audio,{selected:props.selected,loading:props.loading,error:props.error}):ui.timeline.弹幕密度);
 const densityHint=computed(()=>densityStateLabel(props.density,{selected:props.selected,error:props.error}));
 const cursor=computed(()=>props.position>=props.from&&props.position<=props.to?windowPercent(props.position,props.from,props.to):null);
@@ -31,15 +32,15 @@ function draw() {
       const bin=bins[i],x=start+i*span/bins.length,bw=Math.max(1,span/bins.length-1);
       if(bin.state==='ready'||bin.state==='silent') {
         const peak=Math.max(.65,Math.sqrt(bin.peak)*(h/2-4)),rms=Math.max(.5,Math.sqrt(bin.rms)*(h/2-4));
-        context.fillStyle='rgba(255,183,196,.95)';context.fillRect(x,h/2-peak,bw,peak*2);
-        context.fillStyle='rgba(255,125,146,.95)';context.fillRect(x,h/2-rms,bw,rms*2);
+        context.fillStyle=palette.waveform_peak;context.fillRect(x,h/2-peak,bw,peak*2);
+        context.fillStyle=palette.waveform_rms;context.fillRect(x,h/2-rms,bw,rms*2);
       }
-      if(bin.state==='pending'||bin.pending){context.fillStyle='rgba(255,125,146,.28)';context.fillRect(x,h-3,bw,2);}
-      if(bin.state==='unavailable'){context.fillStyle='rgba(145,105,80,.16)';context.fillRect(x,2,bw,h-4);}
+      if(bin.state==='pending'||bin.pending){context.fillStyle=palette.waveform_pending;context.fillRect(x,h-3,bw,2);}
+      if(bin.state==='unavailable'){context.fillStyle=palette.waveform_unavailable;context.fillRect(x,2,bw,h-4);}
     }
   } else {
     const bins=aggregateDensity(props.density?.bins,Math.max(1,Math.min(w,span)/3)),max=Math.max(1,...bins),scale=Math.log1p(max);
-    context.fillStyle='rgba(255,125,146,.9)';
+    context.fillStyle=palette.density_bar;
     for(let i=0;i<bins.length;i++){const height=Math.log1p(bins[i])/scale*25;if(height>0)context.fillRect(start+i*span/bins.length,h-3-height,Math.max(1,span/bins.length-1),height);}
   }
   context.restore();
@@ -51,7 +52,16 @@ function keySeek(event){
   if(value!==null){event.preventDefault();event.stopPropagation();emit('seek',Math.min(props.to,Math.max(props.from,value)));}
 }
 watch(()=>[props.audio,props.density,props.from,props.to,props.dataFrom,props.dataTo,width.value],schedule);
-onMounted(()=>{observer=new ResizeObserver(entries=>{width.value=entries[0]?.contentRect.width||0;schedule();});observer.observe(host.value);schedule();});
+onMounted(()=>{
+  const style=getComputedStyle(host.value);
+  palette={
+    waveform_peak:style.getPropertyValue('--waveform-peak').trim(),
+    waveform_rms:style.getPropertyValue('--waveform-rms').trim(),
+    waveform_pending:style.getPropertyValue('--waveform-pending').trim(),
+    waveform_unavailable:style.getPropertyValue('--waveform-unavailable').trim(),
+    density_bar:style.getPropertyValue('--density-bar').trim(),
+  };
+  observer=new ResizeObserver(entries=>{width.value=entries[0]?.contentRect.width||0;schedule();});observer.observe(host.value);schedule();});
 onBeforeUnmount(()=>{observer?.disconnect();if(frame)cancelAnimationFrame(frame);});
 </script>
 

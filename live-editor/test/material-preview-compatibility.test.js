@@ -15,7 +15,7 @@ for(const mode of ['chunks','direct'])test(`${mode}: previously recorded video p
  const options={data:path.join(root,'data'),noRecorder:true,port:0,preparation:false,compact:false,updatesAutoCheck:false,ffmpeg,ffprobe};
  t.after(async()=>{await app?.close();await fs.rm(root,{recursive:true,force:true});});
  app=await createApp(options);await app.startupRecovery;
- const recorded=path.join(app.recorder.directory,'old.flv');await fs.mkdir(path.dirname(recorded),{recursive:true});
+ const recorded=path.join(app.recorder.bilibili.directory,'old.flv');await fs.mkdir(path.dirname(recorded),{recursive:true});
  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=25','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','6','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-g','50','-bf','0','-c:a','aac','-y',recorded],{windowsHide:true});
  const xml=recorded.replace('.flv','.xml');await fs.writeFile(xml,'<i><d p="1.2,1,25,16777215,0,0,0,0" user="旧素材观众">保留原始弹幕</d></i>');
  const session=app.store.createSession({status:'finished',title:'升级前已录制'}),source=app.store.addSource(session.id,recorded,0,'2026-11-04T12:00:00Z',true);

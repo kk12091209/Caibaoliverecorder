@@ -9,10 +9,10 @@ test('local credential API never returns secrets, replaces Bilibili, applies Dou
  assert.equal((await request('platform-credentials')).body.platforms.bilibili.configured,false);
  assert.equal((await request('platform-credentials/bilibili/save',{cookie:biliFixture},{Origin:'https://example.invalid'})).status,403);
  const saved=await request('platform-credentials/bilibili/save',{cookie:biliFixture});assert.equal(saved.status,200);assert.equal(saved.body.platforms.bilibili.configured,true);assert.equal(saved.body.platforms.bilibili.loaded,true);
- let applies=0;app.recorder.douyin.applyCredentials=async()=>{applies++;assert.equal(app.credentials.get('douyin'),douyinFixture);};
+ let applies=0;app.recorder.douyin.core.applyCredentials=async()=>{applies++;assert.equal(app.credentials.get('douyin'),douyinFixture);};
  const douyin=await request('platform-credentials/douyin/save',{cookie:douyinFixture});assert.equal(douyin.status,200);assert.equal(douyin.body.platforms.douyin.loaded,true);assert.equal(applies,1);
  assert.equal((await request('platform-credentials/douyin/save',{cookie:douyinFixture},{Origin:'https://example.invalid'})).status,403);
- assert.deepEqual(Object.keys(saved.body.platforms),['bilibili','douyin']);
+ assert.deepEqual(Object.keys(saved.body.platforms),['bilibili','douyin','xiaohongshu']);
  const original=await fs.readFile(app.credentials.file('bilibili'));
  const unlocked=await request('platform-credentials/bilibili/unlock',{});assert.equal(unlocked.status,200);assert.equal(unlocked.body.platforms.bilibili.loaded,true);
  assert.deepEqual(await fs.readFile(app.credentials.file('bilibili')),original);

@@ -2,11 +2,12 @@
 // Publish this file last, together with the release becoming public.
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { packageName, releaseIdentity } from '../server/updates.js';
+import { isPrerelease, packageName, releaseIdentity } from '../server/updates.js';
 
 export function createUpdateManifest(release, windows, mac, notes) {
   const version=windows.version,revision=windows.buildRevision??1;
   releaseIdentity({version,revision});
+  if(release.prerelease!==isPrerelease(version))throw new Error('GitHub prerelease flag must match the application version.');
   if(mac.version!==version||(mac.buildRevision??1)!==revision||release.tag_name!==`v${version}`)throw new Error('Platform versions must match.');
   if(!/^[a-f0-9]{40}$/.test(windows.sourceRevision)||mac.applicationSourceRevision!==windows.sourceRevision||mac.releaseRevision!==windows.sourceRevision||release.target_commitish!==windows.sourceRevision)throw new Error('Builds and release must use the same source revision.');
   for(const key of ['nodeTests','coreTests','coreLifecycle','portableZip','portable7z','installerUpgradeUninstall'])if(windows[key]!=='passed')throw new Error(`Windows check did not pass: ${key}`);

@@ -32,11 +32,11 @@ onBeforeUnmount(()=>{window.removeEventListener('blur',blur);blur();});
 </template>
 <style scoped>
 .message-time-navigator{position:relative;flex:none;width:22px;min-height:48px;cursor:pointer;touch-action:none;outline:none;border-radius:var(--radius-card);margin:4px 0 8px 4px;}
-.message-time-track{position:absolute;inset:0 6px;border-radius:var(--radius-card);background:#a64d681c;}
-.message-time-thumb{position:absolute;left:4px;width:14px;height:32px;border-radius:var(--radius-control);background:#bf6882;display:grid;place-items:center;box-shadow:0 1px 3px #77334b26;}
-.message-time-thumb span{height:8px;width:6px;border-top:1px solid #fff9;border-bottom:1px solid #fff9;}
-.message-time-navigator:hover .message-time-thumb,.message-time-navigator:focus-visible .message-time-thumb{background:#9e425f;}
+.message-time-track{position:absolute;inset:0 6px;border-radius:var(--radius-card);background:var(--message-rail-track);}
+.message-time-thumb{position:absolute;left:4px;width:14px;height:32px;border-radius:var(--radius-control);background:var(--message-rail-thumb);display:grid;place-items:center;box-shadow:0 1px 3px #77334b26;}
+.message-time-thumb span{height:8px;width:6px;border-top:1px solid var(--message-rail-grip);border-bottom:1px solid var(--message-rail-grip);}
+.message-time-navigator:hover .message-time-thumb,.message-time-navigator:focus-visible .message-time-thumb{background:var(--message-rail-thumb-hover);}
 .message-time-navigator:focus-visible{box-shadow:0 0 0 2px var(--rose);}
 .message-time-navigator[aria-disabled=true]{opacity:.35;cursor:default;}
-.message-time-tip{position:absolute;right:26px;background:#673746;color:white;border-radius:var(--radius-control);padding:4px 7px;font-size:12px;font-variant-numeric:tabular-nums;z-index:4;pointer-events:none;white-space:nowrap;}
+.message-time-tip{position:absolute;right:26px;background:var(--message-rail-tip);color:white;border-radius:var(--radius-control);padding:4px 7px;font-size:12px;font-variant-numeric:tabular-nums;z-index:4;pointer-events:none;white-space:nowrap;}
 </style>

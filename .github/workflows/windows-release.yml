@@ -14,7 +14,7 @@ concurrency:
 jobs:
   package:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 90
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
@@ -125,5 +125,7 @@ jobs:
           assert listed == {p.name for p in root.iterdir()} - {'SHA256SUMS.txt'}
           print('Verified source revision, successful checks and all release hashes.')
           PYVERIFY
-          gh release create "v$RELEASE_VERSION" --draft --latest=false --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
+          channel_flags=()
+          if [[ "$RELEASE_VERSION" =~ -beta\.[1-9][0-9]*$ ]]; then channel_flags+=(--prerelease); fi
+          gh release create "v$RELEASE_VERSION" --draft --latest=false "${channel_flags[@]}" --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
           gh release upload "v$RELEASE_VERSION" release-files/*

@@ -8,13 +8,14 @@ param(
     [string]$RuntimeRoot = '',
     [string]$NuGetRoot = '',
     [string]$FFmpegRoot = '',
-    [string]$Version = '0.2.3',
+    [string]$Version = '',
     [switch]$ForPublic,
     [string]$SourceUrl = '',
     [switch]$Include7z,
     [long]$MaxDownloadBytes = 100000000
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release-version.ps1')
 if ($ForPublic) {
     $sourceUri = $null
     if (![Uri]::TryCreate($SourceUrl, [UriKind]::Absolute, [ref]$sourceUri) -or $sourceUri.Scheme -ne 'https') { throw 'A public build requires -SourceUrl linking the complete corresponding source of this modified project.' }
@@ -23,6 +24,7 @@ if ($ForPublic) {
 if (!$AppRoot) { $AppRoot = Split-Path $PSScriptRoot -Parent }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $AppRoot = (Resolve-Path -LiteralPath $AppRoot).Path
+$Version = Get-CaiboVersion -AppRoot $AppRoot -Expected $Version
 if (!$ToolsRoot) { $ToolsRoot = Join-Path $ProjectRoot '.tools\release-tools' }
 if (!$OutputRoot) { $OutputRoot = Join-Path $ProjectRoot '.tools\release-work' }
 $ToolsRoot = (Resolve-Path -LiteralPath $ToolsRoot).Path
@@ -136,8 +138,10 @@ foreach ($file in Get-ChildItem -LiteralPath (Join-Path $DesktopRoot '程序组�
 }
 if (!$FFmpegRoot) { $FFmpegRoot = Join-Path $ToolsRoot 'ffmpeg-slim' }
 $FFmpegRoot = (Resolve-Path -LiteralPath $FFmpegRoot).Path
+$pinnedRuntime = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json).windows
+$pinnedMedia = $pinnedRuntime.ffmpeg
 $ffmpegComponent = Get-Content -LiteralPath (Join-Path $FFmpegRoot 'component.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($ffmpegComponent.version -ne '8.1.2' -or $ffmpegComponent.variant -ne 'caibo-shared') { throw 'Expected the verified Caibo FFmpeg 8.1.2 shared build.' }
+if ($ffmpegComponent.version -ne $pinnedMedia.version -or $ffmpegComponent.variant -ne $pinnedMedia.variant) { throw 'Expected the verified Caibo FFmpeg 8.1.2 shared build.' }
 $ffmpegFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($file in $ffmpegComponent.files) {
     $componentName = [string]$file.name
@@ -193,7 +197,7 @@ $node = Join-Path $componentRoot 'runtime\node\node.exe'
 $ffmpeg = Join-Path $componentRoot 'runtime\ffmpeg\ffmpeg.exe'
 $ffprobe = Join-Path $componentRoot 'runtime\ffmpeg\ffprobe.exe'
 $nodeVersion = & $node --version
-if ($LASTEXITCODE -ne 0 -or $nodeVersion -ne 'v24.12.0') { throw 'Node must match the pinned 24.12.0 license/version; update tools and pin together.' }
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -ne ('v' + $pinnedRuntime.node.version)) { throw 'Node must match the pinned license and version in release-runtime.json.' }
 # Read the entire output before selecting its first line: closing a native pipe
 # early can make FFmpeg exit nonzero on Windows PowerShell 5.1.
 $ffmpegOutput = @(& $ffmpeg -version)

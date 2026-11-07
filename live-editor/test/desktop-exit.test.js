@@ -23,7 +23,7 @@ async function quit(app,confirmed=false){const response=await fetch(app.runtime.
 test('空闲或仅监控的退出直接受理，不等待维护轮询',async t=>{
   for(const monitoring of [false,true]){
     const f=await fixture(t),app=await f.open();
-    if(monitoring)app.recorder.rooms=[{roomId:42,recording:false,recordingEnabled:true,autoRecord:true}];
+    if(monitoring)app.recorder.bilibili.rooms=[{roomId:42,recording:false,recordingEnabled:true,autoRecord:true}];
     const response=await quit(app);
     assert.equal(response.status,200);assert.equal(response.body.quitAccepted,true);assert.equal(response.body.requiresExitConfirmation,false);
     assert.equal(response.body.pending,'quit');assert.equal(response.body.stopping,true);
@@ -34,7 +34,7 @@ test('空闲或仅监控的退出直接受理，不等待维护轮询',async t=>
 
 test('退出确认覆盖新开始的录制；取消不改变任务、监控和恢复记录',async t=>{
   const f=await fixture(t),app=await f.open();let stops=0;
-  app.recorder.rooms=[{roomId:42,recording:false,recordingEnabled:true}];
+  app.recorder.bilibili.rooms=[{roomId:42,recording:false,recordingEnabled:true}];
   app.recorder.roomsForExit=async()=>[{roomId:42,recording:true,recordingEnabled:true}];
   app.recorder.stopForExit=async()=>{stops++;};
   const rejected=await quit(app);

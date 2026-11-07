@@ -75,7 +75,7 @@ onBeforeUnmount(()=>{disposed=true;clearInterval(timer);window.removeEventListen
 .power-row{padding:12px 0;border-bottom:1px solid var(--line);}
 .power-row>div{min-width:0;flex:1;}.power-row p,.power-guide p{margin:7px 0;line-height:1.65;overflow-wrap:anywhere;}.power-row p,.power-footnote{color:var(--muted);}
 .power-badge{flex-shrink:0;font-size:12px;border:1px solid var(--line);border-radius:var(--radius-card);padding:4px 8px;white-space:nowrap;}
-.power-badge.good{color:#285d38;background:#edf7ee;border-color:#b9d6bf;}.power-badge.warning{color:#89500c;background:#fff6e4;border-color:#e5c795;}
+.power-badge.good{color:var(--power-ok-ink);background:var(--power-ok-surface);border-color:var(--power-ok-edge);}.power-badge.warning{color:var(--power-warning-ink);background:var(--power-warning-surface);border-color:var(--power-warning-edge);}
 .power-guide-button{margin:12px 0;}.power-guide{padding:0 0 12px;}.power-footnote{display:block;line-height:1.6;}
 @media(max-width:480px){.power-row{flex-wrap:wrap;}.power-row>div{flex-basis:100%;}.power-heading .button{font-size:12px;}}
 </style>

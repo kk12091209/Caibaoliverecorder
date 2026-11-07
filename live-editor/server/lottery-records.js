@@ -87,7 +87,7 @@ export class LotteryRecorder{
       WHERE s.deleted_at='' AND s.room>0 AND (s.status IN ('recording','waiting') OR
       (s.status IN ('finishing','finished') AND l.state IN ('ongoing','settling','partial') AND l.last_live>=? AND l.time<=s.duration+5)) ORDER BY s.created DESC`,now-90000);
     const rooms=new Set(),due=[];
-    for(const session of sessions){if(rooms.has(session.room)||this.store.setting('douyin-session:'+session.id)||!this.store.sources(session.id).length)continue;rooms.add(session.room);
+    for(const session of sessions){if(rooms.has(session.room)||this.store.setting('douyin-session:'+session.id)||this.store.setting('xiaohongshu-session:'+session.id)||!this.store.sources(session.id).length)continue;rooms.add(session.room);
       if((this.next.get(session.room)||0)<=now)due.push(session);}
     for(const room of this.next.keys())if(!rooms.has(room)){this.next.delete(room);this.failures.delete(room);}
     await Promise.allSettled(due.slice(0,2).map(async session=>{

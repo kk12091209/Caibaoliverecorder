@@ -1,11 +1,13 @@
-import { alive } from './update-helper.js';
+import { alive, UPDATE_VERSION_PATTERN } from './update-helper.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readSignedManifest, UPDATE_PUBLIC_KEY } from './update-trust.js';
 
 export const UPDATE_REPOSITORY = 'kk12091209/Caibaoliverecorder';
-const RELEASE_API = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
+const RELEASES_API = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases`;
+const RELEASE_API = RELEASES_API + '/latest';
+const PRERELEASE_API = RELEASES_API + '?per_page=30';
 export const CAIBAO_UPDATE_URL = 'https://caibao.media/releases/caibo-recorder-update.json';
 const DOWNLOAD_ORIGIN = 'https://download.caibao.media';
 const COS_ORIGIN = 'https://caibao-releases-1393257344.cos.ap-singapore.myqcloud.com';
@@ -15,15 +17,19 @@ const RATE_LIMIT_MESSAGE = '更新服务暂时限制请求，请等待恢复后�
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw Object.assign(new Error(message),{updateError:true}); };
 export function releaseIdentity(value) {
-  if (!value || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(value.version) || (value.revision !== undefined && (!Number.isSafeInteger(value.revision) || value.revision < 1))) fail('更新版本信息无效。');
+  if (typeof value?.version !== 'string' || !UPDATE_VERSION_PATTERN.test(value.version) || (value.revision !== undefined && (!Number.isSafeInteger(value.revision) || value.revision < 1))) fail('更新版本信息无效。');
   const parts=value.version.split('.').map(Number);
-  const legacy=parts[0]===0&&parts[1]===1&&parts[2]<=6;
+  const legacy=!isPrerelease(value.version)&&parts[0]===0&&parts[1]===1&&parts[2]<=6;
   return legacy ? `${value.version}-r${value.revision??1}` : value.version;
 }
+export const isPrerelease = version => !!UPDATE_VERSION_PATTERN.exec(version)?.[2];
 export function newerRelease(candidate, current) {
   releaseIdentity(candidate); releaseIdentity(current);
-  const a=candidate.version.split('.').map(Number), b=current.version.split('.').map(Number);
-  for(let i=0;i<3;i++)if(a[i]!==b[i])return a[i]>b[i];
+  const [, aBase, aBeta] = UPDATE_VERSION_PATTERN.exec(candidate.version);
+  const [, bBase, bBeta] = UPDATE_VERSION_PATTERN.exec(current.version);
+  const a = aBase.split('.').map(Number), b = bBase.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  if (aBeta || bBeta) return (aBeta ? Number(aBeta) : Infinity) > (bBeta ? Number(bBeta) : Infinity);
   // Older 0.1.6 installations can still recognize their historical updates.
   return a[0]===0&&a[1]===1&&a[2]<=6&&(candidate.revision??1)>(current.revision??1);
 }
@@ -38,16 +44,16 @@ function releaseAsset(release, name) {
   if(asset.state!=='uploaded'||asset.browser_download_url!==expected||!/^sha256:[a-f0-9]{64}$/.test(asset.digest)||!Number.isSafeInteger(asset.size)||asset.size<=0)fail('发布附件校验信息无效。');
   return asset;
 }
-export function validateUpdate(release, manifest, current, platform) {
-  const key=releaseIdentity(manifest);
-  if(manifest.schema!==1||release.draft||release.prerelease||release.tag_name!==`v${manifest.version}`)fail('更新渠道信息无效。');
+export function validateUpdate(release, manifest, current, platform, { beta = false } = {}) {
+  const key=releaseIdentity(manifest), prerelease=isPrerelease(manifest.version);
+  if(manifest.schema!==1||release.draft||release.prerelease!==prerelease||(prerelease&&!beta)||release.tag_name!==`v${manifest.version}`)fail('更新渠道信息无效。');
   if(!newerRelease(manifest,current))return null;
   const item=manifest.platforms?.[platform],name=packageName(manifest.version,platform);
   if(!name||!item||item.name!==name||!/^[a-f0-9]{64}$/.test(item.sha256)||!Number.isSafeInteger(item.size)||item.size<=0||item.size>MAX_PACKAGE)fail('尚无适用于当前系统的更新包。');
   const asset=releaseAsset(release,name);
   if(asset.digest!==`sha256:${item.sha256}`||asset.size!==item.size)fail('安装包与更新清单不一致，请稍后检查。');
   if(!Array.isArray(manifest.notes)||manifest.notes.length>12||manifest.notes.some(note=>typeof note!=='string'||note.length>500))fail('更新说明无效。');
-  return {key,version:manifest.version,revision:manifest.revision??1,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
+  return {key,version:manifest.version,prerelease,revision:manifest.revision??1,notes:manifest.notes,name,size:item.size,sha256:item.sha256,url:asset.browser_download_url};
 }
 
 export function validateMirrorUpdate(envelope, current, platform, publicKey = UPDATE_PUBLIC_KEY) {
@@ -86,8 +92,9 @@ export async function caibaoFetch(url, { fetcher = fetch, signal } = {}) {
 // Redirects are inspected before following them; no URL comes from the UI.
 export async function githubFetch(url,{fetcher=fetch,signal,now=Date.now}={}) {
   for(let redirects=0;redirects<=5;redirects++){
+    signal?.throwIfAborted();
     const address=new URL(url);
-    const api=address.origin==='https://api.github.com'&&address.pathname===`/repos/${UPDATE_REPOSITORY}/releases/latest`;
+    const api=address.href===RELEASE_API||address.href===PRERELEASE_API;
     const release=address.origin==='https://github.com'&&address.pathname.startsWith(`/${UPDATE_REPOSITORY}/releases/download/`);
     const cdn=['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(address.hostname)&&address.protocol==='https:'&&!address.port;
     if(address.username||address.password||(!api&&!release&&!cdn))fail('更新下载地址不受信任。');
@@ -132,13 +139,38 @@ export class Updates {
     this.checkNotice='';this.lastCheckSucceeded=false;
     if(this.retryAt){this.status='error';this.error=RATE_LIMIT_MESSAGE;}
   }
+  get betaEnabled(){return this.store.setting('update-beta-enabled')===true;}
   snapshot(){
     const deferred=this.store.setting('update-deferred');
-    return {current:this.current,platform:this.platform,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,checkNotice:this.checkNotice,retryAt:this.retryAt>this.now()?this.retryAt:0,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,fallbackUrl,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),ignored:!!this.candidate&&this.store.setting('update-ignored-version')===this.candidate.key,autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
+    return {current:this.current,platform:this.platform,betaEnabled:this.betaEnabled,enabled:this.store.setting('update-enabled')!==false,status:this.applying?'installing':this.status,error:this.error,checkedAt:this.checkedAt,checkNotice:this.checkNotice,retryAt:this.retryAt>this.now()?this.retryAt:0,hasCache:!!this.store.setting('update-download'),candidate:this.candidate&&(({url,fallbackUrl,sha256,...visible})=>visible)(this.candidate),received:this.received,deferred:!!(this.candidate&&deferred?.key===this.candidate.key&&deferred.until>this.now()),ignored:!!this.candidate&&this.store.setting('update-ignored-version')===this.candidate.key,autoInstall:!!this.candidate&&this.store.setting('update-auto-install')===this.candidate.key,installBlocked:(this.activity().updateBusy??this.activity().requiresExitConfirmation)?'等待当前录制、导出或素材处理完成后自动更新。':''};
   }
   start(){if(this.started||this.closed)return;this.started=true;this.startTimer=setTimeout(()=>this.autoCheck({startup:true}),5000);this.startTimer.unref?.();this.timer=setInterval(()=>this.autoCheck(),3600000);this.timer.unref?.();}
   autoCheck({startup=false}={}){if(!this.closed&&this.snapshot().enabled&&(startup||this.now()-this.checkedAt>=DAY))return this.check().catch(()=>{});}
   setEnabled(enabled){if(typeof enabled!=='boolean')fail('更新检查设置无效。');const previous=this.snapshot().enabled;this.store.setting('update-enabled',enabled);if(enabled&&!previous&&this.started)void this.autoCheck({startup:true});return this.snapshot();}
+  async setBetaEnabled(enabled){
+    if(typeof enabled!=='boolean')fail('测试版本设置无效。');
+    if(this.closed||this.changingChannel||this.applying||this.installTask)fail('更新任务正在进行，请稍后切换。');
+    if(enabled===this.betaEnabled)return this.snapshot();
+    if(this.downloadTask&&!this.candidate?.prerelease)fail('请等待正式版下载完成后切换。');
+    this.changingChannel=true;
+    try{
+      this.store.setting('update-beta-enabled',enabled);
+      this.checkController?.abort();
+      if(!enabled&&isPrerelease(this.store.setting('update-auto-install')))this.store.setting('update-auto-install',null);
+      if(!enabled&&this.candidate?.prerelease){
+        this.cancel();
+        this.candidate=null;
+        this.ready=null;
+      }
+      await Promise.allSettled([this.checkTask,this.downloadTask]);
+      if(!enabled&&this.ready?.prerelease)this.ready=null;
+      this.status=this.ready?'ready':this.candidate?'available':'idle';
+      this.error='';
+      this.checkNotice='';
+      this.lastAttempt=undefined;
+    }finally{this.changingChannel=false;}
+    return this.check();
+  }
   defer(){if(this.candidate)this.store.setting('update-deferred',{key:this.candidate.key,until:this.now()+DAY});return this.snapshot();}
   ignoreVersion(key){
     if(typeof key!=='string'||!this.candidate||key!==this.candidate.key)fail('更新信息已变化，请确认当前版本后重试。');
@@ -146,7 +178,7 @@ export class Updates {
   }
   check(){
     if(this.closed)fail('软件正在退出。');
-    if(this.downloadTask)return Promise.resolve(this.snapshot());
+    if(this.downloadTask||this.changingChannel||this.applying||this.installTask)return Promise.resolve(this.snapshot());
     if(this.checkTask)return this.checkTask;
     if(!this.mirror&&this.retryAt>this.now())return Promise.resolve(this.snapshot());
     const interval=this.lastCheckSucceeded?CHECK_CACHE_MS:FAILED_CHECK_RETRY_MS;
@@ -157,10 +189,41 @@ export class Updates {
     this.lastAttempt=this.now();this.status='checking';this.error='';this.checkNotice='';
     this.checkController=new AbortController();
     return this.checkTask=this.checkRemote(AbortSignal.any([this.checkController.signal,AbortSignal.timeout(this.checkTimeoutMs)]))
-      .catch(error=>{if(!this.closed){this.lastCheckSucceeded=false;this.retryAt=error.retryAt||0;this.store.setting('update-retry-at',this.retryAt);this.error=error.updateError?error.message:'检查更新失败，请检查网络或稍后重试。';this.status=this.ready?'ready':this.candidate?'available':'error';}return this.snapshot();})
+      .catch(error=>{if(!this.closed&&!this.checkController.signal.aborted){this.lastCheckSucceeded=false;this.retryAt=error.retryAt||0;this.store.setting('update-retry-at',this.retryAt);this.error=error.updateError?error.message:'检查更新失败，请检查网络或稍后重试。';this.status=this.ready?'ready':this.candidate?'available':'error';}return this.snapshot();})
       .finally(()=>{this.checkTask=null;});
   }
   async checkRemote(signal){
+    let next=await this.stableCandidate(signal), betaError;
+    signal.throwIfAborted();
+    if(this.betaEnabled){
+      try{
+        const betaSignal=AbortSignal.any([signal,AbortSignal.timeout(5000)]);
+        next=await this.githubBetaCandidate(betaSignal,next??this.current)||next;
+      }
+      catch(error){
+        if(signal.aborted||!next)throw error;
+        // The independently verified stable candidate is still installable.
+        betaError=error;
+      }
+    }
+    signal.throwIfAborted();
+    this.acceptCandidate(next);
+    const saved=this.store.setting('update-download');
+    if(next&&saved?.key===next.key&&saved.sha256===next.sha256&&saved.name===next.name){
+      const file=path.join(this.root,next.name);
+      try{
+        await this.directory();
+        const stat=await fs.lstat(file);
+        if(!signal.aborted&&stat.isFile()&&!stat.isSymbolicLink()&&stat.size===next.size)this.ready={...next,file};
+      }catch{}
+    }
+    signal.throwIfAborted();
+    this.candidate=next;this.status=next?(this.ready?'ready':'available'):'current';this.checkedAt=this.now();
+    this.error=betaError?'暂时无法检查测试版本，仍可更新正式版。':'';
+    this.lastCheckSucceeded=true;this.retryAt=betaError?.retryAt||0;this.store.setting('update-retry-at',this.retryAt);
+    this.store.setting('update-checked-at',this.checkedAt);return this.snapshot();
+  }
+  async stableCandidate(signal){
     let next;
     if (this.mirror) {
       let received = false;
@@ -174,15 +237,7 @@ export class Updates {
         next = await this.githubCandidate(signal);
       }
     } else next = await this.githubCandidate(signal);
-    this.acceptCandidate(next);
-    const saved=this.store.setting('update-download');
-    if(next&&saved?.key===next.key&&saved.sha256===next.sha256&&saved.name===next.name){
-      const file=path.join(this.root,next.name);
-      try{await this.directory();const stat=await fs.lstat(file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.size===next.size)this.ready={...next,file};}catch{}
-    }
-    this.candidate=next;this.status=next?(this.ready?'ready':'available'):'current';this.checkedAt=this.now();
-    this.lastCheckSucceeded=true;this.retryAt=0;this.store.setting('update-retry-at',0);
-    this.store.setting('update-checked-at',this.checkedAt);return this.snapshot();
+    return next;
   }
   acceptCandidate(next){
     if(this.candidate?.key!==next?.key||this.candidate?.sha256!==next?.sha256)this.ready=null;
@@ -192,11 +247,28 @@ export class Updates {
     const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
     const release=JSON.parse((await boundedBytes(await request(RELEASE_API),1024*1024)).toString('utf8'));
     if(release.draft||release.prerelease||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(release.tag_name))fail('更新渠道信息无效。');
+    return this.githubManifestCandidate(release, request);
+  }
+  async githubBetaCandidate(signal, baseline){
+    if(this.retryAt>this.now())throw Object.assign(new Error(RATE_LIMIT_MESSAGE),{updateError:true,retryAt:this.retryAt});
+    const request=url=>githubFetch(url,{fetcher:this.fetcher,signal,now:this.now});
+    const releases=JSON.parse((await boundedBytes(await request(PRERELEASE_API),4*1024*1024)).toString('utf8'));
+    if(!Array.isArray(releases)||releases.length>30)fail('测试版本列表无效。');
+    let newest=baseline, candidate;
+    for(const release of releases){
+      const version=typeof release?.tag_name==='string'&&release.tag_name.startsWith('v')?release.tag_name.slice(1):'';
+      if(release?.draft!==false||release.prerelease!==true||!isPrerelease(version)||!newerRelease({version},newest))continue;
+      candidate=release;
+      newest={version};
+    }
+    return candidate?this.githubManifestCandidate(candidate,request,{beta:true}):null;
+  }
+  async githubManifestCandidate(release,request,options){
     const asset=releaseAsset(release,'caibao-update.json');
     if(asset.size>131072)fail('更新清单过大。');
     const bytes=await boundedBytes(await request(asset.browser_download_url),131072);
     if(bytes.length!==asset.size||`sha256:${digest(bytes)}`!==asset.digest)fail('更新清单校验失败。');
-    return validateUpdate(release,readSignedManifest(JSON.parse(bytes.toString('utf8')),this.mirrorPublicKey),this.current,this.platform);
+    return validateUpdate(release,readSignedManifest(JSON.parse(bytes.toString('utf8')),this.mirrorPublicKey),this.current,this.platform,options);
   }
   async directory(){
     // The update cache is fixed under app data; never follow redirected folders.
@@ -208,7 +280,7 @@ export class Updates {
   }
   download(key,autoInstall=false){
     if(this.closed)fail('软件正在退出。');
-    if(this.checkTask)fail('正在检查更新，请稍候。');
+    if(this.checkTask||this.changingChannel)fail('正在检查更新，请稍候。');
     if(!this.candidate||key!==this.candidate.key)fail('更新信息已变化，请重新检查。');
     if(autoInstall)this.store.setting('update-auto-install',key);
     if(this.downloadTask)return this.snapshot();
@@ -252,12 +324,12 @@ export class Updates {
     }catch(error){if(signal.aborted&&!cancelSignal.aborted)fail('下载连接中断或超时，请重试。');throw error;}
     finally{clearTimeout(idleTimer);await handle?.close();await fs.rm(temporary,{force:true});this.store.setting('update-partial',null);}
   }
-  requestInstall(key=this.candidate?.key){if(!this.ready)fail('请先完成下载。');if(key!==this.candidate?.key)fail('更新信息已变化，请重新检查。');this.store.setting('update-auto-install',this.candidate.key);return this.snapshot();}
+  requestInstall(key=this.candidate?.key){if(this.changingChannel||!this.ready)fail('请先完成下载。');if(key!==this.candidate?.key)fail('更新信息已变化，请重新检查。');this.store.setting('update-auto-install',this.candidate.key);return this.snapshot();}
   cancel(){this.store.setting('update-auto-install',null);this.downloadController?.abort();return this.snapshot();}
   installPath(){return this.installTask??=this.verifyInstallPath().finally(()=>{this.installTask=null;});}
   async verifyInstallPath(){
     if(this.closed)fail('软件正在退出。');
-    if(!this.ready||this.status!=='ready')fail('请先下载并校验更新包。');
+    if(this.changingChannel||!this.ready||this.status!=='ready')fail('请先下载并校验更新包。');
     if(this.activity().updateBusy??this.activity().requiresExitConfirmation)fail('等待当前录制、导出或素材处理完成后自动更新。');
     await this.directory();const file=this.ready.file,stat=await fs.lstat(file);
     if(!stat.isFile()||stat.isSymbolicLink()||stat.size!==this.ready.size)fail('更新包发生变化，请重新下载。');

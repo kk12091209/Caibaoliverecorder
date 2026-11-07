@@ -22,7 +22,7 @@ export function recordingReason(room,{biliOnline=true}={}){
   if(room.recording)return '正在录制';
   if(room.recordingEnabled===false)return '用户未启用录制或已停止；不会自动开始';
   if(room.error)return `录制或平台连接异常：${safeLog(room.error)}`;
-  if(room.platform!=='douyin'&&!biliOnline)return 'B站录制核心未连接；正在重连，暂时无法确认开播状态';
+  if((!room.platform||room.platform==='bilibili')&&!biliOnline)return 'B站录制核心未连接；正在重连，暂时无法确认开播状态';
   if(room.streaming!==true)return '当前未检测到开播；保持监控';
   if(room.recordingEnabled!==true&&room.autoRecord!==true&&room.autoRecordForThisSession!==true)return '未开启自动录制，也未启动本场录制';
   return '已开播且录制已启用，但尚未观察到录制；可能正在准备或重试，原因暂未确定';
@@ -125,12 +125,12 @@ export class DailyDiagnostics{
     this.observed.set(key,message);this.record('状态变化',message,{level});
   }
   rooms(rooms,context){
-    this.roomStates=new Map(rooms.filter(room=>room.platform!=='douyin').map(room=>[String(room.roomId),context?.biliOnline===false?undefined:room.streaming===true||room.recording===true]));
+    this.roomStates=new Map(rooms.filter(room=>(!room.platform||room.platform==='bilibili')).map(room=>[String(room.roomId),context?.biliOnline===false?undefined:room.streaming===true||room.recording===true]));
     const keep=new Set();
     for(const room of rooms.slice(0,64)){
       const id=`room:${room.platform||'bilibili'}:${room.roomId}`;keep.add(id);
       const reason=recordingReason(room,context);
-      this.observe(id,`${room.platform==='douyin'?'抖音':'B站'}直播间 ${room.roomId}：${reason}${room.chatError?`；弹幕：${safeLog(room.chatError)}`:''}`,room.error||room.recordingHealth?'警告':'信息');
+      this.observe(id,`${room.platform==='xiaohongshu'?'小红书':room.platform==='douyin'?'抖音':'B站'}直播间 ${room.roomId}：${reason}${room.chatError?`；弹幕：${safeLog(room.chatError)}`:''}`,room.error||room.recordingHealth?'警告':'信息');
     }
     for(const key of this.observed.keys())if(key.startsWith('room:')&&!keep.has(key))this.observed.delete(key);
   }

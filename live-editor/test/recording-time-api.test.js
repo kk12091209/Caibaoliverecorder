@@ -40,7 +40,7 @@ test('素材详情保留重连前后的真实时间锚点，历史无锚点时�
     assert.equal(legacy.sources[1].wall,null);assert.equal(legacy.created,created);
     assert.ok(Number.isFinite(Date.parse(legacy.created)));
     assert.deepEqual(legacy.sources.map(({start,duration})=>({start,duration})),spans.map(({start,duration})=>({start,duration})));
-    assert.equal(app.recorder.process,null);assert.equal(app.media.children.size,0);
+    assert.equal(app.recorder.bilibili.process,null);assert.equal(app.media.children.size,0);
   } finally {
     if(app)await app.close();
     if(path.dirname(root)===path.resolve(os.tmpdir())&&path.basename(root).startsWith('bili-recording-time-api-'))await fs.rm(root,{recursive:true,force:true});

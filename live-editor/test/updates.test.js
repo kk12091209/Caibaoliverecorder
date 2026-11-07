@@ -18,7 +18,7 @@ function publication(platform='win32-x64',revision=3,version='0.1.6'){
   const manifest={schema:1,version,revision,notes:['修复测试问题'],platforms:{[platform]:{name,size:bytes.length,sha256:sha(bytes)}}};
   const manifestBytes=Buffer.from(JSON.stringify(signed(manifest)));
   const asset=(name,bytes)=>({name,size:bytes.length,state:'uploaded',digest:'sha256:'+sha(bytes),browser_download_url:`https://github.com/${UPDATE_REPOSITORY}/releases/download/${tag_name}/${name}`});
-  const release={tag_name,draft:false,prerelease:false,assets:[asset('caibao-update.json',manifestBytes),asset(name,bytes)]};
+  const release={tag_name,draft:false,prerelease:version.includes('-beta.'),assets:[asset('caibao-update.json',manifestBytes),asset(name,bytes)]};
   return {bytes,manifest,manifestBytes,release,name};
 }
 async function fixture(t,options={}){
@@ -272,7 +272,121 @@ test('发布清单要求两端版本、修订、源码和真实验证结果一�
   const a=publication(),b=publication('darwin-arm64');
   const r={...a.release,target_commitish:sourceRevision,assets:[a.release.assets[1],b.release.assets[1]]};
   const manifest=createUpdateManifest(r,w,m,['测试修订']);assert.equal(manifest.revision,2);assert.equal(Object.keys(manifest.platforms).length,2);
+  const betaVersion='0.4.2-beta.1';
+  const betaRelease={...r,tag_name:'v'+betaVersion,prerelease:true,assets:['win32-x64','darwin-arm64'].map(platform=>publication(platform,1,betaVersion).release.assets[1])};
+  const betaWindows={...w,version:betaVersion,buildRevision:1}, betaMac={...m,version:betaVersion,buildRevision:1};
+  assert.equal(createUpdateManifest(betaRelease,betaWindows,betaMac,['测试版本']).platforms['win32-x64'].name,packageName(betaVersion,'win32-x64'));
+  assert.throws(()=>createUpdateManifest({...betaRelease,prerelease:false},betaWindows,betaMac,['测试版本']),/prerelease flag/);
   for(const mutate of [x=>x[1].buildRevision++,x=>x[2].applicationSourceRevision='b'.repeat(40),x=>x[1].portable7z='failed',x=>delete x[2].nodeTests.passed,x=>x[0].assets[0].digest=null,x=>x[0].assets.push(x[0].assets[0])]){
     const values=structuredClone([r,w,m,['测试修订']]);mutate(values);assert.throws(()=>createUpdateManifest(...values));
   }
+});
+
+async function prereleaseFixture(t,platform){
+  const f=await fixture(t);
+  let stable=publication(platform,1,'0.4.1'), now=200000;
+  const betas=['0.4.2-beta.10','0.4.2-beta.2','0.4.3-beta.1'].map(version=>publication(platform,1,version));
+  betas[2].release.draft=true;
+  const calls=[], api='https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases';
+  const fetcher=async(url)=>{
+    calls.push(url);
+    if(url===api+'/latest')return Response.json(stable.release);
+    if(url===api+'?per_page=30')return Response.json([betas[1].release,stable.release,betas[2].release,betas[0].release]);
+    for(const item of [stable,...betas]){
+      if(url===item.release.assets[0].browser_download_url)return new Response(item.manifestBytes);
+      if(url===item.release.assets[1].browser_download_url)return new Response(item.bytes);
+    }
+    assert.fail('Unexpected update request: '+url);
+  };
+  const start=(version,store=f.store)=>{
+    const updater=new Updates(store,{current:{version},platform,fetcher,mirror:false,mirrorPublicKey:keys.publicKey,now:()=>now});
+    t.after(()=>updater.close());
+    return updater;
+  };
+  return {...f,betas,calls,start,advance:()=>{now+=61000;},publishStable:()=>{stable=publication(platform,1,'0.4.2');}};
+}
+
+test('Windows and Mac only discover beta after local opt-in and can download and verify the succeeding stable build',async t=>{
+  for(const platform of ['win32-x64','darwin-arm64']){
+    const f=await prereleaseFixture(t,platform);
+    const ordinary=f.start('0.4.0');
+    assert.equal((await ordinary.check()).candidate.version,'0.4.1');
+    assert.equal(ordinary.snapshot().betaEnabled,false);
+    assert.ok(!f.calls.some(url=>url.includes('?per_page=')||url.includes('-beta.')));
+    await ordinary.close();
+
+    const installed=f.start('0.4.1');
+    const beta=await installed.setBetaEnabled(true);
+    assert.equal(beta.candidate.version,'0.4.2-beta.10');
+    assert.equal(beta.candidate.name,packageName('0.4.2-beta.10',platform));
+    assert.equal(beta.candidate.prerelease,true);
+    installed.download(beta.candidate.key);
+    await installed.downloadTask;
+    assert.deepEqual(await fs.readFile(await installed.installPath()),f.betas[0].bytes);
+    await installed.close();
+
+    const restarted=f.start('0.4.2-beta.10');
+    assert.equal(restarted.snapshot().betaEnabled,true);
+    assert.equal((await restarted.check()).candidate,null);
+    f.publishStable();f.advance();
+    const stable=await restarted.check();
+    assert.equal(stable.candidate.version,'0.4.2');
+    assert.equal(stable.candidate.prerelease,false);
+    restarted.download(stable.candidate.key);
+    await restarted.downloadTask;
+    assert.equal(path.basename(await restarted.installPath()),packageName('0.4.2',platform));
+    await restarted.close();
+    assert.equal((await f.start('0.4.2').check()).candidate,null);
+  }
+});
+
+test('disabling test updates removes a prepared beta from the installation path and keeps the setting off after restart',async t=>{
+  const f=await prereleaseFixture(t,'win32-x64'),u=f.start('0.4.1');
+  const beta=await u.setBetaEnabled(true);
+  u.download(beta.candidate.key,true);
+  await u.downloadTask;
+  assert.equal(u.snapshot().autoInstall,true);
+  const off=await u.setBetaEnabled(false);
+  assert.equal(off.candidate,null);
+  assert.equal(off.autoInstall,false);
+  assert.equal(f.store.setting('update-auto-install'),null);
+  assert.throws(()=>u.download(beta.candidate.key),/更新信息已变化/);
+  await assert.rejects(u.installPath(),/请先下载/);
+  const restarted=f.start('0.4.2-beta.10');
+  assert.equal(restarted.snapshot().betaEnabled,false);
+  assert.equal((await restarted.check()).candidate,null);
+});
+
+test('opting out before the first check clears a pending beta saved by a previous process',async t=>{
+  const f=await prereleaseFixture(t,'darwin-arm64');
+  f.store.setting('update-beta-enabled',true);
+  f.store.setting('update-auto-install','0.4.2-beta.10');
+  const u=f.start('0.4.1');
+  await u.setBetaEnabled(false);
+  assert.equal(f.store.setting('update-auto-install'),null);
+  assert.ok(!f.calls.some(url=>url.includes('?per_page=')||url.includes('-beta.')));
+});
+
+test('a beta package cannot be offered by the formal update feed or with a mismatched prerelease flag',()=>{
+  const {release,manifest}=publication('win32-x64',1,'0.4.2-beta.1');
+  assert.throws(()=>validateUpdate(release,manifest,{version:'0.4.1'},'win32-x64'),/更新渠道/);
+  assert.throws(()=>validateUpdate({...release,prerelease:false},manifest,{version:'0.4.1'},'win32-x64',{beta:true}),/更新渠道/);
+});
+
+test('disabling during a beta check discards a response that arrives after the channel changes',async t=>{
+  const f=await prereleaseFixture(t,'darwin-arm64'),u=f.start('0.4.1');
+  const original=u.fetcher;
+  let started,release;
+  const checking=new Promise(resolve=>{started=resolve;});
+  u.fetcher=async(url,init)=>{
+    if(url.includes('?per_page=')){started();await new Promise(resolve=>{release=resolve;});}
+    return original(url,init);
+  };
+  const enable=u.setBetaEnabled(true);
+  await checking;
+  const disable=u.setBetaEnabled(false);
+  release();
+  await enable;
+  assert.equal((await disable).candidate,null);
+  assert.equal(u.snapshot().betaEnabled,false);
 });

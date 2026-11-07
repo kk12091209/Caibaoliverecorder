@@ -54,7 +54,7 @@ RestartApplications=no
 LicenseFile={#StageDir}\程序组件\LICENSE
 VersionInfoDescription=菜播·录包机安装程序
 VersionInfoProductName=菜播·录包机
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumericVersion}
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"

@@ -4,7 +4,7 @@ import Darwin
 
 enum RepairTrust {
     static let repository = "kk12091209/Caibaoliverecorder"
-    static func version(_ value: String) -> Bool { value.range(of: "^\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}$", options: .regularExpression) != nil }
+    static func version(_ value: String) -> Bool { value.range(of: "^\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}(?:-beta\\.[1-9]\\d{0,4})?$", options: .regularExpression) != nil }
     static func allowed(_ url: URL) -> Bool {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), parts.scheme == "https", parts.user == nil, parts.password == nil, parts.port == nil, parts.fragment == nil else { return false }
         if parts.host == "api.github.com" { return parts.path.hasPrefix("/repos/" + repository + "/releases/tags/v") && parts.query == nil }
@@ -13,7 +13,7 @@ enum RepairTrust {
     }
     static func asset(_ release: [String: Any], version: String) throws -> (URL, Int64, String) {
         guard self.version(version), release["tag_name"] as? String == "v" + version,
-              release["draft"] as? Bool == false, release["prerelease"] as? Bool == false,
+              release["draft"] as? Bool == false, release["prerelease"] as? Bool == version.contains("-beta."),
               let assets = release["assets"] as? [[String: Any]] else { throw problem("官方修复版本信息无效。") }
         let name = "Caibo-\(version)-macos-arm64.dmg", candidates = assets.filter { $0["name"] as? String == name }
         guard candidates.count == 1, let item = candidates.first,
@@ -108,7 +108,9 @@ final class RepairTransfer: NSObject, URLSessionTaskDelegate, URLSessionDownload
     }
     nonisolated static func validateBundle(_ bundle: URL, version: String) throws {
         let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist"))
-        guard info?["CFBundleIdentifier"] as? String == "io.github.kk12091209.caibo", info?["CFBundleShortVersionString"] as? String == version,
+        let releaseVersion = (info?["CaiboReleaseVersion"] as? String) ?? (info?["CFBundleShortVersionString"] as? String)
+        guard info?["CFBundleIdentifier"] as? String == "io.github.kk12091209.caibo", releaseVersion == version,
+              info?["CFBundleShortVersionString"] as? String == version.components(separatedBy: "-beta.").first,
               info?["CFBundleExecutable"] as? String == "CaiboDesktop" else { throw problem("修复包应用身份或版本不匹配。") }
         _ = try OwnedProcess.command("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle.path])
         let executable = bundle.appendingPathComponent("Contents/MacOS/CaiboDesktop")

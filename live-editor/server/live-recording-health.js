@@ -16,7 +16,7 @@ export class LiveRecordingHealth {
     const delay=Number(this.monitor.max)/1e6;this.monitor.reset();return finite(delay)?delay:undefined;
   }
   recordingProgress(room,sourceId,at) {
-    const telemetry=room.platform==='douyin'?room.recordingProgress:{
+    const telemetry=['douyin','xiaohongshu'].includes(room.platform)?room.recordingProgress:{
       observedAt:room.recordingObservedAt,bytes:room.recordingStats?.totalOutputBytes,
       mediaMs:room.recordingStats?.sessionMaxTimestamp};
     if(!telemetry||!finite(telemetry.observedAt)||!finite(telemetry.bytes)||!finite(telemetry.mediaMs))return 'observing';
@@ -43,7 +43,7 @@ export class LiveRecordingHealth {
     base.recordingCount=Math.max(sessions.length,rooms.length);
     if(sessions.length!==1||rooms.length!==1)return base;
     const session=sessions[0],room=rooms[0];
-    const matches=room.platform==='douyin' ? session.room===0&&this.store.setting('douyin-session:'+session.id)?.webRid===room.webRid
+    const matches=['douyin','xiaohongshu'].includes(room.platform) ? session.room===0&&this.store.setting(room.platform+'-session:'+session.id)?.webRid===room.webRid
       : session.room>0&&(Number(room.roomId)===session.room||Number(room.shortId)===session.room);
     if(!matches)return base;
     base.sessionId=session.id;base.recordingIdentity=session.id;
@@ -64,7 +64,7 @@ export class LiveRecordingHealth {
     if(!pending)this.backlog.delete(source.id);
     while(this.backlog.size>64)this.backlog.delete(this.backlog.keys().next().value);
     base.ingestLagMs=pending?Math.max(0,at-this.backlog.get(source.id)):0;
-    const writer=room.platform==='douyin'?room.recordingProgress:null;
+    const writer=['douyin','xiaohongshu'].includes(room.platform)?room.recordingProgress:null;
     const writeHealthy=finite(ingest.writeLatencyMs)&&ingest.writeLatencyMs<=500&&
       (!finite(ingest.inFlightWriteSince)||at-ingest.inFlightWriteSince<=500)&&
       (!writer||(finite(writer.writeLatencyMs)&&writer.writeLatencyMs<=500&&

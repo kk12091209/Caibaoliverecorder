@@ -18,10 +18,8 @@ for(const folder of [work,tools]){
 }
 const output=path.join(tools,'ffmpeg-slim');
 try{await fs.lstat(output);throw Error('FFmpeg output already exists; use a fresh tools directory.');}catch(e){if(e.code!=='ENOENT')throw e;}
-const assets=[
-  {name:'msys2-base-x86_64-20260927.tar.xz',url:'https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.tar.xz',sha256:'ea2f31a0b6ade63914ce441ffb022f0f6aa96982bfefa2326460a26d5fb01322'},
-  {name:'ffmpeg-8.1.2.tar.xz',url:'https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz',sha256:'464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c'}
-];
+const runtime=JSON.parse(await fs.readFile(new URL('release-runtime.json',import.meta.url),'utf8')).windows.ffmpeg;
+const assets=[runtime.toolchain,runtime.source];
 async function hash(file){const h=crypto.createHash('sha256');for await(const b of createReadStream(file))h.update(b);return h.digest('hex');}
 for(const asset of assets){
   const file=path.join(work,asset.name);
@@ -86,7 +84,7 @@ while(queue.length){
   }
 }
 await fs.mkdir(path.join(output,'bin'),{recursive:true});
-const manifest={version:'8.1.2',variant:'caibo-shared',source:assets[1],toolchain:assets[0],files:[]};
+const manifest={version:runtime.version,variant:runtime.variant,source:runtime.source,toolchain:runtime.toolchain,files:[]};
 const packages=new Set();
 for(const {name,source} of [...files.values()].sort((a,b)=>a.name.localeCompare(b.name))){
   const destination=path.join(output,'bin',name);await fs.copyFile(source,destination);

@@ -2,3 +2,6 @@ Platform marks from Simple Icons (CC0-1.0).
 https://github.com/simple-icons/simple-icons/blob/develop/icons/bilibili.svg
 https://github.com/simple-icons/simple-icons/blob/develop/icons/tiktok.svg
 Bilibili mark recolored blue; TikTok/Douyin mark rendered black.
+
+Xiaohongshu mark (red):
+https://github.com/simple-icons/simple-icons/blob/develop/icons/xiaohongshu.svg

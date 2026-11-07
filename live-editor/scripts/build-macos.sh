@@ -35,7 +35,7 @@ from pathlib import Path
 file=Path(sys.argv[1]);info=json.loads(file.read_text());info['buildRevision']=1
 file.write_text(json.dumps(info,ensure_ascii=False,indent=2)+'\n')
 PY
-cp .tools/runtime/node-v24.12.0-darwin-arm64/bin/node "$RESOURCES/runtime/node/"
+cp "$CAIBO_MAC_NODE_ROOT/bin/node" "$RESOURCES/runtime/node/"
 cp .tools/runtime/ffmpeg/ffmpeg .tools/runtime/ffmpeg/ffprobe "$RESOURCES/runtime/ffmpeg/"
 python3 - "$PUBLISH" "$RESOURCES/runtime/recorder" <<'PY'
 import shutil,sys
@@ -44,7 +44,7 @@ import shutil,sys
 shutil.copytree(sys.argv[1],sys.argv[2],ignore=shutil.ignore_patterns('logs','*.pdb'))
 PY
 cp LICENSE THIRD_PARTY_NOTICES.md "$RESOURCES/licenses/"
-cp .tools/runtime/node-v24.12.0-darwin-arm64/LICENSE "$RESOURCES/licenses/Node-LICENSE.txt"
+cp "$CAIBO_MAC_NODE_ROOT/LICENSE" "$RESOURCES/licenses/Node-LICENSE.txt"
 cp live-editor/package-lock.json "$RESOURCES/licenses/editor-dependencies.json"
 cp live-editor/desktop-macos/THIRD_PARTY.md "$RESOURCES/licenses/Mac-THIRD-PARTY.md"
 mkdir -p "$RESOURCES/licenses/product-notices"
@@ -55,7 +55,7 @@ for package in vue lucide-vue-next; do
 done
 # Publish keeps .NET's runtime notices. Preserve the restore metadata and NuGet
 # license files as well, without bundling the development SDK/cache.
-python3 live-editor/scripts/macos-licenses.py "$RESOURCES/licenses" "$ROOT"
+python3 live-editor/scripts/macos-licenses.py "$RESOURCES/licenses" "$ROOT" "$RESOURCES/runtime/recorder"
 ICONSET="$ROOT/.tools/Caibo.iconset"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
@@ -64,10 +64,13 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
 python3 - "$APP" "$VERSION" <<'PY'
-import sys,plistlib
+import sys,plistlib,re
 from pathlib import Path
 app=Path(sys.argv[1]);version=sys.argv[2]
-p={'CFBundleIdentifier':'io.github.kk12091209.caibo','CFBundleName':'菜播·录包机','CFBundleDisplayName':'菜播·录包机','CFBundleExecutable':'CaiboDesktop','CFBundlePackageType':'APPL','CFBundleShortVersionString':version,'CFBundleVersion':version,'CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'14.0','NSPrincipalClass':'NSApplication','NSHighResolutionCapable':True,'NSHumanReadableCopyright':'糊涂小菜包 · GPL-3.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True,'NSExceptionDomains':{'127.0.0.1':{'NSExceptionAllowsInsecureHTTPLoads':True}}}}
+match=re.fullmatch(r'(\d{1,5}\.\d{1,5}\.\d{1,5})(?:-beta\.[1-9]\d{0,4})?',version)
+if not match: raise SystemExit('Invalid application version')
+system_version=match[1]
+p={'CFBundleIdentifier':'io.github.kk12091209.caibo','CFBundleName':'菜播·录包机','CFBundleDisplayName':'菜播·录包机','CFBundleExecutable':'CaiboDesktop','CFBundlePackageType':'APPL','CFBundleShortVersionString':system_version,'CFBundleVersion':system_version,'CaiboReleaseVersion':version,'CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'14.0','NSPrincipalClass':'NSApplication','NSHighResolutionCapable':True,'NSHumanReadableCopyright':'糊涂小菜包 · GPL-3.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True,'NSExceptionDomains':{'127.0.0.1':{'NSExceptionAllowsInsecureHTTPLoads':True}}}}
 with (app/'Contents/Info.plist').open('wb') as out:plistlib.dump(p,out)
 PY
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"

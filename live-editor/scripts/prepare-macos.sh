@@ -7,13 +7,12 @@ cd "$ROOT"
 python3 - <<'PY'
 from pathlib import Path
 from urllib.request import urlopen
-import hashlib, subprocess, zipfile
+import hashlib, json, subprocess, zipfile
 root=Path('.tools');downloads=root/'downloads';runtime=root/'runtime'
-assets=[
- ('https://nodejs.org/dist/v24.12.0/node-v24.12.0-darwin-arm64.tar.gz','node-v24.12.0-darwin-arm64.tar.gz','319f221adc5e44ff0ed57e8a441b2284f02b8dc6fc87b8eb92a6a93643fd8080'),
- ('https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip','ffmpeg.zip','c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924'),
- ('https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip','ffprobe.zip','fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6')]
-for url,name,expected in assets:
+manifest=json.loads(Path('live-editor/scripts/release-runtime.json').read_text())['macos']
+assets=[manifest['node'],*manifest['ffmpeg']['archives']]
+for asset in assets:
+ url,name,expected=(asset[key] for key in ('url','name','sha256'))
  target=downloads/name
  if not target.exists():
   print('下载',name,flush=True)

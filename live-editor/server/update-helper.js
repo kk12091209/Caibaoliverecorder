@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+export const UPDATE_VERSION_PATTERN = /^(\d{1,5}\.\d{1,5}\.\d{1,5})(?:-beta\.([1-9]\d{0,4}))?$/;
 export const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}};
 export async function digest(file){const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink())throw new Error('更新文件类型异常。');const hash=createHash('sha256');for await(const chunk of createReadStream(file))hash.update(chunk);return hash.digest('hex');}
@@ -27,7 +28,7 @@ export async function update(requestFile){
   const target=path.resolve(request.target),platform=process.platform;
   const relaunch=async()=>platform==='darwin'?run('/usr/bin/open',['-n',...['CAIBO_DATA_ROOT','CAIBO_EXPORT_ROOT','NO_RECORDER'].flatMap(key=>process.env[key]?['--env',key+'='+process.env[key]]:[]),target,'--args','--updated']):new Promise((resolve,reject)=>{const p=spawn(path.join(target,'录播机.exe'),[],{detached:true,stdio:'ignore',windowsHide:false,cwd:target});p.once('error',reject);p.once('spawn',()=>{p.unref();resolve();});});
   try{
-    if(request.schema!==1||request.platform!==platform||!['darwin','win32'].includes(platform)||!Number.isInteger(request.guiPid)||request.guiPid<=0||!Number.isInteger(request.backendPid)||request.backendPid<=0||!/^[a-f0-9]{64}$/.test(request.sha256)||!/^\d+\.\d+\.\d+$/.test(request.version)||!Number.isInteger(request.revision)||request.revision<1)throw new Error('更新请求无效。');
+    if(request.schema!==1||request.platform!==platform||!['darwin','win32'].includes(platform)||!Number.isInteger(request.guiPid)||request.guiPid<=0||!Number.isInteger(request.backendPid)||request.backendPid<=0||!/^[a-f0-9]{64}$/.test(request.sha256)||!UPDATE_VERSION_PATTERN.test(request.version)||!Number.isInteger(request.revision)||request.revision<1)throw new Error('更新请求无效。');
     if(await digest(request.package)!==request.sha256)throw new Error('更新包校验失败，原版本已保留。');
     if(platform==='darwin'){
       if(!target.endsWith('.app')||target===path.parse(target).root)throw new Error('安装位置无效。');

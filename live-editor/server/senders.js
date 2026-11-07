@@ -1,3 +1,4 @@
+import { chatEventPattern, xmlAttributes } from './chat-xml.js';
 import fs from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {setImmediate as yieldTurn} from 'node:timers/promises';
@@ -8,12 +9,11 @@ export function installSenders(store){store.db.exec(`
  CREATE TABLE IF NOT EXISTS sender_index_sources(source TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,pos INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS gift_sender_index_sources(source TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,pos INTEGER NOT NULL);
 `);store.senders=new SenderIndex(store);}
-export const xmlAttributes=text=>Object.fromEntries([...text.matchAll(/([\w-]+)="([^"]*)"/g)].map(m=>[m[1],m[2].replace(/&#x([0-9a-f]+);|&#(\d+);|&(lt|gt|quot|apos|amp);/gi,(_,x,d,n)=>x||d?String.fromCodePoint(Math.min(0x10ffff,parseInt(x||d,x?16:10))):({lt:'<',gt:'>',quot:'"',apos:"'",amp:'&'}[n]||''))]));
 export function senderFromXml(attributes,source,store){
- const platform=attributes.platform==='douyin'||store.setting('douyin-session:'+source.session)?'douyin':'bilibili';
+ const platform=attributes.platform==='xiaohongshu'||store.setting('xiaohongshu-session:'+source.session)?'xiaohongshu':attributes.platform==='douyin'||store.setting('douyin-session:'+source.session)?'douyin':'bilibili';
  // Old Douyin XML used uid for the message ID. Never mistake it for a user ID.
- const id=platform==='douyin'?attributes.sender_id:(attributes.p||'').split(',')[6];
- return /^[1-9]\d{0,30}$/.test(id||'')?{platform,uid:id}:null;
+ const id=platform!=='bilibili'?attributes.sender_id:(attributes.p||'').split(',')[6];
+ return (platform==='xiaohongshu'?/^[a-f0-9]{24}$/:/^[1-9]\d{0,30}$/).test(id||'')?{platform,uid:id}:null;
 }
 export function saveSender(store,message,sender){if(sender)store.run('INSERT OR IGNORE INTO danmaku_senders SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM danmaku WHERE id=?)',message,sender.platform,sender.uid,message);}
 export class SenderIndex{
@@ -36,7 +36,7 @@ export class SenderIndex{
     const bytes=Buffer.alloc(Math.min(256*1024,source.xmlpos-pos));const {bytesRead}=await file.read(bytes,0,bytes.length,pos);if(!bytesRead)break;
     const text=bytes.subarray(0,bytesRead).toString('utf8'),rows=[];let consumed=0;
     // Advance across all complete events, including records outside this index.
-    for(const m of text.matchAll(/<(d|sc|gift|guard|density)\s+([^>]*?)(?:\/>|>[\s\S]*?<\/\1>)/g)){
+    for(const m of text.matchAll(chatEventPattern())){
      consumed=m.index+m[0].length;
      const type=m[1];
      if(gifts?!['sc','gift','guard'].includes(type):type!=='d')continue;

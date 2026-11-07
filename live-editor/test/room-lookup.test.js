@@ -25,17 +25,17 @@ test('nonexistent Bilibili room, transient rejection and a missing nickname have
 
 test('lookups run concurrently and return public choices without raw room metadata or visitor secrets',async()=>{
  let entered=0;let release;const waiting=new Promise(resolve=>{release=resolve;});
- const lookup=room=>({async room(){entered++;if(entered===2)release();await waiting;return room;}});
- const result=await discoverRoomNumber('1016',{bilibili:lookup({roomId:1016,name:'B站主播',title:'B站标题',streaming:true,cookie:'private'}),douyin:lookup({webRid:'1016',roomId:'7691707893343275816',name:'抖音主播',title:'抖音标题',streaming:false,cookie:'ttwid=private',stream:{url:'https://signed.private/?token=secret'}})});
+ const lookup=(id,room)=>({id,async lookupRoom(){entered++;if(entered===2)release();await waiting;return {...room,roomNumber:'1016',url:'https://live.'+id+'.com/1016'};}});
+ const result=await discoverRoomNumber('1016',[lookup('bilibili',{roomId:1016,name:'B站主播',title:'B站标题',streaming:true,cookie:'private'}),lookup('douyin',{webRid:'1016',roomId:'7691707893343275816',name:'抖音主播',title:'抖音标题',streaming:false,cookie:'ttwid=private',stream:{url:'https://signed.private/?token=secret'}})]);
  assert.equal(entered,2);assert.deepEqual(result.unavailable,[]);assert.deepEqual(result.candidates.map(room=>room.platform),['bilibili','douyin']);
  assert.equal(result.candidates[1].url,'https://live.douyin.com/1016');assert.equal(result.candidates[0].url,'https://live.bilibili.com/1016');
  assert.equal(JSON.stringify(result).includes('private'),false);assert.equal(JSON.stringify(result).includes('token'),false);
 });
 
 test('a transient failure never counts as a nonexistent competing platform',async()=>{
- const bilibili={room:async()=>({roomId:42,name:'B站主播',streaming:false})};
- const absent=await discoverRoomNumber('42',{bilibili,douyin:{room:async()=>{throw notFound();}}});assert.equal(absent.candidates.length,1);assert.deepEqual(absent.unavailable,[]);
- const failed=await discoverRoomNumber('42',{bilibili,douyin:{room:async()=>{throw Error('timeout');}}});assert.equal(failed.candidates.length,1);assert.deepEqual(failed.unavailable,['douyin']);
+ const bilibili={id:'bilibili',lookupRoom:async()=>({roomNumber:'42',url:'https://live.bilibili.com/42',name:'B站主播',streaming:false})};
+ const absent=await discoverRoomNumber('42',[bilibili,{id:'douyin',lookupRoom:async()=>{throw notFound();}}]);assert.equal(absent.candidates.length,1);assert.deepEqual(absent.unavailable,[]);
+ const failed=await discoverRoomNumber('42',[bilibili,{id:'douyin',lookupRoom:async()=>{throw Error('timeout');}}]);assert.equal(failed.candidates.length,1);assert.deepEqual(failed.unavailable,['douyin']);
 });
 
 test('Bilibili room response sizes remain bounded',async()=>{

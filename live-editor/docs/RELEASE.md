@@ -40,7 +40,7 @@
   -AppRoot '<最新 live-editor 源码目录>' `
   -DesktopRoot '<desktop/package 目录>' `
   -RuntimeRoot '<包含 node 与 recorder 的 runtime 目录>' `
-  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>' -Version '0.2.3'
+  -ToolsRoot '<工具缓存>' -OutputRoot '<新的输出目录>'
 ```
 
 输出目录中的版本目录和文件必须不存在；脚本不会覆盖已有版本，也不做递归删除。工具缓存默认 `ProjectRoot/.tools/release-tools`，构建目录默认 `ProjectRoot/.tools/release-work`。`DesktopRoot` 须使用当前桌面构建输出，其中配置和桌面 DLL 已位于 `程序组件`。默认输出 ZIP、安装包、体积/哈希报告及未压缩工作目录，额外传入 `-Include7z` 才生成 7z。`程序组件/release-manifest.json` 记录版本与逐文件 SHA-256。安装版额外加入安装器许可、卸载程序与卸载快捷方式。安装器脚本与中文翻译许可位于 `installer`。
@@ -82,7 +82,9 @@ v0.1.3 起采用完整卸载。安装只接受专用文件夹，拒绝磁盘根�
 
 在 GitHub Actions 手动运行 `Windows release package` 工作流，选择要发布的源码分支。工作流在 Windows runner 上运行 `build-windows-ci.ps1`，重新构建前端、Windows 桌面壳和录制核心，执行共用回归、真实核心生命周期、安装/升级/卸载以及 ZIP/7z 校验，成功后生成 `windows-版本` 附件。默认只生成构建附件；勾选 `publish_draft` 时，校验成功后由云端直接上传到新的草稿 Release。已有同版本 Release 会导致创建失败，不覆盖现有附件；草稿需核对后再公开发布。
 
-本流程的 Node 24.12.0 与 FFmpeg 8.1.2 沿用已发布 v0.1.3 的相同二进制，先核对整个旧 ZIP 的固定 SHA-256，再校验逐文件清单；只复制 Node 和 FFmpeg 及对应许可，不复用旧界面、桌面壳、录制核心或用户数据。媒体配置与依赖源码来源随包保留在 `程序组件/licenses/ffmpeg`。需要修改媒体构建时，使用前述 `build-ffmpeg.ps1` 重新生成组件并核对版本与哈希。
+Windows 的 Node、FFmpeg 源码、工具链和 macOS 运行时的下载地址及校验值由 `scripts/release-runtime.json` 管理。Windows 使用官方 Node 二进制，使用现有的 `build-ffmpeg.ps1` 构建同版本及配置的共享 FFmpeg；也可设置 `CAIBO_WINDOWS_FFMPEG_ROOT`，传入包含 `component.json`、`bin/` 和许可的独立组件。运行媒体测试前会核对组件版本、源码、工具链和逐个文件的 SHA-256。发布流程不再从旧应用包提取运行时。安装包的旧版升级测试仍独立使用历史包。
+
+桌面产品版本由 `live-editor/package.json` 提供；显式指定 Windows 打包或安装测试版本时，脚本要求与该值一致。录制核心和网站仍独立维护各自的版本。
 
 发布附件含中文安装包、ZIP、7z、安装体积报告、完整对应源码及清单、`windows-build.json` 与 `SHA256SUMS.txt`。`windows-build.json` 记录确切源码提交和检查结果；发布标签必须指向该提交。云端安装与软件编码测试不等同于用户显卡硬件加速、WebView2 窗口和真实直播的完整实机验收。
 
@@ -119,3 +121,10 @@ CAIBAO_UPDATE_SIGNING_KEY_FILE='<release-machine-private-key.pem>' node live-edi
 发布附件必须同时包含 `update-manifest.json` 与 `caibao-update.json`。签名私钥只保存在发布机器，不提交源码、不传到客户端或同步服务器。客户端公钥固定在 `server/update-trust.js`。菜包同步程序从 GitHub 获取签名附件，核对签名、同一源码提交与两端安装包，所有文件公开下载验证成功后才原子发布稳定更新入口。旧客户端先通过原有渠道升级一次，之后使用主备渠道。
 
 本地升级候选的 macOS 组件修复也要求 `caibao-update.json`；缺少签名附件的历史版本拒绝自动修复，不以 GitHub 摘要代替发布者签名。发布前必须验证两端自动更新、原生修复和旧实例有序退出。
+
+
+## GitHub 测试版本
+
+测试包与正式包使用同一仓库，产品版本写成 `0.4.2-beta.1`、`0.4.2-beta.2` 等。按上面的流程从同一提交构建两端，草稿标记为 `Pre-release`，上传并校验两端安装包与签名清单后再公开。GitHub 公开预发布可以手动下载；官网只同步最新正式发布，不导入测试包或测试更新说明。正式版用独立的 `v0.4.2` 标签和两端正式安装包发布。
+
+用户在「设置 → 版本更新」连点版本号十次后，可在本机开启「接收测试版本」。初次需要安装支持通道的应用。默认只检查正式渠道；开启后额外查询 GitHub 近期预发布，并在已验证候选中选择更新的版本。`0.4.2` 高于同系列的测试版。关闭开关会撤销待安装的测试更新，已安装的版本等待正式版接替。测试和正式安装均使用同样的校验及空闲安装规则。

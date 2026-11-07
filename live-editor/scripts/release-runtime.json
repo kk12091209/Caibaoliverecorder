@@ -1,0 +1,51 @@
+{
+  "windows": {
+    "node": {
+      "version": "24.12.0",
+      "name": "node.exe",
+      "url": "https://nodejs.org/dist/v24.12.0/win-x64/node.exe",
+      "sha256": "2ffe3acc0458fdde999f50d11809bbe7c9b7ef204dcf17094e325d26ace101d8",
+      "license": {
+        "name": "NODE-LICENSE.txt",
+        "url": "https://raw.githubusercontent.com/nodejs/node/v24.12.0/LICENSE",
+        "sha256": "537308465103a306d0e3eecf42632b4ff1b48aaaec044e9fc10a78c81fd00b34"
+      }
+    },
+    "ffmpeg": {
+      "version": "8.1.2",
+      "variant": "caibo-shared",
+      "source": {
+        "name": "ffmpeg-8.1.2.tar.xz",
+        "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+        "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+      },
+      "toolchain": {
+        "name": "msys2-base-x86_64-20260927.tar.xz",
+        "url": "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.tar.xz",
+        "sha256": "ea2f31a0b6ade63914ce441ffb022f0f6aa96982bfefa2326460a26d5fb01322"
+      }
+    }
+  },
+  "macos": {
+    "node": {
+      "name": "node-v24.12.0-darwin-arm64.tar.gz",
+      "url": "https://nodejs.org/dist/v24.12.0/node-v24.12.0-darwin-arm64.tar.gz",
+      "sha256": "319f221adc5e44ff0ed57e8a441b2284f02b8dc6fc87b8eb92a6a93643fd8080"
+    },
+    "ffmpeg": {
+      "version": "9.0.2",
+      "archives": [
+        {
+          "name": "ffmpeg.zip",
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+          "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924"
+        },
+        {
+          "name": "ffprobe.zip",
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip",
+          "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
+        }
+      ]
+    }
+  }
+}

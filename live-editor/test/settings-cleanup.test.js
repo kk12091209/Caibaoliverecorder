@@ -14,7 +14,7 @@ test('设置拒绝已移除的登录与恢复功能；旧下载接口停用，�
   app.ingestor.stop();app.deletionMaintenance.next=Infinity;
   t.after(async()=>{await app.close();assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('bili-settings-cleanup-'));await fs.rm(root,{recursive:true,force:true});});
   const origin=`http://127.0.0.1:${port}`,post=(route,body)=>fetch(origin+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  app.recorder.api=async()=>{assert.fail('Settings must not forward a login request to the recorder');};
+  app.recorder.bilibili.api=async()=>{assert.fail('Settings must not forward a login request to the recorder');};
   const destination=path.join(root,'exports');assert.equal((await post('/api/settings',{exportDirectory:destination})).status,200);
   assert.equal((await post('/api/settings',{cookie:'dummy',exportDirectory:path.join(root,'must-not-create')})).status,400);
   assert.equal(app.store.setting('export-directory'),destination);await assert.rejects(fs.stat(path.join(root,'must-not-create')),{code:'ENOENT'});

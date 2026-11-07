@@ -9,7 +9,7 @@ param(
     [switch]$QaFastCompile
 )
 $ErrorActionPreference = 'Stop'
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') { throw 'Installer version must be numeric.' }
+if ($Version -cnotmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}(?:\.\d+|-beta\.[1-9]\d{0,4})?$') { throw 'Expected a release version or a numbered beta.' }
 if ($AppId -notmatch '^[A-Za-z0-9.-]+$') { throw 'Invalid installer identity.' }
 if ($QaFastCompile -and $AppId -notmatch '^Caibo\.QA\.') { throw 'Uncompressed compilation is restricted to isolated QA installers.' }
 if (!$BaseName) { $BaseName = "BiliLiveEditor-$Version-win-x64-setup" }
@@ -29,7 +29,8 @@ foreach ($item in Get-ChildItem -LiteralPath $Stage -Recurse -Force) {
 }
 if ((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash -ne '0A8757031B33777E4C9CBFFEE40F11A5062B36D25CBE144C1DB73B6102B80AD7') { throw 'Expected pinned Inno Setup 6.7.3 compiler.' }
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
-$compilerArguments = @('/Qp',("/DStageDir=$Stage"),("/DAppVersion=$Version"),("/DSetupOutputDir=$OutputRoot"),("/DSetupAppId=$AppId"),("/DSetupBaseName=$BaseName"),("/DInnoLicense=" + (Join-Path $compilerRoot 'LICENSE.TXT')))
+$numericVersion = ($Version -split '-beta\.', 2)[0]
+$compilerArguments = @('/Qp',("/DStageDir=$Stage"),("/DAppVersion=$Version"),("/DAppNumericVersion=$numericVersion"),("/DSetupOutputDir=$OutputRoot"),("/DSetupAppId=$AppId"),("/DSetupBaseName=$BaseName"),("/DInnoLicense=" + (Join-Path $compilerRoot 'LICENSE.TXT')))
 if ($QaFastCompile) { $compilerArguments += '/DQaFastCompile=1' }
 & $compiler @compilerArguments (Join-Path (Split-Path $PSScriptRoot -Parent) 'installer\setup.iss') | Out-Host
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $installer)) { throw 'Installer compilation failed.' }

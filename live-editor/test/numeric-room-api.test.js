@@ -10,9 +10,10 @@ async function fixture(t){
  const known={bilibili:{'1016':{roomId:1016,name:'B站主播',title:'B站标题',streaming:true},'42':{roomId:420000,name:'短号主播',title:'',streaming:false}},douyin:{'1016':{name:'抖音主播'},'57375952448':{name:'抖音独有主播'}}};
  const lookupCalls=[],bilibiliResolver={async room(id){lookupCalls.push(['bilibili',id]);if(known.bilibili[id] instanceof Error)throw known.bilibili[id];return known.bilibili[id]||null;}};
  const app=await createApp({data:path.join(root,'data'),noRecorder:true,port:0,preparation:false,compact:false,ffmpeg:'not-executed',ffprobe:'not-executed',bilibiliResolver,
-  douyin:{resolver:{async room(id){lookupCalls.push(['douyin',id]);const room=known.douyin[id];if(room instanceof Error)throw room;if(!room)throw absent();return {...room,platform:'douyin',webRid:id,roomId:'7691707893343275816',streaming:false,cookie:'ttwid=private',userUniqueId:'secret'};}},chat:{close:async()=>{}}}});
- app.recorder.online=true;await fs.mkdir(app.recorder.directory,{recursive:true});
- app.recorder.api=async(route,body,method)=>{biliCalls.push({route,body,method});if(route==='room'&&body){const knownRoom=Object.values(known.bilibili).find(room=>room?.roomId===body.roomId);const room={...knownRoom,roomId:body.roomId,autoRecord:body.autoRecord,autoRecordForThisSession:true,recording:false,streaming:false};biliRooms.push(room);return room;}return route==='room'?biliRooms:null;};
+  douyin:{resolver:{async room(id){lookupCalls.push(['douyin',id]);const room=known.douyin[id];if(room instanceof Error)throw room;if(!room)throw absent();return {...room,platform:'douyin',webRid:id,roomId:'7691707893343275816',streaming:false,cookie:'ttwid=private',userUniqueId:'secret'};}},chat:{close:async()=>{}}},
+  xiaohongshu:{resolver:{async room(){throw absent();}},chat:{close:async()=>{}}}});
+ app.recorder.bilibili.online=true;await fs.mkdir(app.recorder.bilibili.directory,{recursive:true});
+ app.recorder.bilibili.api=async(route,body,method)=>{biliCalls.push({route,body,method});if(route==='room'&&body){const knownRoom=Object.values(known.bilibili).find(room=>room?.roomId===body.roomId);const room={...knownRoom,roomId:body.roomId,autoRecord:body.autoRecord,autoRecordForThisSession:true,recording:false,streaming:false};biliRooms.push(room);return room;}return route==='room'?biliRooms:null;};
  t.after(async()=>{await app.close();assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep));assert.ok(path.basename(root).startsWith('numeric-room-api-'));await fs.rm(root,{recursive:true,force:true});});
  return {app,known,biliCalls,lookupCalls,async add(url){const response=await fetch(`http://127.0.0.1:${app.port}/api/rooms`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});return {status:response.status,body:await response.json()};}};
 }
@@ -26,7 +27,7 @@ test('same numeric ID on both platforms proposes anchors without adding or recor
 
 test('confirming Bilibili adds only that anchor and keeps canonical short-ID resolution',async t=>{
  const f=await fixture(t),choices=await f.add('1016');await f.add(choices.body.candidates[0].url);
- assert.deepEqual(f.app.snapshot().rooms.map(room=>room.platform),['bilibili']);assert.equal(f.app.recorder.douyin.entries.size,0);
+ assert.deepEqual(f.app.snapshot().rooms.map(room=>room.platform),['bilibili']);assert.equal(f.app.recorder.douyin.core.entries.size,0);
  assert.equal(f.biliCalls.filter(call=>call.route==='room'&&call.body).length,1);
  const short=await f.add(' 00042 ');assert.equal(short.status,200);assert.equal(short.body.roomId,420000);
 });
@@ -47,4 +48,35 @@ test('missing rooms and invalid numeric input add no monitoring entries',async t
 
 test('failed competing lookup requires explicit selection rather than silently starting the other platform',async t=>{
  const f=await fixture(t);f.known.bilibili['1016']=Error('timeout');const result=await f.add('1016');assert.equal(result.body.needsSelection,true);assert.deepEqual(result.body.unavailable,['bilibili']);assert.equal(result.body.candidates.length,1);assert.equal(f.app.snapshot().rooms.length,0);
+});
+
+test('a registered provider participates in room lookup and routes its own anchor controls', async t => {
+  const f = await fixture(t);
+  const id = '9007199254740993998';
+  const url = 'https://example.invalid/live/' + id;
+  const actions = [];
+  f.app.recorder.platforms.set('fixture', {
+    id: 'fixture',
+    roomSnapshots: [],
+    anchors: [],
+    ownsAnchor: key => key.startsWith('fixture:'),
+    lookupRoom: async number => number === id ? { roomNumber: id, url, name: 'fixture' } : null,
+    addRoom: async input => {
+      assert.equal(input.url, url);
+      return { platform: 'fixture', roomId: id };
+    },
+    anchorAction: async (key, action) => actions.push([key, action]),
+  });
+
+  const added = await f.add(id);
+  assert.equal(added.status, 200);
+  assert.deepEqual(added.body, { platform: 'fixture', roomId: id });
+  assert.deepEqual(f.biliCalls, []);
+
+  const request = key => fetch(`http://127.0.0.1:${f.app.port}/api/anchors/${key}/stop`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  assert.equal((await request('fixture:' + id)).status, 200);
+  assert.deepEqual(actions, [['fixture:' + id, 'stop']]);
+  assert.equal((await request('unregistered:' + id)).status, 404);
 });

@@ -174,6 +174,7 @@ export class Store {
         this.run('DELETE FROM sources WHERE session=?',id);
         this.run('DELETE FROM sessions WHERE id=?',id);
         this.run('DELETE FROM settings WHERE key=?','douyin-session:'+id);
+        this.run('DELETE FROM settings WHERE key=?','xiaohongshu-session:'+id);
       });
       // cancelSession already stopped this producer before physical deletion.
       await this.preparation?.forgetSession(id,{alreadyStopped:true});

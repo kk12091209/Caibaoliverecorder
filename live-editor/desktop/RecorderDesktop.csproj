@@ -8,7 +8,8 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>录播机</AssemblyName>
     <RootNamespace>LiveRecorderDesktop</RootNamespace>
-    <Version>0.4.1</Version>
+    <!-- package.json is the desktop product version; the recorder core has its own version. -->
+    <Version Condition="'$(Version)' == ''">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../package.json')), '&quot;version&quot;\s*:\s*&quot;([0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[1-9][0-9]*)?)&quot;').Groups[1].Value)</Version>
     <Product>菜播·录包机</Product>
     <AssemblyTitle>菜播·录包机</AssemblyTitle>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

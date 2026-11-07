@@ -56,8 +56,8 @@ async function fixture(t,{automatic=true,streaming=true,available=true}={}){
   const create=(Constructor=Recorder)=>{recorder=new Constructor(store,{executable,port:0,lifecycle,douyin:{resolver:{room:async()=>{throw Error('no network allowed');}},chat:{setRateLimit(){},close:async()=>{}}}});return recorder;};
   create();
   const f={root,executable,calls,state,configFile,lifecycle,create,get recorder(){return recorder;},get store(){return store;},
-    async reopen({coreRestart=true,Constructor=Recorder}={}){recorder.close();await recorder.starting;store.close();store=new Store(root);if(coreRestart)state.available=false;return create(Constructor);}};
-  t.after(async()=>{recorder.close();await recorder.starting;while(recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,1));store.close();assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(root).startsWith('bilibili-room-state-'));await fs.rm(root,{recursive:true,force:true});});
+    async reopen({coreRestart=true,Constructor=Recorder}={}){await recorder.close();await recorder.starting;store.close();store=new Store(root);if(coreRestart)state.available=false;return create(Constructor);}};
+  t.after(async()=>{await recorder.close();await recorder.starting;while(recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,1));store.close();assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(root).startsWith('bilibili-room-state-'));await fs.rm(root,{recursive:true,force:true});});
   return f;
 }
 

@@ -116,9 +116,9 @@ for(const platform of ['bilibili','douyin'])test(`${platform} 等待开播时心
   await app.startupRecovery;
   let room;
   if(platform==='bilibili'){
-    room={roomId:42,autoRecord:true,recordingEnabled:true,recording:false,streaming:false};app.recorder.rooms=[room];
+    room={roomId:42,autoRecord:true,recordingEnabled:true,recording:false,streaming:false};app.recorder.bilibili.rooms=[room];
   }else{
-    room=app.recorder.douyin.entry({webRid:'42',autoRecord:true,enabled:true});app.recorder.douyin.entries.set('42',room);
+    room=app.recorder.douyin.core.entry({webRid:'42',autoRecord:true,enabled:true});app.recorder.douyin.core.entries.set('42',room);
   }
   const heartbeat={action:'heartbeat',client:'a'.repeat(32),pid:process.pid};
   const initial=await request(app,heartbeat);assert.equal(initial.body.background,true);assert.equal(initial.body.busy,false);

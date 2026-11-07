@@ -14,6 +14,48 @@ import {BILI_LAYOUT_VERSION} from '../server/bilibili-layouts.js';
 
 const layout={main:{x:0,y:.25,w:.5,h:.5},camera:{x:.75,y:.25,w:.25,h:1/3}};
 const bili=()=>({MULTI_SCREEN:{crop_info:[{position:1,x:.75,y:.25,cx:.25,cy:1/3},{position:0,x:0,y:.25,cx:.5,cy:.5}],layout_type:0}});
+const multiView=()=>({
+  inputs:[
+    {id:'game_full',rect:layout.main,rotate:0,visible:true},
+    {id:'camera_full',rect:layout.camera,rotate:0,visible:true},
+    {id:'camera_horizontal_clip',rect:layout.camera,rotate:0,visible:true},
+  ],
+  displays:[
+    {display_id:'live_2104',outputs:[{id:'game_full',display_rect:{x:0,y:0,w:1,h:.5}},{id:'camera_full',display_rect:{x:0,y:.5,w:1,h:.5}}]},
+    {display_id:'live_2204',outputs:[{id:'game_full',display_rect:{x:0,y:0,w:1,h:1}},{id:'camera_horizontal_clip',display_rect:{x:.8,y:.8,w:.2,h:.2}}]},
+  ],
+});
+
+test('official Douyin multi-view object and JSON layouts use source rectangles for both orientations',()=>{
+  for(const displays of [multiView().displays,multiView().displays.slice(0,1),multiView().displays.slice(1),
+    [{...multiView().displays[0],display_id:'same_roles_new_display'}]]){
+    for(const encode of [value=>value,JSON.stringify]){
+      const extension={camera_hidden:0,multi_view_data:encode({...multiView(),displays})};
+      assert.deepEqual(douyinCameraLayout(extension),layout);
+      assert.deepEqual(douyinCameraLayout(JSON.stringify(extension)),layout);
+      const entry={extension,stream_data:{data:{origin:{main:{flv:'https://pull-test.douyincdn.com/independent.flv',sdk_params:{VCodec:'h264'}}}}}};
+      assert.deepEqual(selectDouyinIndependentFlv({pull_datas:{source:entry}}).cameraLayout,layout);
+      assert.deepEqual(cameraFrames(platformSei(tag({app_data:extension},100)))[0].layout,layout);
+    }
+  }
+});
+
+test('multi-view hidden, rotated, ambiguous and composite source regions never become movable cameras',()=>{
+  const edits=[
+    value=>{value.inputs[2].visible=false;value.inputs[1].visible=false;},
+    value=>{value.inputs[2].rotate=90;value.inputs[1].rotate=90;},
+    value=>{value.inputs.push({...value.inputs[0]});},
+    value=>{value.inputs[1].rect={x:0,y:0,w:1,h:1};value.inputs[2].rect={x:0,y:0,w:1,h:1};},
+    value=>{for(const display of value.displays)display.outputs[1].id='unknown_role';},
+    value=>{for(const display of value.displays)display.outputs.push({id:'another_camera'});},
+  ];
+  for(const change of edits){
+    const value=multiView();change(value);
+    assert.equal(douyinCameraLayout({multi_view_data:value}),null);
+  }
+  assert.equal(douyinCameraLayout({camera_hidden:1,multi_view_data:multiView()}),null);
+  assert.equal(douyinCameraLayout({multi_view_data:'{'}),null);
+});
 function tag(value,type=5,time=0) {
   const payload=Buffer.from((type===5?'LIVE_SEI_CHANNEL':'')+JSON.stringify(value)),size=[];
   for(let n=payload.length;n>=255;n-=255)size.push(255);size.push(payload.length%255);

@@ -12,6 +12,10 @@ import {MultiPlatformRecorder} from '../server/multi-platform-recorder.js';
 import {EventEmitter} from 'node:events';
 import {DouyinChat} from '../server/douyin-chat.js';
 import {recorderStatusDetails} from '../src/recorder-status.js';
+import {PlatformCredentials} from '../server/platform-credentials.js';
+import {PlatformCookieValidation} from '../server/platform-cookie-validation.js';
+import {DouyinResolver} from '../server/douyin-room.js';
+import {douyinFixture,testProtection} from './credential-fixtures.js';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check){for(let n=0;n<200;n++){if(check())return;await delay(5);}assert.fail('operation did not settle');}
 const encoded=()=>Buffer.concat([FLV_HEADER,flvTag(9,123000,24,{header:true}),flvTag(8,123000,8,{header:true}),flvTag(9,123000,24,{key:true}),flvTag(8,123020,8),flvTag(9,124000,24,{key:true}),flvTag(9,125000,24,{key:true})]);
@@ -146,7 +150,7 @@ test('service close finalizes own writers and preserves enabled monitor settings
 test('facade routes Douyin string namespace without touching Bilibili APIs',async t=>{
  const f=await fixture(t),calls=[];const recorder=new MultiPlatformRecorder(f.store,{executable:'',douyin:{resolver:{room:async()=>({...f.state.metadata,streaming:false})},chat:{close:async()=>{}}}});
  const bili={roomId:123,recording:false,autoRecord:true,autoRecordForThisSession:true};
- recorder.api=async(route,body)=>{calls.push({route,body});return route==='room'?[bili]:null;};recorder.online=true;recorder.rooms=[bili];recorder.douyin.start();
+ recorder.bilibili.api=async(route,body)=>{calls.push({route,body});return route==='room'?[bili]:null;};recorder.bilibili.online=true;recorder.bilibili.rooms=[bili];recorder.douyin.start();
  t.after(()=>recorder.close());await recorder.addRoom({url:'https://live.douyin.com/123'});assert.equal(calls.length,0);assert.equal(recorder.rooms.length,2);assert.equal(recorder.rooms[1].roomId,'douyin:123');
  await recorder.action('douyin:123','stop');assert.equal(calls.length,0);await recorder.action('123','auto',{enabled:true});assert.ok(calls.some(call=>call.route==='room/123/config'));
 });
@@ -232,4 +236,54 @@ test('credential changes reauthenticate chat and retain ongoing video; gifts wri
  f.state.metadata={...f.state.metadata,cookie:'sessionid=synthetic-retried',userUniqueId:'88'};
  await f.recorder.poll(true);assert.equal(updates.at(-1)[1].cookie,'sessionid=synthetic-retried');assert.equal(updates.at(-1)[2].reauthenticate,true,'retry actually changes the active connection, not only its next reconnect');assert.equal(f.state.streams,1);
  await f.recorder.stopRoom('douyin:123');const ingest=new Ingestor(f.store);await ingest.tick();assert.equal(f.store.get('SELECT count(*) n FROM gift_events').n,1);
+});
+test('confirmed Douyin expiry reconnects chat anonymously while the same video source and XML keep growing',async t=>{
+ const f=await fixture(t),updates=[];
+ const credentials=await new PlatformCredentials(f.root,{protection:testProtection(),store:f.store}).initialize();
+ await credentials.save('douyin',douyinFixture);
+ const resolver=new DouyinResolver({credentials,request:async(url,options)=>{
+   if(new URL(url).pathname==='/webcast/user/me/'){
+     assert.equal(options.headers.Cookie,douyinFixture);
+     return Response.json({status_code:20003,data:{message:"User doesn't login"}});
+   }
+   assert.equal(new Headers(options.headers).has('cookie'),false);
+   return new Response('',{headers:{'Set-Cookie':'ttwid=anonymous-visitor; Path=/'}});
+ }});
+ f.recorder.resolver.cookie=resolver.cookie.bind(resolver);
+ f.recorder.chat.update=(...args)=>updates.push(args);
+ const validation=new PlatformCookieValidation(credentials,new Map([['douyin',{
+   verifyCookie:options=>resolver.verifyCookie(options),applySavedCredentials:()=>f.recorder.applyCredentials(),
+ }]]));
+ t.after(async()=>{validation.close();await credentials.close();});
+ f.recorder.start();
+ await f.recorder.add({webRid:'123'},true);
+ await until(()=>f.writes.length>0&&f.recorder.entries.get('123').progress?.mediaMs>=2000);
+ const room=f.recorder.entries.get('123'),sourceId=room.sourceId;
+ assert.equal(f.writes[0].details.cookie,douyinFixture);
+
+ let resolveRoom;
+ f.recorder.resolver.room=()=>new Promise(resolve=>{resolveRoom=resolve;});
+ const oldPoll=f.recorder.poll(true);
+ await validation.tick();
+ resolveRoom({...f.state.metadata,cookie:douyinFixture,streaming:false});
+ await oldPoll;
+ assert.deepEqual(updates.map(([key,details,options])=>[key,details.cookie,options.reauthenticate]),[[sourceId,'ttwid=anonymous-visitor',true]]);
+ assert.equal(room.sourceId,sourceId);
+ assert.equal(room.recording,true);
+ f.controls[0].enqueue(flvTag(9,126000,24,{key:true}));
+ await until(()=>room.progress.mediaMs>=3000);
+ await f.writes[0].callbacks.write({messages:[{id:'anonymous',text:'匿名接续后的弹幕',user:'',color:'16777215',time:2.5}],density:[],gifts:[]});
+ await credentials.save('douyin',douyinFixture);
+ await f.recorder.applyCredentials();
+ assert.equal(updates.at(-1)[1].cookie,douyinFixture);
+ await credentials.remove('douyin');
+ await f.recorder.applyCredentials();
+ assert.equal(updates.at(-1)[1].cookie,'ttwid=anonymous-visitor');
+ assert.deepEqual(credentials.warnings(),[]);
+ assert.equal(room.sourceId,sourceId);
+ assert.equal(room.recording,true);
+ await f.recorder.stopRoom('123');
+ assert.equal(f.state.streams,1);
+ const source=f.store.sources(f.store.sessions()[0].id)[0];
+ assert.match(await fs.readFile(source.xml,'utf8'),/匿名接续后的弹幕/);
 });

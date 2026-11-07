@@ -4,8 +4,12 @@ import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
-export const COOKIE_PLATFORMS=['bilibili','douyin'];
+export const COOKIE_PLATFORMS=['bilibili','douyin','xiaohongshu'];
 const MAX_COOKIE=32768,appRoot=fileURLToPath(new URL('..',import.meta.url));
+const healthKey=platform=>'platform-cookie-health:'+platform;
+// The sealed bytes are randomized by the OS protector. Their digest identifies
+// this saved generation across restarts without deriving a key from the secret.
+const generationOf=sealed=>createHash('sha256').update(sealed).digest('hex');
 const failure=()=>new Error('系统安全存储不可用，Cookie 未保存。请解锁系统钥匙串或检查应用组件后重试。');
 export function normalizePlatformCookie(platform,input){
   if(!COOKIE_PLATFORMS.includes(platform)||typeof input!=='string'||input.length>MAX_COOKIE||/[\r\n\x00-\x1f\x7f]/.test(input))throw new Error('请粘贴该平台请求头中完整的 Cookie 值，勿粘贴命令、JSON 或多行文本。');
@@ -18,6 +22,7 @@ export function normalizePlatformCookie(platform,input){
   }
   if(platform==='bilibili'&&(!parts.get('SESSDATA')||!/^\d{1,20}$/.test(parts.get('DedeUserID')||'')))throw new Error('B 站 Cookie 需要包含 SESSDATA 和 DedeUserID。');
   if(platform==='douyin'&&!parts.get('sessionid')&&!parts.get('sessionid_ss'))throw new Error('抖音 Cookie 需要包含 sessionid 或 sessionid_ss，请先登录再复制。');
+  if(platform==='xiaohongshu'&&(!parts.get('a1')||!parts.get('web_session')))throw new Error('小红书 Cookie 需要包含 a1 和 web_session，请先登录再复制。');
   return [...parts].map(([key,value])=>`${key}=${value}`).join('; ');
 }
 
@@ -59,23 +64,59 @@ export class NativeCookieProtection {
 }
 
 export class PlatformCredentials {
-  constructor(root,{protection=new NativeCookieProtection(),diagnostics}={}){
+  constructor(root,{protection=new NativeCookieProtection(),diagnostics,store}={}){
     // Persistent scope uses the existing user-data root, never a release
     // version or helper hash. Updates must reuse that root and this format.
     this.directory=path.join(root,'private-credentials');this.namespace=createHash('sha256').update(path.resolve(root)).digest('hex');
-    this.protection=protection;this.diagnostics=diagnostics;this.values=new Map();this.states=new Map();this.pending=Promise.resolve();this.available=false;
+    this.protection=protection;this.diagnostics=diagnostics;this.store=store;this.values=new Map();this.states=new Map();this.pending=Promise.resolve();this.available=false;
   }
   file(platform){if(!COOKIE_PLATFORMS.includes(platform))throw new Error('不支持的平台。');return path.join(this.directory,platform+'.sealed');}
-  snapshot(){return {available:this.available,storage:this.protection.label,platforms:Object.fromEntries(COOKIE_PLATFORMS.map(p=>[p,{configured:this.states.get(p)?.configured===true,loaded:this.values.has(p),error:this.states.get(p)?.error||''}]))};}
-  get(platform){return this.values.get(platform)||'';}
+  snapshot(){return {available:this.available,storage:this.protection.label,platforms:Object.fromEntries(COOKIE_PLATFORMS.map(p=>[p,{configured:this.states.get(p)?.configured===true,loaded:this.values.has(p),expired:this.isExpired(p),error:this.states.get(p)?.error||''}]))};}
+  isExpired(platform){return this.states.get(platform)?.expired===true;}
+  generation(platform){return this.states.get(platform)?.generation;}
+  get(platform){return this.isExpired(platform)?'':this.values.get(platform)||'';}
+  warnings(){
+    return COOKIE_PLATFORMS.flatMap(platform=>{
+      const state=this.states.get(platform);
+      return state?.expired&&!state.acknowledged?[{platform,generation:state.generation}]:[];
+    });
+  }
+  expire(platform,generation){
+    const state=this.states.get(platform);
+    if(!this.get(platform)||state.generation!==generation)return false;
+    state.expired=true;
+    try{this.store?.setting(healthKey(platform),{generation,acknowledged:false});}
+    catch{this.diagnostics?.record('Cookie 状态','未能保存失效状态，本次运行仍使用匿名连接。',{level:'警告'});}
+    return true;
+  }
+  acknowledge(platform,generation){
+    const state=this.states.get(platform);
+    if(!state?.expired||state.generation!==generation||state.acknowledged)return;
+    this.store?.setting(healthKey(platform),{generation,acknowledged:true});
+    state.acknowledged=true;
+  }
+  setLoaded(platform,value,sealed,restoring=false){
+    const generation=generationOf(sealed);
+    const previous=this.states.get(platform);
+    let saved;
+    if(restoring){
+      try{saved=this.store?.setting(healthKey(platform));}
+      catch{this.diagnostics?.record('Cookie 状态','暂时无法读取已保存的失效状态。',{level:'警告'});}
+      if(previous?.generation===generation&&previous.expired)saved={generation,acknowledged:previous.acknowledged};
+    }
+    const expired=saved?.generation===generation;
+    this.values.set(platform,value);
+    this.states.set(platform,{configured:true,generation,expired,acknowledged:expired&&saved.acknowledged===true});
+  }
   protect(value){this.diagnostics?.protectSecret(value);for(const raw of value.split(';')){const part=raw.trim();this.diagnostics?.protectSecret(part.slice(part.indexOf('=')+1));}}
   async restore(platform,operation='open'){
     const directory=await fs.lstat(this.directory),file=this.file(platform);
     if(!directory.isDirectory()||directory.isSymbolicLink())throw failure();
     const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>96*1024)throw failure();
-    const plain=await this.protection.run(operation,this.namespace,platform,await fs.readFile(file));let value;
+    const sealed=await fs.readFile(file);
+    const plain=await this.protection.run(operation,this.namespace,platform,sealed);let value;
     try{value=normalizePlatformCookie(platform,plain.toString('utf8'));}finally{plain.fill(0);}
-    this.protect(value);this.values.set(platform,value);this.states.set(platform,{configured:true});
+    this.protect(value);this.setLoaded(platform,value,sealed,true);
   }
   async initialize(){
     this.available=await this.protection.available();
@@ -100,7 +141,7 @@ export class PlatformCredentials {
     await fs.chmod(this.directory,0o700);const file=this.file(platform),temporary=path.join(this.directory,randomUUID()+'.tmp');
     try{const handle=await fs.open(temporary,'wx',0o600);try{await handle.writeFile(sealed);await handle.sync();}finally{await handle.close();}await fs.rename(temporary,file);}
     catch{await fs.rm(temporary,{force:true}).catch(()=>{});throw failure();}
-    this.values.set(platform,value);this.states.set(platform,{configured:true});this.available=true;return this.snapshot();
+    this.setLoaded(platform,value,sealed);this.available=true;return this.snapshot();
   });}
   remove(platform){return this.serial(async()=>{
     try{const directory=await fs.lstat(this.directory);if(!directory.isDirectory()||directory.isSymbolicLink())throw failure();}catch(error){if(error.code!=='ENOENT')throw error;}

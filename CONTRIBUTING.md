@@ -19,6 +19,8 @@ npm run check
 
 ## 录包机
 
+开始修改前阅读 [录包机开发规范](live-editor/docs/DEVELOPMENT.md)：录制连续性、旧素材升级兼容、平台协议与 Cookie、界面交互、测试证据及发布边界均以该文档作为检查入口。模块实现见 [录包机架构](live-editor/docs/ARCHITECTURE.md)。
+
 遵循 [live-editor/README.md](live-editor/README.md) 准备隔离运行环境，运行对应 Node / .NET 测试及构建。发布时使用现有白名单打包脚本，不压缩完整开发目录。
 
 ## 提交与发布

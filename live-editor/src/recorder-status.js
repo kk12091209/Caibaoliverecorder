@@ -1,5 +1,6 @@
 import { ui } from '../shared/ui-copy.js';
 import {roomAvailable} from './room-status.js';
+import {platformLabel} from '../shared/platforms.js';
 
 // Presentation only: consume the existing snapshots without probing services.
 export function recorderStatusDetails(recorder={},rooms=[],connected=true,anchors=[]){
@@ -8,15 +9,17 @@ export function recorderStatusDetails(recorder={},rooms=[],connected=true,anchor
   // Inactive followed users can remain in anchors after their capture room closes.
   for(const anchor of anchors){
     const platform=anchor.platform||'bilibili';
-    const roomId=platform==='douyin'?'douyin:'+(anchor.webRid||anchor.ownWebRid||''):anchor.roomId;
+    const roomId=platform!=='bilibili'?platform+':'+(anchor.webRid||anchor.ownWebRid||''):anchor.roomId;
     if(displayed.some(room=>(room.platform||'bilibili')===platform&&String(room.roomId)===String(roomId)))continue;
-    displayed.push({...anchor,platform,roomId:roomId==='douyin:'?anchor.key:roomId,recording:!!anchor.recording});
+    displayed.push({...anchor,platform,roomId:roomId===platform+':'?anchor.key:roomId,recording:!!anchor.recording});
   }
-  return ['bilibili','douyin'].map(platform=>{
+  const platforms=['bilibili','douyin'];
+  if('xiaohongshuOnline' in recorder||displayed.some(room=>room.platform==='xiaohongshu'))platforms.push('xiaohongshu');
+  return platforms.map(platform=>{
     const available=connected&&roomAvailable({platform},recorder);
     const platformRooms=displayed.filter(room=>(room.platform||'bilibili')===platform);
     return {
-      platform,label:platform==='douyin'?ui.common.抖音:ui.common.B站,
+      platform,label:platformLabel(platform),
       status:available?copy.就绪:copy.未连接,failed:!available,
       error:!connected?copy.状态更新中:platform==='bilibili'?recorder.error||'':'',
       idle:platformRooms.length?'':copy.待机未添加直播间,

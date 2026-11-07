@@ -54,7 +54,7 @@ onBeforeUnmount(()=>{if(previousFocus?.isConnected)previousFocus.focus();});
     <section ref="dialog" class="modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description" tabindex="-1">
       <button class="icon-button update-prompt-close" type="button" :aria-label="ui.updates.关闭更新提醒" :disabled="busy" @click="close"><X :size="17"/></button>
       <span class="update-eyebrow">{{ ui.common.软件更新 }}</span>
-      <h2 id="update-prompt-title">{{ ui.updates.发现新版本 }} {{ candidate.version }}</h2>
+      <h2 id="update-prompt-title">{{ ui.updates.发现新版本 }} {{ candidate.version }}<template v-if="candidate.prerelease"> · {{ ui.updates.测试版 }}</template></h2>
       <p id="update-prompt-description">{{ ui.updates.当前版本 }} {{ update.current?.version }} {{ ui.updates.新版本 }} {{ candidate.version }}</p>
       <div class="update-notes"><strong>{{ ui.updates.更新内容 }}</strong><ul v-if="candidate.notes?.length"><li v-for="(note,index) in candidate.notes" :key="index">{{ note }}</li></ul><p v-else>{{ ui.updates.优化使用体验与稳定性 }}</p></div>
       <p class="muted">{{ isDesktop?ui.updates.空闲时安装并重启录像和设置保留:ui.updates.浏览器下载安装说明 }}</p>
@@ -69,7 +69,7 @@ onBeforeUnmount(()=>{if(previousFocus?.isConnected)previousFocus.focus();});
 <style scoped>
 .update-prompt-backdrop{z-index:16;}
 .update-prompt{padding-top:30px;}
-.update-prompt-close{position:absolute;right:16px;top:16px;width:28px;height:28px;border:1px solid var(--line);border-radius:50%;background:rgba(255,255,255,.5);}
+.update-prompt-close{position:absolute;right:16px;top:16px;width:28px;height:28px;border:1px solid var(--line);border-radius:50%;background:var(--update-close-surface);}
 .update-eyebrow{display:block;color:var(--muted);font-size:12px;margin-bottom:10px;}
 .update-prompt h2{padding-right:30px;line-height:1.4;overflow-wrap:anywhere;}
 .update-notes{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0;margin:18px 0;max-height:36dvh;overflow-y:auto;font-size:13px;overflow-wrap:anywhere;}

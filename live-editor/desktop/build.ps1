@@ -4,15 +4,16 @@
     [switch]$NoRestore
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../scripts/release-version.ps1')
+$desktopExpectedVersion = Get-CaiboVersion -AppRoot (Split-Path $PSScriptRoot -Parent)
 $buildDirectory = Join-Path $PSScriptRoot 'build-slim'
-$buildArguments = @('build', (Join-Path $PSScriptRoot 'RecorderDesktop.csproj'), '-c', 'Release', '-o', $buildDirectory)
+$buildArguments = @('build', (Join-Path $PSScriptRoot 'RecorderDesktop.csproj'), '-c', 'Release', '-o', $buildDirectory, "-p:Version=$desktopExpectedVersion")
 if ($NoRestore) { $buildArguments += '--no-restore' }
 & $DotNet @buildArguments
 if ($LASTEXITCODE -ne 0) { throw '桌面程序构建失败。' }
-$desktopRelease = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot 'RecorderDesktop.csproj') -Raw -Encoding UTF8)
-$desktopExpectedVersion = [string]($desktopRelease.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
 $desktopMetadata = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $buildDirectory '录播机.exe'))
-if ($desktopMetadata.ProductVersion -ne $desktopExpectedVersion -or $desktopMetadata.FileVersion -ne ($desktopExpectedVersion + '.0') -or $desktopMetadata.ProductName -ne '菜播·录包机') { throw '桌面程序版本信息与发布源码不一致。' }
+$desktopNumericVersion = ($desktopExpectedVersion -split '-beta\.', 2)[0]
+if ($desktopMetadata.ProductVersion -ne $desktopExpectedVersion -or $desktopMetadata.FileVersion -ne ($desktopNumericVersion + '.0') -or $desktopMetadata.ProductName -ne '菜播·录包机') { throw '桌面程序版本信息与发布源码不一致。' }
 $packageDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $componentDirectory = Join-Path $packageDirectory '程序组件'
 $bridgeDirectory = Join-Path $componentDirectory 'runtime\desktop'

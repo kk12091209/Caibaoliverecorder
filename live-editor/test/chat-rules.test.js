@@ -113,10 +113,10 @@ test('设置接口持久保存1～50，重启保留，非法值不影响其他�
   app=await createApp(options);app.ingestor.stop();
   t.after(async()=>{await app.close();assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('caibao-rate-api-'));await fs.rm(root,{recursive:true,force:true});});
   const origin=()=>`http://127.0.0.1:${app.port}`,post=value=>fetch(origin()+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
-  app.recorder.api=async()=>assert.fail('Chat settings must not change core download logic');
+  app.recorder.bilibili.api=async()=>assert.fail('Chat settings must not change core download logic');
   assert.equal(chatRate(app.store),50);
-  for(const value of [1,20,50]){const response=await post({danmakuPerSecond:value});assert.equal(response.status,200);assert.equal((await response.json()).danmakuPerSecond,value);assert.equal(app.recorder.douyin.chat.rateLimit,value);}
+  for(const value of [1,20,50]){const response=await post({danmakuPerSecond:value});assert.equal(response.status,200);assert.equal((await response.json()).danmakuPerSecond,value);assert.equal(app.recorder.douyin.core.chat.rateLimit,value);}
   for(const value of [0,51,1.1,'20',null]){assert.equal((await post({danmakuPerSecond:value,closeAction:'exit'})).status,400);assert.equal(app.store.setting('window-close-action'),undefined);}
   await post({danmakuPerSecond:7});await app.close();app=await createApp(options);app.ingestor.stop();
-  assert.equal((await(await fetch(origin()+'/api/state')).json()).danmakuPerSecond,7);assert.equal(app.recorder.douyin.chat.rateLimit,7);
+  assert.equal((await(await fetch(origin()+'/api/state')).json()).danmakuPerSecond,7);assert.equal(app.recorder.douyin.core.chat.rateLimit,7);
 });

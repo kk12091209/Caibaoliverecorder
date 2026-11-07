@@ -35,7 +35,7 @@ test('移除结束本地跟踪接口，不改变已有素材或正在录制的�
   const app=await application(t);
   for(const room of [0,42]) {
     const session=app.store.createSession({room,status:'recording'});
-    const source=app.store.addSource(session.id,path.join(app.recorder.directory,`${room}.flv`),0,new Date().toISOString(),false);
+    const source=app.store.addSource(session.id,path.join(app.recorder.bilibili.directory,`${room}.flv`),0,new Date().toISOString(),false);
     assert.equal((await post(app,`/api/sessions/${session.id}/finish`,{})).status,404);
     assert.equal(app.store.session(session.id).status,'recording');
     assert.equal(app.store.sources(session.id)[0].closed,source.closed);
@@ -47,11 +47,11 @@ test('直播录制事件继续登记原片、结束录制，并验证事件来�
   const event=(id,type)=>({EventId:id,EventType:type,EventData:data});
   assert.equal((await post(app,'/internal/recorder-event',event('forbidden','FileOpening'))).status,403);
   assert.equal(app.store.sessions().length,0);
-  const route='/internal/recorder-event?token='+app.recorder.webhookSecret;
+  const route='/internal/recorder-event?token='+app.recorder.bilibili.webhookSecret;
   assert.equal((await post(app,route,event('opening','FileOpening'))).status,200);
   const session=app.store.sessions()[0];
   assert.equal(session.room,42);assert.equal(session.status,'recording');
-  assert.equal(app.store.sources(session.id)[0].path,path.join(app.recorder.directory,'live.flv'));
+  assert.equal(app.store.sources(session.id)[0].path,path.join(app.recorder.bilibili.directory,'live.flv'));
   assert.equal((await post(app,route,event('closed','FileClosed'))).status,200);
   assert.equal(app.store.sources(session.id)[0].closed,1);
   assert.equal((await post(app,route,event('ended','StreamEnded'))).status,200);

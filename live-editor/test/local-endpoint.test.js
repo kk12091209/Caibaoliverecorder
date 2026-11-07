@@ -12,7 +12,7 @@ import { availableLocalPort,findOwnedCore,stopOwnedCore,browserAccessiblePort,li
 async function coreFailureDetails(app){
   await app.diagnostics.tick();
   const log=await fs.readFile(path.join(app.root,'logs',app.diagnostics.day+'.txt'),'utf8');
-  return `${app.recorder.error}\n${log.slice(-16000)}`;
+  return `${app.recorder.bilibili.error}\n${log.slice(-16000)}`;
 }
 
 test('核心停止器拒绝不属于本份原件目录的 PID，不碰端口上的其他程序',async()=>{
@@ -57,22 +57,22 @@ test('真实录制核心自动启动、编辑器重启复用，完整退出清�
     await fs.rm(root,{recursive:true,force:true});
   });
   async function until(check,message){const end=Date.now()+35000;while(Date.now()<end){if(await check())return;await delay(50);}assert.fail(message+'\n'+await coreFailureDetails(app));}
-  app=await createApp(options);await until(()=>app.recorder.online,'core did not become ready: '+app.recorder.error);
-  owned=app.recorder.ownedEndpoint;assert.ok(owned.pid>0);assert.notEqual(app.port,owned.port);
+  app=await createApp(options);await until(()=>app.recorder.bilibili.online,'core did not become ready: '+app.recorder.bilibili.error);
+  owned=app.recorder.bilibili.ownedEndpoint;assert.ok(owned.pid>0);assert.notEqual(app.port,owned.port);
   assert.deepEqual((await findOwnedCore(owned)).pid,owned.pid);
   async function assertWebhookConfiguration(){
     // Public config intentionally omits token-bearing callback URLs. Verify
     // the persisted fixture privately, including rebinding after UI restart.
-    const config=JSON.stringify(await app.recorder.api('config/global'));
+    const config=JSON.stringify(await app.recorder.bilibili.api('config/global'));
     assert.doesNotMatch(config,/webhookurls|optionalcookie/i);
-    const saved=await fs.readFile(path.join(app.recorder.directory,'config.json'),'utf8');
+    const saved=await fs.readFile(path.join(app.recorder.bilibili.directory,'config.json'),'utf8');
     assert.ok(saved.includes('127.0.0.1:'+app.port));
-    assert.ok(saved.includes(app.recorder.webhookSecret));
+    assert.ok(saved.includes(app.recorder.bilibili.webhookSecret));
   }
   await assertWebhookConfiguration();
   const oldPort=app.port;await app.close();assert.equal(alive(owned.pid),true);
-  app=await createApp(options);await until(()=>app.recorder.online,'core reconnect failed');
-  assert.equal(app.recorder.ownedEndpoint.pid,owned.pid);assert.equal(app.recorder.process,null);
+  app=await createApp(options);await until(()=>app.recorder.bilibili.online,'core reconnect failed');
+  assert.equal(app.recorder.bilibili.ownedEndpoint.pid,owned.pid);assert.equal(app.recorder.bilibili.process,null);
   assert.notEqual(app.port,oldPort);
   await assertWebhookConfiguration();
   const started=performance.now();
@@ -97,9 +97,9 @@ test('global:null 配置恢复后真实核心可连接，再次冷启动不重�
   for(let attempt=0;attempt<2;attempt++){
     app=await createApp(options);
     const deadline=Date.now()+20000;
-    while(!app.recorder.online&&Date.now()<deadline)await delay(50);
-    assert.equal(app.recorder.online,true,app.recorder.online?'':await coreFailureDetails(app));
-    assert.deepEqual(await app.recorder.api('room'),[]);
+    while(!app.recorder.bilibili.online&&Date.now()<deadline)await delay(50);
+    assert.equal(app.recorder.bilibili.online,true,app.recorder.bilibili.online?'':await coreFailureDetails(app));
+    assert.deepEqual(await app.recorder.bilibili.api('room'),[]);
     const current=await fs.readdir(path.join(root,'recovery'));
     if(attempt===0){
       backups=current;assert.equal(backups.length,1);
@@ -108,7 +108,7 @@ test('global:null 配置恢复后真实核心可连接，再次冷启动不重�
     }else{
       assert.deepEqual(current,backups);assert.ok(!app.store.recovery.coreConfigRecovered);
     }
-    const pid=app.recorder.ownedEndpoint.pid;
+    const pid=app.recorder.bilibili.ownedEndpoint.pid;
     const result=await app.desktopExit.request(false);assert.equal(result.quitAccepted,true);
     await app.desktopExit.completion;await app.close();assert.equal(alive(pid),false);
     const log=await fs.readFile(path.join(root,'logs',app.diagnostics.day+'.txt'),'utf8');

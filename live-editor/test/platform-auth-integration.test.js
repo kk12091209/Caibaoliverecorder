@@ -4,9 +4,9 @@ import {biliFixture,biliReplacement,douyinFixture} from './credential-fixtures.j
 test('platform account credentials stay isolated and clearing Douyin restores anonymous bootstrap',async()=>{
  let douyinCookie=douyinFixture;
  const calls=[],credentialReads=[],credentials={get:p=>{credentialReads.push(p);return p==='bilibili'?biliFixture:douyinCookie;}};
- const bili=new BilibiliRoomResolver({credentials,request:async(url,options)=>{calls.push({url,options});return new Response('{"code":0,"data":{"uid":123}}');}});
+ const bili=new BilibiliRoomResolver({credentials,request:async(url,options)=>{calls.push({url,options});return Response.json({code:0,data:{isLogin:true,mid:123}});}});
  assert.equal(await bili.verifyCookie(),true);
- assert.equal(new URL(calls[0].url).hostname,'api.live.bilibili.com');assert.equal(calls[0].options.redirect,'error');assert.equal(calls[0].options.headers.Cookie,biliFixture);
+ assert.equal(calls[0].url,'https://api.bilibili.com/x/web-interface/nav');assert.equal(calls[0].options.redirect,'error');assert.equal(calls[0].options.headers.Cookie,biliFixture);
  credentialReads.length=0;
  const douyin=new DouyinResolver({credentials,request:async(url,options)=>{calls.push({url,options});return new Response('',{headers:{'Set-Cookie':'ttwid=anonymous-visitor; Path=/'}});}});
  const signedIn=await douyin.cookie();assert.equal(signedIn.cookie,douyinFixture);assert.equal(calls.length,1);

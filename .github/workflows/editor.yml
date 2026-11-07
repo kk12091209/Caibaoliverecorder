@@ -41,6 +41,8 @@ jobs:
           $env:FFPROBE_PATH = Join-Path $ffmpegRoot 'ffprobe.exe'
           node --test test/*.test.js scripts/dev.test.js
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { throw 'Static checks failed.' }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
   macos-test:
@@ -83,6 +85,7 @@ jobs:
           npm ci
           node --test --test-concurrency=2 test/*.test.js scripts/dev.test.js
           CAIBO_CORE_SMOKE=1 node --test test/local-endpoint.test.js
+          npm run lint
           npm run build
           cd ..
           dotnet test test/BililiveRecorder.Core.UnitTests/BililiveRecorder.Core.UnitTests.csproj -c Release -f net8.0
