@@ -69,14 +69,20 @@ export class DouyinUserDiscovery{
     return {uid,secUid,name:String(user.nickname||'抖音用户').slice(0,100),profile:'https://www.douyin.com/user/'+secUid};
   }
   async observe(uid,{signal,ownWebRid}={}){
+    let ownOffline;
     if(decimal(ownWebRid)){
       try{
         const metadata=await this.resolver.room(ownWebRid,{signal});
         if(metadata.ownerId===uid&&metadata.streaming&&metadata.stream)return {state:'self-live',metadata};
+        if(metadata.ownerId===uid&&metadata.webRid===ownWebRid&&metadata.streaming===false)
+          ownOffline={webRid:ownWebRid,roomId:metadata.roomId};
       }catch(error){signal?.throwIfAborted();}
     }
     const body=await this.json('https://live.douyin.com/webcast/distribution/check_user_live_status/',{user_ids:uid,aid:'6383',distribution_scenes:'254',channel:'channel_pc_web',device_platform:'webapp'},signal);
-    const candidate=selectUserRoom(body,uid);if(candidate.state!=='candidate')return candidate;
+    const candidate=selectUserRoom(body,uid);
+    // A verified offline home room says nothing about guest appearances.
+    if(candidate.state==='unknown'&&ownOffline)return {...candidate,ownOffline};
+    if(candidate.state!=='candidate')return candidate;
     const link=await resolveDouyinLink('https://webcast.amemv.com/douyin/webcast/reflow/'+candidate.roomId,{request:this.request,signal});
     const metadata=await this.resolver.room(link.webRid,{signal});
     if(metadata.roomId!==candidate.roomId)return {state:'unknown',reason:'直播间已发生变化，等待重新核验'};

@@ -9,6 +9,7 @@ defineEmits(['action','remove']);
 const rawStatus=anchor=>anchor.legacy?roomStatus(anchor):anchor.state||'';
 function status(anchor){
   const value=rawStatus(anchor);
+  if(anchor.platform==='douyin'&&!anchor.legacy&&anchor.enabled&&!anchor.recording&&!anchor.webRid)return ui.anchors.监控中;
   if(/正在恢复|重试|正在重连/.test(value))return ui.anchors.正在恢复录制;
   if(/上限/.test(value))return ui.anchors.已达时长上限;
   if(/待确认|疑似|失联/.test(value))return anchor.recording?ui.anchors.录制中待确认:ui.anchors.等待恢复;

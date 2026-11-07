@@ -83,3 +83,18 @@ test('known own room is checked by exact owner UID; offline or another owner can
  metadata={...metadata,ownerId:'999'};assert.equal((await discovery.observe(uid,{ownWebRid:'123'})).state,'offline-observation');assert.equal(checks,1);
  metadata={...metadata,ownerId:uid,streaming:false};assert.equal((await discovery.observe(uid,{ownWebRid:'123'})).state,'offline-observation');assert.equal(checks,2);
 });
+
+test('missing user status preserves verified own-room offline evidence only',async()=>{
+ const ownWebRid='123';
+ let metadata={webRid:ownWebRid,roomId,ownerId:uid,streaming:false};
+ const discovery=new DouyinUserDiscovery({resolver:{room:async()=>metadata}});
+ discovery.json=async()=>response([]);
+ assert.deepEqual(await discovery.observe(uid,{ownWebRid}),{
+  state:'unknown',reason:'状态接口未返回目标用户',ownOffline:{webRid:ownWebRid,roomId},
+ });
+ for(const changed of [{ownerId:'999'},{webRid:'456'},{streaming:true}]){
+  const original=metadata;metadata={...metadata,...changed};
+  assert.equal((await discovery.observe(uid,{ownWebRid})).ownOffline,undefined);
+  metadata=original;
+ }
+});

@@ -57,6 +57,9 @@ export class DouyinUserFollow{
     try{
       const result=verified||await this.discovery.observe(target.uid,{ownWebRid:target.ownWebRid,signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});if(!current())return;
       target.failures=0;target.nextAt=this.now()+(target.active?this.pollMs:30000);this.attachMaterial(target);
+      const ownOffline=result.ownOffline,active=target.active;
+      const ownBroadcastEnded=ownOffline&&active?.kind==='self'&&ownOffline.webRid===active.webRid&&
+        (ownOffline.roomId===''||ownOffline.roomId===active.roomId);
       if(result.state==='guest-confirmed'||result.state==='self-live'&&result.metadata){
         const m=result.metadata,kind=result.state==='self-live'?'self':'guest';if(!decimal(m?.webRid)||!decimal(m?.roomId)||!m.streaming||!m.stream||(m.ownerId===target.uid)!==(kind==='self'))throw Error('invalid verified room');
         if(kind==='self'&&(target.ownWebRid!==m.webRid||target.name!==m.name)){target.ownWebRid=m.webRid;target.name=m.name;this.save();}
@@ -71,11 +74,23 @@ export class DouyinUserFollow{
           this.store.run('INSERT INTO douyin_follow_intervals(id,uid,name,web_rid,room_id,host,discovered,kind) VALUES(?,?,?,?,?,?,?,?)',id,target.uid,target.name,m.webRid,m.roomId,m.name,this.now(),kind);
         }
         this.attachMaterial(target);target.state=kind==='self'?'本人直播中':'连麦跟录中';target.nextAt=this.now()+this.pollMs;
-      }else if(result.state==='offline-observation'||result.state==='self-live'){
+      }else if(result.state==='offline-observation'||result.state==='self-live'||ownBroadcastEnded){
         target.exitCount=(target.exitCount||0)+1;target.exitSince??=this.now();
-        target.state=result.state==='self-live'?'本人开播，等待可录制画面':'监控中，等待开播或连麦';
-        if(target.active){target.state='疑似结束，等待再次确认';target.nextAt=this.now()+this.pollMs;if(target.exitCount>=2&&this.now()-target.exitSince>=this.exitMs)await this.finish(target,result.state==='self-live'?'转为本人开播':target.active.kind==='self'?'确认直播结束':'确认退出连麦');}
-      }else{target.exitCount=0;target.exitSince=null;target.state='待确认：'+String(result.reason||'状态暂时不可用').slice(0,100);}
+        const monitoring=result.state==='self-live'?'本人开播，等待可录制画面':'监控中，等待开播或连麦';
+        target.state=monitoring;
+        if(active){
+          target.state='疑似结束，等待再次确认';
+          target.nextAt=this.now()+this.pollMs;
+          if(target.exitCount>=2&&this.now()-target.exitSince>=this.exitMs){
+            await this.finish(target,result.state==='self-live'?'转为本人开播':active.kind==='self'?'确认直播结束':'确认退出连麦');
+            if(current())target.state=monitoring;
+          }
+        }
+      }else{
+        target.exitCount=0;target.exitSince=null;
+        target.state=ownOffline&&!active?'待确认：本人直播间未开播，连麦状态暂无法确认':
+          '待确认：'+String(result.reason||'状态暂时不可用').slice(0,100);
+      }
     }catch{
       if(!current())return;target.exitCount=0;target.exitSince=null;target.failures=Math.min(4,target.failures+1);target.nextAt=this.now()+Math.min(120000,this.pollMs*2**target.failures);target.state='待确认：查询失败，稍后重试';
     }finally{

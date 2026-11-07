@@ -6,6 +6,7 @@ import path from 'node:path';
 import {Store} from '../server/store.js';
 import {DouyinRecorder} from '../server/douyin-recorder.js';
 import {DouyinUserFollow} from '../server/douyin-user-follow.js';
+import {hasRecording,hasIndexing} from '../server/app-activity.js';
 import {FLV_HEADER,tags} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -90,4 +91,44 @@ test('own broadcast is not stopped by the guest-only four-hour limit and room da
  await f.poll();await until(()=>f.recorder.rooms[0]?.recording);await f.poll(4*60*60*1000);assert.equal(f.following.snapshot[0].enabled,true);
  assert.equal(f.store.setting('douyin-follow-users')[0].ownWebRid,'123');
  f.replies.set(uid,{state:'offline-observation'});await f.poll();assert.equal(f.recorder.rooms[0].recording,true);await f.poll();assert.equal(f.recorder.rooms.length,0);assert.equal(f.following.snapshot[0].history[0].reason,'确认直播结束');
+});
+
+test('confirmed own-room offline releases a disconnected self capture for indexing and idle preparation',async t=>{
+ const f=await fixture(t),uid=await f.enable('111');
+ const metadata={...guest().metadata,ownerId:uid,name:'主播A'};
+ f.replies.set(uid,{state:'self-live',metadata});
+ await f.poll();
+ const room=f.recorder.entries.get(metadata.webRid);
+ await until(()=>room.progress?.mediaMs>=1000);
+ const id=room.session;
+ room.abort.abort();
+ await room.active;
+ assert.equal(f.store.session(id).status,'waiting');
+ assert.equal(hasRecording(f.store,f.recorder),true);
+
+ const unknown={state:'unknown',reason:'状态接口未返回目标用户'};
+ f.replies.set(uid,unknown);await f.poll();
+ assert.equal(f.store.session(id).status,'waiting');
+ f.replies.set(uid,{...unknown,ownOffline:{webRid:metadata.webRid,roomId:metadata.roomId}});
+ await f.poll();
+ assert.equal(f.store.session(id).status,'waiting');
+ await f.poll();
+ assert.equal(f.store.session(id).status,'finishing');
+ assert.equal(hasRecording(f.store,f.recorder),false);
+ assert.equal(hasIndexing(f.store),true);
+ assert.equal(f.following.snapshot[0].state,'监控中，等待开播或连麦');
+ assert.equal(f.following.snapshot[0].enabled,true);
+ assert.equal(f.following.snapshot[0].history[0].reason,'确认直播结束');
+});
+
+test('own-room offline cannot end a verified guest capture or make an idle monitor busy',async t=>{
+ const f=await fixture(t),uid=await f.enable('111');
+ const unknown={state:'unknown',ownOffline:{webRid:'456',roomId:''}};
+ f.replies.set(uid,unknown);await f.poll();
+ assert.equal(hasRecording(f.store,f.recorder),false);
+ assert.match(f.following.snapshot[0].state,/连麦状态暂无法确认/);
+ f.replies.set(uid,guest());await f.poll();await until(()=>f.recorder.rooms[0]?.recording);
+ f.replies.set(uid,unknown);await f.poll();await f.poll();
+ assert.equal(f.following.snapshot[0].kind,'guest');
+ assert.equal(f.recorder.rooms[0].recording,true);
 });
