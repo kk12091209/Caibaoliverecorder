@@ -89,7 +89,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Bundled Node/SQLite check failed.' }
 & (Join-Path $componentRoot 'runtime\ffmpeg\ffmpeg.exe') -v error -f lavfi -i 'color=size=64x64:rate=60:duration=0.1' -c:v libx264 -f null -
 if ($LASTEXITCODE -ne 0) { throw 'Bundled FFmpeg encode check failed.' }
 $stylePreviewCheck = 'not-applicable-to-legacy-baseline'
-if (([version]$manifest.version) -ge [version]'0.3.0') {
+$baseVersion = $manifest.version -creplace '-beta\.[1-9]\d{0,4}$', ''
+if (([version]$baseVersion) -ge [version]'0.3.0') {
     & (Join-Path $componentRoot 'runtime\node\node.exe') (Join-Path $PSScriptRoot 'verify-packaged-style-preview.js') $componentRoot
     if ($LASTEXITCODE -ne 0) { throw 'Bundled danmaku style preview check failed.' }
     $stylePreviewCheck = 'passed'
