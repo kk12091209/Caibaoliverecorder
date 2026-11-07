@@ -5,7 +5,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 OUTPUT="${1:?Usage: package-macos-dmg.sh /absolute/build/output}"
 [[ "$OUTPUT" == /* ]] || { echo '请使用绝对输出路径。' >&2; exit 1; }
 APP="$OUTPUT/菜播·录包机.app"
-VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+PLIST="$APP/Contents/Info.plist"
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CaiboReleaseVersion' "$PLIST" 2>/dev/null ||
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")
 DMG="$OUTPUT/Caibo-$VERSION-macos-arm64.dmg"
 [[ ! -e "$DMG" ]] || { echo "文件已存在：$DMG" >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
