@@ -221,7 +221,8 @@ try {
   if (betaTag) {
     try {
       const previous = readSignedManifest(JSON.parse(await readFile(betaPath, 'utf8')))
-      if (compareBetaVersions(betaTag, 'v' + previous.version) < 0) throw new Error('拒绝将测试镜像回退到旧版')
+      const previousTag = previous.channel === 'beta' ? `v${previous.version}-beta.${previous.revision}` : 'v' + previous.version
+      if (compareBetaVersions(betaTag, previousTag) < 0) throw new Error('拒绝将测试镜像回退到旧版')
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }

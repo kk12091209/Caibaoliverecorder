@@ -28,11 +28,11 @@ node live-editor/scripts/build-cookie-helper.mjs "$RESOURCES/runtime/credentials
 cp -R live-editor/server live-editor/shared live-editor/dist "$RESOURCES/live-editor/"
 cp live-editor/package.json "$RESOURCES/live-editor/"
 # Installed 0.1.6 Mac helpers require this field before replacing an app.
-# It is a fixed compatibility value, not a release counter or displayed version.
 python3 - "$RESOURCES/live-editor/package.json" <<'PY'
 import json,sys
 from pathlib import Path
-file=Path(sys.argv[1]);info=json.loads(file.read_text());info['buildRevision']=1
+file=Path(sys.argv[1]);info=json.loads(file.read_text());info.setdefault('buildRevision',1)
+if type(info['buildRevision']) is not int or not 1<=info['buildRevision']<=99999: raise SystemExit('Invalid build revision')
 file.write_text(json.dumps(info,ensure_ascii=False,indent=2)+'\n')
 PY
 cp "$CAIBO_MAC_NODE_ROOT/bin/node" "$RESOURCES/runtime/node/"
@@ -92,7 +92,8 @@ import sys,hashlib,json
 from pathlib import Path
 app=Path(sys.argv[1]);out=Path(sys.argv[2])
 files=[{'path':str(p.relative_to(app)),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(app.rglob('*')) if p.is_file()]
-(out/'manifest.json').write_text(json.dumps({'version':json.loads((app/'Contents/Resources/live-editor/package.json').read_text())['version'],'architecture':'arm64','minimumMacOS':'14.0','signing':'ad-hoc' if sys.argv[3]=='-' else 'Developer ID','notarized':False,'files':files},ensure_ascii=False,indent=2)+'\n')
+info=json.loads((app/'Contents/Resources/live-editor/package.json').read_text())
+(out/'manifest.json').write_text(json.dumps({'version':info['version'],'buildRevision':info['buildRevision'],'architecture':'arm64','minimumMacOS':'14.0','signing':'ad-hoc' if sys.argv[3]=='-' else 'Developer ID','notarized':False,'files':files},ensure_ascii=False,indent=2)+'\n')
 PY
 cp live-editor/desktop-macos/使用说明.txt "$OUTPUT/使用说明.txt"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUTPUT/Caibo-$VERSION-macos-arm64.zip"

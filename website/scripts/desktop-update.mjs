@@ -3,9 +3,17 @@ import { betaVersionOf, versionOf } from './release-core.mjs'
 
 export function verifyDesktopUpdate(envelope, plan, publicKey) {
   const manifest = readSignedManifest(envelope, publicKey)
+  const expectedVersion = (plan.prerelease ? betaVersionOf : versionOf)(plan.publicRelease.version)
+  const publishedVersion = manifest.channel === 'beta' ? `${manifest.version}-beta.${manifest.revision}` : manifest.version
+  const validBuild = manifest.buildId === undefined
+    ? manifest.channel === undefined
+    : Number.isSafeInteger(manifest.revision) && manifest.revision >= 1 && manifest.revision <= 99999 &&
+      !manifest.version?.includes('-beta.') && manifest.buildId === `${manifest.version}-r${manifest.revision}` &&
+      manifest.channel === (plan.prerelease ? 'beta' : 'stable')
   if (
     manifest.schema !== 1 ||
-    manifest.version !== (plan.prerelease ? betaVersionOf : versionOf)(plan.publicRelease.version) ||
+    !validBuild ||
+    publishedVersion !== expectedVersion ||
     !/^[a-f0-9]{40}$/.test(manifest.sourceRevision) ||
     manifest.sourceRevision !== plan.sourceRevision ||
     !Array.isArray(manifest.notes) ||

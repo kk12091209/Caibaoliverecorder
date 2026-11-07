@@ -2,6 +2,11 @@ name: Windows release package
 on:
   workflow_dispatch:
     inputs:
+      release_channel:
+        description: Publish this build as a test candidate or a stable release
+        type: choice
+        options: [stable, beta]
+        default: stable
       publish_draft:
         description: Upload verified files to a new draft GitHub Release
         type: boolean
@@ -17,6 +22,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     env:
       DOTNET_NOLOGO: 1
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -35,9 +41,18 @@ jobs:
       - name: Read application version
         id: version
         shell: pwsh
+        env:
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
         run: |
-          $version = (Get-Content live-editor/package.json -Raw | ConvertFrom-Json).version
+          $package = Get-Content live-editor/package.json -Raw | ConvertFrom-Json
+          $version = $package.version
+          $tag = "v$version"
+          if ($env:RELEASE_CHANNEL -eq 'beta' -and $version -notmatch '-beta\.') {
+            $tag += "-beta.$($package.buildRevision)"
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "CAIBO_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
       - name: Verify partial chat writes roll back on Windows
         shell: pwsh
         run: node --test --test-name-pattern 'a partial XML batch' live-editor/test/xiaohongshu-web.test.js
@@ -109,6 +124,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -132,6 +148,6 @@ jobs:
           print('Verified source revision, successful checks and all release hashes.')
           PYVERIFY
           channel_flags=()
-          if [[ "$RELEASE_VERSION" =~ -beta\.[1-9][0-9]*$ ]]; then channel_flags+=(--prerelease); fi
-          gh release create "v$RELEASE_VERSION" --draft --latest=false "${channel_flags[@]}" --target "$GITHUB_SHA" --title "v$RELEASE_VERSION — Windows / Mac 更新" --notes-file "live-editor/docs/RELEASE-$RELEASE_VERSION.md"
-          gh release upload "v$RELEASE_VERSION" release-files/*
+          if [[ "$RELEASE_TAG" =~ -beta\.[1-9][0-9]*$ ]]; then channel_flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" --draft --latest=false "${channel_flags[@]}" --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes-file "live-editor/docs/RELEASE-${RELEASE_TAG#v}.md"
+          gh release upload "$RELEASE_TAG" release-files/*

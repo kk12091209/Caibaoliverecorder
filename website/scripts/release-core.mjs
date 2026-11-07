@@ -75,10 +75,13 @@ export function planRecorderBeta(product, release, baseUrl, tag) {
     throw new Error('测试镜像仅接受已公开的录包机预发布版')
   const files = product.files.filter((file) => ['win-setup', 'mac-dmg'].includes(file.id))
   if (files.length !== 2) throw new Error('测试镜像需要两端安装包')
-  return planReleaseAssets({ ...product, slug: 'caibo-recorder/beta', files, sources: [] }, release, baseUrl, version, null, true)
+  const baseVersion = version.split('-beta.')[0]
+  const assetVersion = files.every(file => release.assets.some(asset => asset.name === file.name.replaceAll('{version}', baseVersion)))
+    ? baseVersion : version
+  return planReleaseAssets({ ...product, slug: 'caibo-recorder/beta', files, sources: [] }, release, baseUrl, version, null, true, assetVersion)
 }
 
-function planReleaseAssets(product, release, baseUrl, version, previous, prerelease = false) {
+function planReleaseAssets(product, release, baseUrl, version, previous, prerelease = false, assetVersion = version) {
   const base = new URL(baseUrl)
   if (
     base.protocol !== 'https:' ||
@@ -91,7 +94,7 @@ function planReleaseAssets(product, release, baseUrl, version, previous, prerele
     throw new Error('下载地址必须是 HTTPS 域名')
   if (!Number.isFinite(Date.parse(release.published_at))) throw new Error('发布时间无效')
   const pick = (spec) => {
-    const name = spec.name.replaceAll('{version}', version)
+    const name = spec.name.replaceAll('{version}', assetVersion)
     const matches = release.assets.filter((asset) => asset.name === name)
     if (matches.length !== 1) throw new Error(`缺少或重复文件：${name}`)
     const asset = matches[0]

@@ -34,7 +34,8 @@ function changeBeta(event){
 
 <template>
   <section class="settings-group settings-group-static update-settings" aria-labelledby="settings-updates-title">
-    <div class="update-heading"><h3 id="settings-updates-title" tabindex="-1">{{ ui.updates.版本更新 }}</h3><button v-if="update.current?.version" type="button" class="text-button update-version" @click="revealBeta">{{ ui.updates.当前 }} {{ update.current.version }}<template v-if="update.current.version.includes('-beta.')"> · {{ ui.updates.测试版 }}</template></button></div>
+    <div class="update-heading"><h3 id="settings-updates-title" tabindex="-1">{{ ui.updates.版本更新 }}</h3><button v-if="update.current?.version" type="button" class="text-button update-version" @click="revealBeta">{{ ui.updates.当前 }} {{ update.current.version }}<template v-if="update.current.channel==='beta'||update.current.version.includes('-beta.')"> · {{ ui.updates.测试版 }}</template><template v-else-if="update.current.channel==='stable'"> · {{ ui.updates.正式版 }}</template></button></div>
+    <p v-if="update.current?.buildId" class="muted">{{ ui.updates.构建编号 }} {{ update.current.buildId }}</p>
     <label class="checkbox"><input type="checkbox" :checked="update.enabled!==false" :disabled="busy" @change="action('settings',{enabled:$event.target.checked})"/>{{ ui.updates.自动检查更新并提醒 }}</label>
     <p class="muted">{{ ui.updates.发现新版本时提醒不中断录制或导出 }}</p>
     <label v-if="betaVisible||update.betaEnabled" class="checkbox beta-update-toggle"><input type="checkbox" :checked="update.betaEnabled===true" :disabled="busy||update.status==='installing'||(update.status==='downloading'&&!update.candidate?.prerelease)" @change="changeBeta"/>{{ ui.updates.接收测试版本 }}</label>

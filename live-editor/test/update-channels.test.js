@@ -17,7 +17,7 @@ const signed = manifest => {
   const data = Buffer.from(JSON.stringify(manifest));
   return { schema: 1, keyId: UPDATE_KEY_ID, data: data.toString('base64'), signature: sign(null, data, keys.privateKey).toString('base64') };
 };
-async function fixture(t, platform = 'win32-x64') {
+async function fixture(t, platform = 'win32-x64', installed = current) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'caibo-channels-'));
   const store = new Store(root), calls = [], modes = {};
   const payloads = new Map(['win32-x64', 'darwin-arm64'].map(id => [packageName('0.2.3', id), Buffer.from(`verified ${id} package`)]));
@@ -48,7 +48,7 @@ async function fixture(t, platform = 'win32-x64') {
     throw new Error('Unexpected request: ' + url);
   };
   let now = 200000;
-  const updates = new Updates(store, { current, platform, fetcher, mirrorPublicKey: keys.publicKey, mirrorTimeoutMs: 100, idleMs: 100, now: () => now });
+  const updates = new Updates(store, { current:installed, platform, fetcher, mirrorPublicKey: keys.publicKey, mirrorTimeoutMs: 100, idleMs: 100, now: () => now });
   const keepAlive = setInterval(() => {}, 1000);
   t.after(async () => { clearInterval(keepAlive); await updates.close(); store.close(); await fs.rm(root, { recursive: true, force: true }); });
   return { updates, calls, modes, manifest, payloads, advance: ms => { now += ms; } };
@@ -65,6 +65,76 @@ test('两端优先使用签名自有源，下载通过固定 COS 跳转，不联
     assert.equal(f.updates.snapshot().autoInstall, true);
     assert.equal(f.updates.snapshot().candidate.fallbackUrl, undefined);
   }
+});
+
+test('同一构建转正只刷新签名清单，两端都不下载或安装', async t => {
+  for (const platform of ['win32-x64', 'darwin-arm64']) {
+    const installed = { version:'0.2.3',revision:2,buildId:'0.2.3-r2' };
+    const f = await fixture(t,platform,installed);
+    const preview = { ...f.manifest,...installed,channel:'beta' };
+    let stable = { ...f.manifest,version:'0.2.2',platforms:Object.fromEntries(
+      Object.entries(f.manifest.platforms).map(([id,item])=>[id,{...item,name:packageName('0.2.2',id)}]),
+    ) };
+    f.updates.fetcher = async url => {
+      f.calls.push(url);
+      assert.ok([CAIBAO_UPDATE_URL,CAIBAO_BETA_UPDATE_URL].includes(url));
+      return Response.json(signed(url===CAIBAO_UPDATE_URL?stable:preview));
+    };
+    await f.updates.check();
+    assert.deepEqual(f.calls,[CAIBAO_UPDATE_URL]);
+    const beta = await f.updates.setBetaEnabled(true);
+    assert.equal(beta.current.channel,'beta');
+    assert.equal(beta.candidate,null);
+    const stableBuild = { ...preview,channel:'stable' };
+    stable = structuredClone(stableBuild);
+    stable.platforms[platform].sha256='0'.repeat(64);
+    f.advance(61000);
+    const conflict=await f.updates.check();
+    assert.equal(conflict.status,'error');
+    assert.equal(conflict.current.channel,'beta');
+    stable=stableBuild;
+    f.advance(61000);
+    const promoted=await f.updates.check();
+    assert.equal(promoted.current.channel,'stable');
+    assert.equal(promoted.current.buildId,installed.buildId);
+    assert.equal(promoted.candidate,null);
+    assert.equal(promoted.hasCache,false);
+    assert.equal(promoted.betaEnabled,true);
+    const restarted=new Updates(f.updates.store,{current:installed,platform});
+    assert.equal(restarted.snapshot().current.channel,'stable');
+    await restarted.close();
+  }
+});
+
+test('新构建走正常下载，正式版查成功时独立显示测试通道失败', async t => {
+  const installed={version:'0.2.3',revision:1,buildId:'0.2.3-r1'};
+  const f=await fixture(t,'win32-x64',installed);
+  const stable={...f.manifest,...installed,channel:'stable'};
+  const preview={...stable,revision:2,buildId:'0.2.3-r2',channel:'beta'};
+  let betaAvailable=false;
+  const fetcher=f.updates.fetcher;
+  f.updates.fetcher=async (url,options)=>{
+    if(url===CAIBAO_UPDATE_URL)return Response.json(signed(stable));
+    if(url===CAIBAO_BETA_UPDATE_URL){
+      if(!betaAvailable)throw Error('mirror unavailable');
+      return Response.json(signed(preview));
+    }
+    if(url.startsWith('https://api.github.com/'))return new Response(null,{status:503});
+    return fetcher(url,options);
+  };
+  const checked=await f.updates.setBetaEnabled(true);
+  assert.equal(checked.status,'current');
+  assert.equal(checked.current.channel,'stable');
+  assert.match(checked.checkNotice,/暂时无法检查测试版本/);
+  betaAvailable=true;
+  f.advance(61000);
+  await download(f);
+  assert.equal(f.updates.candidate.key,'0.2.3-r2');
+  assert.equal(f.updates.status,'ready');
+  assert.ok(f.calls.some(url=>url.includes('/beta/0.2.3-beta.2/BiliLiveEditor-0.2.3-win-x64-setup.exe')));
+  await f.updates.setBetaEnabled(false);
+  assert.equal(f.updates.snapshot().autoInstall,false);
+  assert.equal(f.updates.candidate,null);
 });
 test('自有源断网或超时时通过有同等签名校验的 GitHub 检查更新', async t => {
   for (const mode of ['offline', 'timeout']) {

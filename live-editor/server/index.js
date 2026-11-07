@@ -33,7 +33,7 @@ import { MultiPlatformRecorder } from './multi-platform-recorder.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
-import { Updates } from './updates.js';
+import { Updates, buildIdentity } from './updates.js';
 import { AutoUpdate } from './auto-update.js';
 import { DailyDiagnostics } from './diagnostics.js';
 import { listenLocal } from './local-endpoint.js';
@@ -110,7 +110,9 @@ async function createManagedApp(options,runtime) {
   function validateCloseAction(value){if(!['ask','exit','background'].includes(value))throw new Error('请选择有效的关闭窗口方式。');}
   const activity=()=>appActivity({store,media,recorder,preparation,storage,ingestor,deletingSessions});
   const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
-  const updates=new Updates(store,{current:{version:packageInfo.version,revision:packageInfo.buildRevision||1},activity,...options.updateOptions});
+  const current={version:packageInfo.version,revision:packageInfo.buildRevision??1};
+  if(packageInfo.buildRevision!==undefined&&!current.version.includes('-beta.'))current.buildId=buildIdentity(current);
+  const updates=new Updates(store,{current,activity,...options.updateOptions});
   await runtime.startup('检查上次更新状态');
   try{await updates.recover();}
   catch(error){liveHealth.close();await updates.close();media.close();await recorder.close();await credentials.close();store.close();throw error;}

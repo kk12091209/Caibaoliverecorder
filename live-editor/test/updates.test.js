@@ -373,6 +373,23 @@ test('a beta package cannot be offered by the formal update feed or with a misma
   assert.throws(()=>validateUpdate({...release,prerelease:false},manifest,{version:'0.4.1'},'win32-x64',{beta:true}),/更新渠道/);
 });
 
+test('转正清单接受相同安装包，任一平台重新打包都拒绝',async()=>{
+  const {createUpdateManifest}=await import('../scripts/create-update-manifest.mjs');
+  const version='0.4.4',revision=2,buildId='0.4.4-r2',sourceRevision='a'.repeat(40);
+  const windows={version,buildRevision:revision,buildId,sourceRevision};
+  for(const key of ['nodeTests','coreTests','coreLifecycle','portableZip','portable7z','installerUpgradeUninstall'])windows[key]='passed';
+  const mac={version,buildRevision:revision,buildId,applicationSourceRevision:sourceRevision,releaseRevision:sourceRevision,
+    nodeTests:{passed:1,failed:0},localChecks:{dmgManifest:'passed',zipManifest:'passed'}};
+  const assets=['win32-x64','darwin-arm64'].map(platform=>publication(platform,revision,version).release.assets[1]);
+  const release={tag_name:'v0.4.4-beta.2',prerelease:true,target_commitish:sourceRevision,assets};
+  const preview=createUpdateManifest(release,windows,mac,['测试']);
+  const stable={...release,tag_name:'v0.4.4',prerelease:false};
+  assert.equal(createUpdateManifest(stable,windows,mac,['正式'],preview).channel,'stable');
+  const replaced=structuredClone(stable);
+  replaced.assets[1].digest='sha256:'+'f'.repeat(64);
+  assert.throws(()=>createUpdateManifest(replaced,windows,mac,['正式'],preview),/Promotion changed/);
+});
+
 test('disabling during a beta check discards a response that arrives after the channel changes',async t=>{
   const f=await prereleaseFixture(t,'darwin-arm64'),u=f.start('0.4.1');
   const original=u.fetcher;

@@ -6,6 +6,10 @@ $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Set-Location $root
 . (Join-Path $PSScriptRoot 'release-version.ps1')
 $version = Get-CaiboVersion -AppRoot (Join-Path $root 'live-editor')
+$buildRevision = (Get-Content live-editor/package.json -Raw -Encoding UTF8 | ConvertFrom-Json).buildRevision
+if ($buildRevision -notmatch '^[1-9][0-9]{0,4}$') { throw 'Expected a positive buildRevision in package.json.' }
+$tag = if ($env:CAIBO_RELEASE_TAG) { $env:CAIBO_RELEASE_TAG } else { "v$version" }
+if ($tag -cnotin @("v$version","v$version-beta.$buildRevision")) { throw 'Release tag does not match the build.' }
 $pinned = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json).windows
 $revision = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read source revision.' }
@@ -50,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows core startup/reuse/quit test failed.' 
 Remove-Item Env:CAIBO_CORE_SMOKE
 & ./live-editor/desktop/build.ps1
 
-$sourceUrl = "https://github.com/kk12091209/Caibaoliverecorder/releases/download/v$version/Caibo-$version-source.zip"
+$sourceUrl = "https://github.com/kk12091209/Caibaoliverecorder/releases/download/$tag/Caibo-$version-source.zip"
 & (Join-Path $PSScriptRoot 'build-release.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -DesktopRoot (Join-Path $root 'live-editor/desktop/package') -RuntimeRoot $runtime -ToolsRoot $tools -FFmpegRoot $media -NuGetRoot $env:NUGET_PACKAGES -OutputRoot $output -Version $version -ForPublic -SourceUrl $sourceUrl -Include7z
 $name = "BiliLiveEditor-$version-win-x64"
 foreach ($extension in @('zip','7z')) {
@@ -64,6 +68,8 @@ foreach ($launch in @('first','reopened')) {
 & (Join-Path $PSScriptRoot 'test-installer.ps1') -ProjectRoot $root -Stage (Join-Path $output $name) -ToolsRoot $tools -Version $version
 & (Join-Path $PSScriptRoot 'package-source.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -OutputFile (Join-Path $output "Caibo-$version-source.zip") -RepositoryUrl 'https://github.com/kk12091209/Caibaoliverecorder.git'
 $metadata = [ordered]@{version=$version;sourceRevision=$revision;sourceUrl=$sourceUrl;runtimeNode=$pinned.node.version;runtimeNodeSha256=$pinned.node.sha256;runtimeFFmpeg=$pinned.ffmpeg.version;runtimeFFmpegManifestSha256=(Get-FileHash -LiteralPath (Join-Path $media 'component.json') -Algorithm SHA256).Hash.ToLowerInvariant();workflowRun=$env:GITHUB_RUN_ID;nodeTests='passed';coreTests='passed';coreLifecycle='passed';portableZip='passed';portable7z='passed';installerUpgradeUninstall='passed';nativeDesktopUI='passed'}
+$metadata.buildRevision=[int]$buildRevision
+if ($version -cnotmatch '-beta\.') { $metadata.buildId="$version-r$buildRevision" }
 $metadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'windows-build.json') -Encoding UTF8
 $hashes = @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object { ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) + '  ' + $_.Name })
 [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS.txt'),($hashes -join "`n") + "`n",[Text.UTF8Encoding]::new($false))

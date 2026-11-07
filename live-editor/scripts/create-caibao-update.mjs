@@ -2,10 +2,10 @@ import fs from 'node:fs/promises';
 import { sign } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { UPDATE_KEY_ID, readSignedManifest } from '../server/update-trust.js';
-import { packageName, releaseIdentity } from '../server/updates.js';
+import { packageName, publicationTag } from '../server/updates.js';
 
 export function signUpdateManifest(manifest, privateKey) {
-  releaseIdentity(manifest);
+  publicationTag(manifest);
   if (manifest.schema !== 1) throw new Error('Invalid update schema.');
   for (const platform of ['win32-x64', 'darwin-arm64']) {
     const item = manifest.platforms?.[platform];
