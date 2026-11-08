@@ -4,6 +4,25 @@
 // directory names, API parameters, or error-classification rules.
 // Dynamic service errors and user-authored content remain unchanged.
 export const ui = Object.freeze({
+  clipMarkers: Object.freeze({
+    标记点: '标记点',
+    重新标记: '重新标记',
+    另一点: '另一点',
+    再标记一个位置: '再标记一个位置，自动组成选段',
+    已标记: '已标记',
+    清除起点: '清除起点',
+    清除终点: '清除终点',
+    清除标记: '清除标记',
+    相同位置: '这个位置已标记，请选择另一个位置。',
+    选择录制时间: '选择录制时间',
+    日期: '日期',
+    时: '时',
+    分: '分',
+    秒: '秒',
+    北京时间: '北京时间',
+    确定: '确定',
+    可选范围: '可选范围',
+  }),
   cacheWarning: Object.freeze({
     标题: '预处理缓存提醒',
     占用提醒: (usage,threshold) => `预处理缓存已占用 ${usage}，达到 ${threshold} GB 的提醒值。`,
@@ -756,9 +775,9 @@ export const ui = Object.freeze({
     至: " 至 ",
     选段选段: "选段 ",
     起点未标记或超出范围: "起点未标记或超出范围",
-    I起点: "I 起点 · ",
+    I起点: "起点 · ",
     终点未标记或超出范围: "终点未标记或超出范围",
-    O终点: "O 终点 · ",
+    O终点: "终点 · ",
     片段时长: "片段时长 ·",
     终点需要晚于起点: "终点需要晚于起点",
     定位方式: "定位方式",

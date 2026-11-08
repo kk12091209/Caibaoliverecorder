@@ -5,11 +5,11 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { windowPercent,edgeVelocity,panWindow } from '../timeline-signals.js';
 import { formatFrameTime } from '../video-time.js';
 
-const props=defineProps({kind:String,time:Number,from:Number,to:Number,min:{type:Number,default:0},max:Number,duration:Number,fps:{type:Number,default:30},disabled:Boolean});
+const props=defineProps({kind:String,time:Number,from:Number,to:Number,min:{type:Number,default:0},max:Number,duration:Number,fps:{type:Number,default:30},disabled:Boolean,pending:Boolean});
 const emit=defineEmits(['change','commit','start','end','pan']);
 const handle=ref(null),dragging=ref(false);
 let drag=null,frame=0;
-const label=computed(()=>props.kind==='start'?ui.common.起点:ui.common.终点);
+const label=computed(()=>props.pending?ui.clipMarkers.标记点:props.kind==='start'?ui.common.起点:ui.common.终点);
 const percent=computed(()=>Math.max(0,Math.min(100,windowPercent(props.time,props.from,props.to))));
 const bounds=()=>({min:Math.max(0,props.min),max:Math.max(props.min,props.max)});
 function change(time){const {min,max}=bounds();const value=Math.max(min,Math.min(max,Math.round(time*1000)/1000));emit('change',value);return value;}
@@ -54,6 +54,6 @@ onBeforeUnmount(()=>{window.removeEventListener('blur',blur);blur();cancelAnimat
 
 <template>
   <div ref="handle" class="timeline-marker" :class="['marker-'+kind,{nearend:percent>80,dragging}]" :style="{left:percent+'%'}" role="slider" :tabindex="disabled?-1:0" :aria-label="label+ui.timeline.标记" aria-orientation="horizontal" :aria-valuemin="min" :aria-valuemax="max" :aria-valuenow="time" :aria-valuetext="formatFrameTime(time,fps)" :aria-disabled="disabled" :title="label+' '+formatFrameTime(time,fps)+ui.timeline.标记拖动提示" @pointerdown.stop.prevent="down" @pointermove.stop="move" @pointerup.stop="finish($event)" @pointercancel.stop="finish($event,true)" @lostpointercapture="finish($event,true)" @keydown.stop="key">
-    <span :style="{'--label-shift':`max(0px, calc(80px - ${percent}cqw))`}">{{ kind==='start'?'I':'O' }} {{ label }}</span>
+    <span>{{ label }}</span>
   </div>
 </template>

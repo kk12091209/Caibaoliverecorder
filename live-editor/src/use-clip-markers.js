@@ -11,6 +11,7 @@ export function useClipMarkers({
   const positionMode=ref('video'),startDateText=ref(''),endDateText=ref('');
   const startText=ref(''),endText=ref(''),startExact=ref(null),endExact=ref(null);
   const startMarked=ref(false),endMarked=ref(false);
+  const marksComplete=computed(()=>startMarked.value&&endMarked.value);
   const draftStart=computed(()=>markerTime('start',startMarked.value));
   const draftEnd=computed(()=>markerTime('end',endMarked.value));
   const draftDuration=computed(()=>draftStart.value!==null&&draftEnd.value!==null&&draftEnd.value>draftStart.value?draftEnd.value-draftStart.value:null);
@@ -67,6 +68,30 @@ export function useClipMarkers({
     try{const t=readMark(which);markText(which,t);void playFrom(markPreviewPosition(t,detail.value?.sources||[]),false);}catch(e){tell(e.message);}
   }
   function setMark(which){if(canPreview.value)markText(which,position.value);}
+  function placeMarker(){
+    if(!canPreview.value)return;
+    const time=position.value;
+    if(marksComplete.value){clearDraftMarks();markText('start',time);return;}
+    if(!startMarked.value&&!endMarked.value){markText('start',time);return;}
+    try{
+      const other=readMark(startMarked.value?'start':'end');
+      if(formatPosition(other)===formatPosition(time)){tell(ui.clipMarkers.相同位置);return;}
+      markText('start',Math.min(other,time));
+      markText('end',Math.max(other,time));
+    }catch(error){tell(error.message);}
+  }
+  function clearMark(which){
+    if(which==='start'){startMarked.value=false;startExact.value=null;startText.value='';startDateText.value='';}
+    else{endMarked.value=false;endExact.value=null;endText.value='';endDateText.value='';}
+  }
+  function recordingMarkTime(which,text){
+    return positionAtRecordingInput(text,activeSession.value,detail.value?.sources||[],duration.value,which==='start'?startExact.value:endExact.value);
+  }
+  function recordingInitial(which){
+    const current=which==='start'?draftStart.value:draftEnd.value;
+    const stamp=recordingTimeAt(current??position.value,activeSession.value,detail.value?.sources||[]);
+    return clockBounds.value?toRecordingInput(Math.max(clockBounds.value.min,Math.min(clockBounds.value.max,stamp??clockBounds.value.min)),false):'';
+  }
   function dragMark(which,time){markText(which,time);}
   function previewMark(time){void playFrom(markPreviewPosition(time,detail.value?.sources||[]),false);}
   function clearDraftMarks(){
@@ -74,8 +99,9 @@ export function useClipMarkers({
     startText.value='';endText.value='';startDateText.value='';endDateText.value='';
   }
   return {
-    positionMode, startText, endText, startDateText, endDateText, startMarked, endMarked,
+    positionMode, startText, endText, startDateText, endDateText, startMarked, endMarked, marksComplete,
     draftStart, draftEnd, draftDuration, clockBounds, canUseRecordingTime, markerError,
-    readMark, inputMark, setPositionMode, commitMark, setMark, dragMark, previewMark, clearDraftMarks
+    readMark, inputMark, setPositionMode, commitMark, setMark, placeMarker, clearMark,
+    recordingMarkTime, recordingInitial, dragMark, previewMark, clearDraftMarks
   };
 }
