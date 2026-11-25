@@ -104,3 +104,28 @@ test('health is rechecked after the first asynchronous hardware probe',async t=>
   f.health.media.liveHardwareAvailable=async()=>{await Promise.resolve();f.room.recordingHealth={state:'recovering'};return true;};
   const context=await f.tick();assert.equal(context.hardwareAvailable,true);assert.equal(context.recordingHealthy,false);assert.equal(context.recordingState,'unhealthy');
 });
+
+test('automatic work uses macOS pressure estimates and checks every recording writer',async t=>{
+  const f=fixture(t);
+  if((await import('node:os')).availableParallelism()<4){t.skip('device has no concurrent-media budget');return;}
+  f.health.media.idlePolicy={resources:async()=>({available:4*1024**3})};
+  const next={...f.session,id:'other',room:456},nextSource={...f.source,id:'other-source',session:next.id};
+  const nextRoom={...f.room,roomId:456,recordingStats:{...f.room.recordingStats}};
+  const nextIndex={...f.ingest};
+  f.rooms.push(nextRoom);f.sessions.push(next);
+  f.health.store.sources=id=>id===next.id?[nextSource]:[f.source];
+  f.health.ingestor.healthSnapshot=id=>id===nextSource.id?nextIndex:f.ingest;
+  assert.equal(f.health.automaticWorkHealthy(),false,'wait for the initial memory observation');
+  await f.health.automaticMemoryPending;
+  assert.equal(f.health.automaticWorkHealthy(),false,'writer not observed advancing yet');
+  await f.tick();
+  nextRoom.recordingObservedAt=f.now;
+  nextRoom.recordingStats.totalOutputBytes+=100;
+  nextRoom.recordingStats.sessionMaxTimestamp+=1000;
+  nextIndex.observedAt=f.now;
+  assert.equal(f.health.automaticWorkHealthy(),true);
+  nextIndex.writeLatencyMs=550;
+  assert.equal(f.health.automaticWorkHealthy(),false,'either recording can require the media queue to yield');
+  nextIndex.writeLatencyMs=1;
+  assert.equal(f.health.automaticWorkHealthy(),true);
+});

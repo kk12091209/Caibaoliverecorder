@@ -66,16 +66,27 @@ export class LiveRecordingHealth {
   }
   automaticWorkHealthy() {
     const at=this.now();
-    if(this.closed||os.availableParallelism()<4||os.freemem()<768*MiB||this.loopDelay()>250)return false;
+    if(this.closed||os.availableParallelism()<4||this.loopDelay()>250)return false;
+    // On macOS immediately-free pages exclude reclaimable file cache. Share
+    // the existing bounded memory-pressure sampler used by the render queue.
+    if(this.platform==='darwin'){
+      const sample=this.automaticMemory;
+      if(!this.automaticMemoryPending&&(!sample||at-sample.at>=5000)){
+        this.automaticMemoryPending=Promise.resolve().then(()=>this.media.idlePolicy?.resources())
+          .then(value=>{this.automaticMemory={at:this.now(),bytes:value?.available};},()=>{
+            this.automaticMemory={at:this.now(),bytes:undefined};
+          }).finally(()=>{this.automaticMemoryPending=null;});
+      }
+      if(!sample||at-sample.at>35000||!(sample.bytes>=768*MiB))return false;
+    } else if(os.freemem()<768*MiB)return false;
     const sessions=this.store.all(liveSessions),rooms=this.recorder.rooms.filter(room=>room.recording);
     // A writer with no matching session has just started or is reconnecting.
     if(!rooms.length||sessions.length!==rooms.length)return false;
-    return rooms.every(room=>{
+    const writers=rooms.map(room=>{
       const session=sessions.find(candidate=>this.matches(candidate,room));
-      if(!session)return false;
-      const health=this.writer(session,room,at);
-      return health.recordingHealthy&&health.recordingWriteHealthy&&health.ingestLagMs<=5000;
+      return session&&this.writer(session,room,at);
     });
+    return writers.every(health=>health?.recordingHealthy&&health.recordingWriteHealthy&&health.ingestLagMs<=5000);
   }
   async context() {
     const at=this.now(),base={recordingCount:0,recordingState:'observing',recordingHealthy:false,
