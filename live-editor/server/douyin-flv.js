@@ -26,6 +26,9 @@ export class DouyinFlv {
       const header=media&&tag[12]===0;
       if(header){
         const body=tag.subarray(11,-4),previous=this.codecs.get(type);
+        // FFmpeg may write the two AAC tag bytes without AudioSpecificConfig
+        // until the first ADTS packet arrives. It does not describe a codec.
+        if(type===8&&body.length===2)continue;
         if(this.media&&previous&&!previous.equals(body))throw new DouyinStreamChange('直播编码参数发生变化，安全分段后重连。',output);
         this.codecs.set(type,Buffer.from(body));
       }

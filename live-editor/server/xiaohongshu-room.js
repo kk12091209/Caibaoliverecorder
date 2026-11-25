@@ -15,20 +15,47 @@ function safePage(input){
 export function isXiaohongshuLink(input){
   try{return pageHosts.has(new URL(String(input).match(/https?:\/\/[^\s<>]+/)?.[0]).hostname);}catch{return false;}
 }
-export function safeXiaohongshuStream(input){
+function mediaUrl(input){
+  if(typeof input!=='string'||input.length>8192)return null;
   try{
     const url=new URL(input);
-    return ['http:','https:'].includes(url.protocol)&&!url.port&&!url.username&&!url.password&&!url.hash&&
-      url.hostname.endsWith('.xhscdn.com')&&/^\/live\/[1-9]\d{0,19}\.flv$/.test(url.pathname)?url.href:'';
-  }catch{return '';}
+    return ['http:','https:'].includes(url.protocol)&&!url.port&&!url.username&&!url.password&&!url.hash?url:null;
+  }catch{return null;}
+}
+
+// A redirected manifest can use relative segment paths under the CDN name
+// embedded by its dispatcher. A literal IP is never a standalone entry.
+export function safeXiaohongshuResource(input,parent,root){
+  const url=mediaUrl(input);
+  if(!url)return '';
+  let resourcePath=url.pathname;
+  if(!url.hostname.endsWith('.xhscdn.com')){
+    const from=mediaUrl(parent),dispatch=/^\/([a-z0-9.-]+\.xhscdn\.com)(\/.*)$/.exec(resourcePath);
+    if(!dispatch||!isPublicMediaIp(url.hostname)||url.origin!==from?.origin||!from.pathname.startsWith('/'+dispatch[1]+'/'))return '';
+    resourcePath=dispatch[2];
+  }
+  // A master may link a variant playlist; an explicit room number, when
+  // present, must remain the one from the original platform descriptor.
+  if(root){
+    const rootRoom=/^\/live\/(\d+)\.m3u8$/.exec(mediaUrl(root)?.pathname||'')?.[1];
+    const childRoom=/^\/live\/(\d+)\.(?:m3u8|flv)$/.exec(resourcePath)?.[1];
+    if(!rootRoom||childRoom&&childRoom!==rootRoom)return '';
+  }
+  return url.href;
+}
+export function safeXiaohongshuStream(input){
+  const url=safeXiaohongshuResource(input);
+  return url&&/^\/live\/[1-9]\d{0,19}\.(?:flv|m3u8)$/.test(new URL(url).pathname)?url:'';
 }
 export function safeXiaohongshuRedirect(input,origin){
-  const trustedOrigin=safeXiaohongshuStream(origin);
+  // All callers validate their initial request. For HLS the initial request
+  // here may also be a segment/map, which has its own CDN dispatch.
+  const trustedOrigin=safeXiaohongshuResource(origin);
   if(!trustedOrigin)return '';
   try{
     const source=new URL(trustedOrigin),target=new URL(input,source);
-    if(safeXiaohongshuStream(target.href)&&target.pathname===source.pathname)return target.href;
-    // CDN dispatch can put the original CDN hostname and FLV path after a
+    if(safeXiaohongshuResource(target.href)&&target.pathname===source.pathname)return target.href;
+    // CDN dispatch can put the original CDN hostname and stream path after a
     // public IP. Bind both parts to the trusted URL and never use account cookies.
     if(!['http:','https:'].includes(target.protocol)||target.port||target.username||target.password||target.hash)return '';
     return target.pathname==='/'+source.hostname+source.pathname&&isPublicMediaIp(target.hostname)?target.href:'';
@@ -42,9 +69,32 @@ export function parseXiaohongshuState(html){
   const json=script.replace(/"(?:[^"\\]|\\.)*"|\bundefined\b/g,token=>token==='undefined'?'null':token);
   try{return parsePlatformJson(json);}catch{throw Error('小红书页面格式发生变化，等待重新确认。');}
 }
+
+function roomStreams(pullConfig, roomId) {
+  let config;
+  try { config = typeof pullConfig === 'string' ? parsePlatformJson(pullConfig) : pullConfig; }
+  catch { return []; }
+  if (!Array.isArray(config?.h264)) return [];
+  const streams = {flv: [], hls: []}, seen = new Set();
+  for (const entry of config.h264.slice(0, 32)) {
+    const backup = Array.isArray(entry?.backup_urls) ? entry.backup_urls.slice(0, 8) : [];
+    for (const input of [entry?.master_url, ...backup]) {
+      const url = safeXiaohongshuStream(input);
+      if (!url || seen.has(url)) continue;
+      const path = new URL(url).pathname;
+      const protocol = path.endsWith('.m3u8') ? 'hls' : 'flv';
+      if (path !== '/live/' + roomId + (protocol === 'hls' ? '.m3u8' : '.flv')) continue;
+      seen.add(url);
+      const quality = typeof entry.quality_type === 'string' ? entry.quality_type.slice(0, 64) : 'H264';
+      streams[protocol].push({url, quality, protocol});
+    }
+  }
+  return [...streams.flv, ...streams.hls];
+}
 export function xiaohongshuMetadata(state,expectedRoom){
   const live=state?.liveStream,room=live?.roomData?.roomInfo,host=live?.roomData?.hostInfo;
-  if(live?.liveStatus!=='success'||!room||decimal(room.roomId)!==expectedRoom)throw Error('小红书未返回目标直播间，可能需要重新分享或完成登录验证。');
+  const pageReady=live?.liveStatus==='success'||(live?.liveStatus==='end'&&room?.status===3);
+  if(!pageReady||!room||decimal(room.roomId)!==expectedRoom)throw Error('小红书未返回目标直播间，可能需要重新分享或完成登录验证。');
   let deeplink;
   try{deeplink=new URL(room.deeplink);}catch{throw Error('小红书未返回可核验的主播身份。');}
   if(deeplink.protocol!=='xhsdiscover:'||deeplink.hostname!=='live_audience'||deeplink.searchParams.get('room_id')!==expectedRoom)throw Error('小红书直播间身份不一致，请重新复制分享链接。');
@@ -55,14 +105,9 @@ export function xiaohongshuMetadata(state,expectedRoom){
   if(room.monetizeType!==0||!Array.isArray(room.joinLimitTypes)||room.joinLimitTypes.some(type=>type!==0))throw Error('这场小红书直播有访问限制，当前不支持录制。');
   if(![2,3,4].includes(room.status))throw Error('小红书直播状态待确认。');
   const streaming=room.status===2;
-  let config;
-  try{config=typeof room.pullConfig==='string'?parsePlatformJson(room.pullConfig):room.pullConfig;}catch{}
-  const candidates=Array.isArray(config?.h264)?config.h264.slice(0,16):[];
-  const stream=candidates.map(entry=>({url:safeXiaohongshuStream(entry?.master_url),quality:entry?.quality_type||'H264'}))
-    .find(entry=>entry.url&&new URL(entry.url).pathname==='/live/'+expectedRoom+'.flv')||null;
-  if(streaming&&!stream)throw Error('这场小红书直播暂未提供可安全录制的 H.264 FLV。');
+  const streams=streaming?roomStreams(room.pullConfig,expectedRoom):[];
   return {platform:'xiaohongshu',webRid:expectedRoom,roomId:expectedRoom,ownerId,name:String(host?.nickName||deeplink.searchParams.get('host_nickname')||'小红书主播').slice(0,100),
-    title:String(room.roomTitle||host?.nickName||'小红书直播').slice(0,300),streaming,stream:streaming?stream:null};
+    title:String(room.roomTitle||host?.nickName||'小红书直播').slice(0,300),streaming,stream:streams[0]||null,streams};
 }
 
 export class XiaohongshuResolver{
@@ -107,8 +152,15 @@ export class XiaohongshuResolver{
     }
     const path=page.url.pathname.match(/^\/(?:hina\/)?livestream\/(?:[A-Za-z_][A-Za-z0-9_-]{0,79}\/)?([1-9]\d{0,19})(?:\/\d{1,10})?\/?$/);
     if(!path)throw Error('请使用小红书直播或用户主页链接。');
-    const metadata=xiaohongshuMetadata(page.state,path[1]);
     const hint=page.url.searchParams.get('host_id');
+    const live=page.state?.liveStream,room=live?.roomData?.roomInfo;
+    if(live?.liveStatus==='end'&&room?.status===3&&!room.roomId&&!room.deeplink){
+      // Ended shares can omit all current-room identity. Treat the host hint
+      // like a pasted profile URL: a future lookup must verify the current room.
+      if(userId(hint))return {kind:'profile',uid:hint,name:'小红书主播（待确认）'};
+      throw Error('这场小红书直播已结束，请分享主播主页以监控下次开播。');
+    }
+    const metadata=xiaohongshuMetadata(page.state,path[1]);
     if(hint&&hint!==metadata.ownerId)throw Error('小红书分享中的主播身份不一致。');
     return {kind:'room',uid:metadata.ownerId,name:metadata.name,input:page.input,metadata};
   }

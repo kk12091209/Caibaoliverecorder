@@ -12,6 +12,13 @@ namespace BililiveRecorder.Core.Recording
         private bool checkMedia, wrote, sawVideo, sawAudio, inputEnded;
         private int videoTimestamp = -1, audioTimestamp = -1;
 
+        // Standard mode can exclude file headers. Raw mode can confirm a
+        // completed stream write without decoding its contents.
+        public bool HasRecordedOutput
+        {
+            get { lock (this.sync) return this.checkMedia ? this.sawVideo || this.sawAudio : this.wrote; }
+        }
+
         public void Start(double now, bool checkMedia)
         {
             lock (this.sync)

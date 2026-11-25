@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {execFileSync} from 'node:child_process';
 import {createApp,fetch as localFetch} from './helpers/authenticated-app.js';
 import {Store} from '../server/store.js';
 import {Ingestor,FLV_HEADER} from '../server/ingest.js';
 import {flvTag} from './helpers/source-stream-fixture.js';
-import {XiaohongshuResolver,parseXiaohongshuState,xiaohongshuMetadata,safeXiaohongshuStream,safeXiaohongshuRedirect} from '../server/xiaohongshu-room.js';
+import {XiaohongshuResolver,parseXiaohongshuState,xiaohongshuMetadata,safeXiaohongshuStream,safeXiaohongshuRedirect,safeXiaohongshuResource} from '../server/xiaohongshu-room.js';
 import {XiaohongshuPlatform} from '../server/xiaohongshu-platform.js';
 import {XiaohongshuH5Chat as XiaohongshuChat} from '../server/xiaohongshu-h5-chat.js';
 import {MultiPlatformRecorder} from '../server/multi-platform-recorder.js';
@@ -88,6 +89,124 @@ test('media URL boundaries accept only the matching platform CDN and keep redire
     'http://120.232.94.168'+dispatchPath.replace(roomId,'999'),
     'http://120.232.94.168'+dispatchPath.replace('live-source-play','other-cdn'),
   ])assert.equal(safeXiaohongshuRedirect(target,origin),'',target);
+});
+
+test('only explicitly returned current-room FLV and HLS candidates survive, with FLV preferred', () => {
+  const page = state(), live = page.liveStream, room = live.roomData.roomInfo;
+  const hls = media.replace('.flv', '.m3u8') + '?signed=example';
+  const backup = media.replace('play-hw', 'play-backup');
+  room.pullConfig = {h264: [
+    {quality_type: 'HD', master_url: hls},
+    {quality_type: 'HD', master_url: media, backup_urls: [backup, media, hls]},
+    {master_url: hls.replace(roomId, '234'), backup_urls: ['https://other.test/live/' + roomId + '.m3u8']},
+  ]};
+  const view = () => xiaohongshuMetadata(page, roomId);
+  assert.deepEqual(view().streams.map(({url, protocol}) => [url, protocol]), [[media, 'flv'], [backup, 'flv'], [hls, 'hls']]);
+  assert.equal(view().stream.url, media);
+  room.pullConfig = JSON.stringify({h264: [{master_url: hls}]});
+  assert.equal(view().stream.protocol, 'hls');
+  live.nextRoomInfo = {pullConfig: room.pullConfig};
+  room.replayInfo = {pullConfig: room.pullConfig};
+  room.pullConfig = {h265: [{master_url: hls}]};
+  assert.equal(view().streaming, true);
+  assert.equal(view().stream, null);
+  assert.deepEqual(view().streams, []);
+  room.pullConfig = live.nextRoomInfo.pullConfig;
+  live.liveStatus = 'end';
+  assert.throws(view, /目标直播间/);
+  room.status = 3;
+  assert.equal(view().streaming, false);
+  assert.deepEqual(view().streams, []);
+});
+
+test('declared XHS HLS segments and init fragments stay on the platform CDN', () => {
+  const origin = media.replace('.flv', '.m3u8');
+  for (const suffix of ['chunk-01.ts', 'chunk-02.m4s?sign=sample', 'init.mp4', 'variant.m3u8']) {
+    const url = new URL(suffix, origin).href;
+    assert.equal(safeXiaohongshuResource(url), url);
+    assert.equal(safeXiaohongshuStream(url), '');
+  }
+  for (const url of ['file:///tmp/data', 'http://127.0.0.1/z.ts', 'https://live.xhscdn.com:7443/s.ts',
+    'https://xhscdn.com.other.test/m.ts', 'https://u@a.xhscdn.com/q.ts', 'https://a.xhscdn.com/q.ts#x']) {
+    assert.equal(safeXiaohongshuResource(url), '');
+  }
+  assert.equal(safeXiaohongshuRedirect(origin.replace('play-hw', 'play-secondary'), origin), origin.replace('play-hw', 'play-secondary'));
+  assert.equal(safeXiaohongshuRedirect(origin.replace(roomId, '123'), origin), '');
+  assert.equal(safeXiaohongshuRedirect(media, origin), '');
+  const dispatched = 'https://120.232.94.168/' + new URL(origin).hostname + new URL(origin).pathname;
+  const child = new URL('chunk.ts', dispatched).href;
+  assert.equal(safeXiaohongshuRedirect(dispatched, origin), dispatched);
+  assert.equal(safeXiaohongshuResource(child, dispatched, origin), child);
+  assert.equal(safeXiaohongshuRedirect(child, new URL('chunk.ts', origin).href), child);
+  assert.equal(safeXiaohongshuResource(child, origin, origin), '');
+  assert.equal(safeXiaohongshuResource(child.replace('120.232.94.168', '192.168.1.1'), dispatched, origin), '');
+  assert.equal(safeXiaohongshuResource(child.replace('play-hw', 'play-unknown'), dispatched, origin), '');
+  assert.equal(safeXiaohongshuResource(origin.replace(roomId, '123'), origin, origin), '');
+});
+
+test('an ended XHS share can retain a profile intent; recommendations do not identify a current recording', async () => {
+  const liveStream = {liveStatus: 'end', roomData: {roomInfo: {status: 3}}, nextRoomInfo: state().liveStream.roomData};
+  const resolver = new XiaohongshuResolver({request: async () => new Response(html({liveStream}))});
+  const share = 'https://www.xiaohongshu.com/livestream/' + roomId;
+  const result = await resolver.resolve(share + '?host_id=' + uid);
+  assert.equal(result.kind, 'profile');
+  assert.equal(result.uid, uid);
+  assert.equal(result.metadata, undefined);
+  await assert.rejects(resolver.resolve(share), /已结束/);
+  liveStream.roomData.roomInfo.status = 2;
+  await assert.rejects(resolver.resolve(share + '?host_id=' + uid), /目标直播间/);
+});
+
+test('an unavailable XHS FLV falls back to the declared HTTP HLS and indexes every original video frame', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xhs-hls-capture-'));
+  const store = new Store(root), page = state();
+  const hls = media.replace('https:', 'http:').replace('.flv', '.m3u8');
+  page.liveStream.roomData.roomInfo.pullConfig = {h264: [{master_url: media}, {master_url: hls}]};
+  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
+  const segment = execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x96:rate=12',
+    '-f', 'lavfi', '-i', 'sine=sample_rate=44100', '-t', '2', '-c:v', 'libx264', '-threads', '1',
+    '-g', '12', '-c:a', 'aac', '-f', 'mpegts', 'pipe:1']);
+  const session = {cookie: () => '', profile: async () => ({streaming: false}), close: async () => {}};
+  const resolver = new XiaohongshuResolver({session, request: async () => new Response(html(page))});
+  const routes = [], chatRooms = [];
+  const dispatched = 'http://120.232.94.168/' + new URL(hls).hostname + new URL(hls).pathname;
+  let playlistReads = 0;
+  const adapter = new XiaohongshuPlatform(store, {ffmpeg, xiaohongshu: {session, resolver, pollMs: 60000,
+    chat: {start(_id, meta) { chatRooms.push(meta.roomId); }, async stop() {}, async close() {}},
+    request: async (url, options) => {
+      assert.equal(new Headers(options.headers).has('Cookie'), false);
+      routes.push(url);
+      if (url === media) return new Response(null, {status: 503});
+      if (url === hls) return new Response(null, {status:302, headers:{location:dispatched}});
+      if (url === dispatched) return new Response('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsample.ts\n' +
+        (++playlistReads === 1 ? '' : '#EXT-X-ENDLIST'));
+      assert.equal(url, new URL('sample.ts', dispatched).href);
+      return new Response(segment);
+    },
+  }});
+  t.after(async () => { await adapter.close(); store.close(); await fs.rm(root, {recursive: true, force: true}); });
+  adapter.start();
+  const target = await adapter.addAnchor({url: 'https://www.xiaohongshu.com/livestream/' + roomId});
+  await adapter.core.entries.get(roomId).active;
+  await adapter.anchorAction(target.key, 'stop');
+  assert.deepEqual(routes, [media, hls, dispatched, new URL('sample.ts', dispatched).href, hls, dispatched]);
+  assert.deepEqual(chatRooms, [roomId]);
+  const [recording] = store.sessions();
+  assert.equal(store.sessions().length, 1);
+  await new Ingestor(store).tick();
+  const sources = store.sources(recording.id);
+  assert.equal(sources.length, 1);
+  const [source] = sources;
+  assert.equal(source.error, '');
+  assert.equal(source.closed, 2);
+  assert.ok(store.get('SELECT COUNT(*) AS n FROM chunks WHERE source=?', source.id).n > 0);
+  assert.equal(store.setting('linkmic-owner:' + source.id).id, uid);
+  assert.equal(store.setting('recording-camera:' + source.id), undefined);
+  const hashes = (file, bytes) => execFileSync(ffmpeg, ['-v', 'error', '-i', file, '-map', '0:v:0', '-f', 'framemd5', '-'],
+    {input: bytes, encoding: 'utf8'}).split('\n').filter(line => /^0,/.test(line)).map(line => line.split(',').at(-1).trim());
+  const original = hashes('pipe:0', segment);
+  assert.equal(original.length, 24);
+  assert.deepEqual(hashes(source.path), original);
 });
 
 test('H5 comment polling persists bounded unique messages, preserves the cursor on failure and closes in-flight work',async()=>{

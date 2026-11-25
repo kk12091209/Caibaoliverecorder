@@ -1,39 +1,20 @@
 <script setup>
 import { ui } from '../../shared/ui-copy.js';
-
+import {computed} from 'vue';
 import {MoreHorizontal,LoaderCircle} from 'lucide-vue-next';
-import {roomAvailable,roomStatus} from '../room-status.js';
+import {monitoredAnchorStatus,roomAvailable} from '../room-status.js';
 import PlatformBadge from './PlatformBadge.vue';
-defineProps({anchors:{type:Array,default:()=>[]},recorder:{type:Object,required:true},busy:{type:Array,default:()=>[]},menuKey:{type:String,default:''}});
+const props=defineProps({anchors:{type:Array,default:()=>[]},recorder:{type:Object,required:true},busy:{type:Array,default:()=>[]},menuKey:{type:String,default:''}});
 defineEmits(['action','menu']);
-const rawStatus=anchor=>anchor.legacy?roomStatus(anchor):anchor.state||'';
-const idleDouyinMonitor=anchor=>anchor.platform==='douyin'&&!anchor.legacy&&anchor.enabled&&!anchor.recording&&!anchor.webRid;
-function statusDetail(anchor){
-  const value=rawStatus(anchor);
-  if(idleDouyinMonitor(anchor)&&/^待确认：(本人直播间未开播，连麦状态暂无法确认|状态接口未返回目标用户)$/.test(value))return ui.anchors.监控中;
-  return value;
-}
-function status(anchor){
-  const value=rawStatus(anchor);
-  if(idleDouyinMonitor(anchor))return ui.anchors.监控中;
-  if(/正在恢复|重试|正在重连/.test(value))return ui.anchors.正在恢复录制;
-  if(/上限/.test(value))return ui.anchors.已达时长上限;
-  if(/待确认|疑似|失联/.test(value))return anchor.recording?ui.anchors.录制中待确认:ui.anchors.等待恢复;
-  if(anchor.recording)return anchor.kind==='guest'?ui.anchors.连麦录制中:ui.anchors.直播录制中;
-  return anchor.enabled?ui.anchors.监控中:ui.common.已停止;
-}
-function warning(anchor){
-  const detail=statusDetail(anchor);
-  return anchor.error||anchor.chatError||(/待确认|疑似|失联|上限|正在恢复|重试|正在重连/.test(detail)?detail:'');
-}
+const cards=computed(()=>props.anchors.map(anchor=>({anchor,...monitoredAnchorStatus(anchor)})));
 const roomNumber=anchor=>anchor.ownWebRid||(anchor.platform==='douyin'?(anchor.legacy?anchor.webRid:''):anchor.roomId)||'—';
 </script>
 <template>
   <article
-    v-for="anchor in anchors"
+    v-for="{anchor,recording,label,detail,warning} in cards"
     :key="anchor.key"
     class="monitored-anchor"
-    :data-recording="anchor.recording"
+    :data-recording="recording"
     :aria-label="ui.anchors.监控主播+anchor.name"
     @contextmenu.prevent.stop="$emit('menu',$event,anchor)"
     @click.ctrl.exact.capture.prevent.stop="$emit('menu',$event,anchor)"
@@ -56,10 +37,10 @@ const roomNumber=anchor=>anchor.ownWebRid||(anchor.platform==='douyin'?(anchor.l
     </div>
     <div class="anchor-room">{{ ui.anchors.本人直播间 }}{{ roomNumber(anchor) }}</div>
     <div class="anchor-summary">
-      <div class="anchor-state"><span class="anchor-status" role="status" :title="statusDetail(anchor)"><i :class="{'is-recording':anchor.recording,'is-enabled':anchor.enabled}" aria-hidden="true"/>{{ status(anchor) }}</span></div>
+      <div class="anchor-state"><span class="anchor-status" role="status" :title="detail"><i :class="{'is-recording':recording,'is-enabled':anchor.enabled}" aria-hidden="true"/>{{ label }}</span></div>
       <button class="anchor-toggle" :class="{'is-stopped':!anchor.enabled}" :disabled="busy.includes(anchor.key)||!roomAvailable(anchor,recorder)" :aria-label="(anchor.enabled?ui.anchors.停止监控:ui.anchors.开始监控)+anchor.name" @click="$emit('action',anchor,anchor.enabled?'stop':'start')"><LoaderCircle v-if="busy.includes(anchor.key)" :size="12" class="spin" aria-hidden="true"/><span>{{ anchor.enabled?ui.anchors.停止:ui.anchors.开始 }}</span></button>
     </div>
-    <p v-if="warning(anchor)" class="anchor-warning" role="status">{{ warning(anchor) }}</p>
+    <p v-if="warning" class="anchor-warning" role="status">{{ warning }}</p>
   </article>
 </template>
 <style scoped>

@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {DouyinFlv as FlvNormalizer,DouyinStreamChange as StreamChange} from './douyin-flv.js';
+import {DouyinStreamChange as StreamChange} from './douyin-flv.js';
+import {openRecordingInput} from './recording-input.js';
 import {chatRate} from './chat-rules.js';
 
 export const xmlText=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
@@ -34,9 +35,9 @@ export function chatXml(batch,platform='douyin'){
 }
 
 export class FlvRecorder {
-  constructor(store,{platform,label,resolver,request=fetch,chat,userAgent,referer,streamUrl,streamRedirect,chatStatusMessage=()=>null,now=Date.now,pollMs=5000,idleMs=20000,mediaIdleMs=10000,watchdogMs=1000}={}) {
+  constructor(store,{platform,label,resolver,request=fetch,chat,userAgent,referer,streamUrl,streamRedirect,streamResource,ffmpeg,chatStatusMessage=()=>null,now=Date.now,pollMs=5000,idleMs=20000,mediaIdleMs=10000,watchdogMs=1000}={}) {
     for(const value of [pollMs,idleMs,mediaIdleMs,watchdogMs])if(!Number.isSafeInteger(value)||value<1)throw new Error('录制监测间隔无效。');
-    Object.assign(this,{store,platform,label,resolver,request,chat,userAgent,referer,streamUrl,streamRedirect,chatStatusMessage,now,pollMs,idleMs,mediaIdleMs,watchdogMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();
+    Object.assign(this,{store,platform,label,resolver,request,chat,userAgent,referer,streamUrl,streamRedirect,streamResource,ffmpeg,chatStatusMessage,now,pollMs,idleMs,mediaIdleMs,watchdogMs});this.entries=new Map();this.started=false;this.closed=false;this.paused=false;this.shutdown=new AbortController();
     this.chat.setRateLimit?.(chatRate(store));
     this.credentialVersion=0;
     const savedRooms=store.setting(this.platform+'-rooms');
@@ -124,7 +125,8 @@ export class FlvRecorder {
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);
           await this.onRoomMetadata?.(room,metadata);
           if(this.closed||version!==this.credentialVersion)continue;
-          if(!metadata.streaming||room.actualRoom&&room.actualRoom!==metadata.roomId){await this.finish(room);}
+          const capturingRoom = room.actualRoom || room.openingRoomId;
+          if(!metadata.streaming||capturingRoom&&capturingRoom!==metadata.roomId){await this.finish(room);}
           this.maybeRecord(room);
         }catch(error){if(!this.closed){this.store.diagnostics?.record(this.label+`开播检查 ${room.webRid}`,error,{level:'警告'});room.error=this.label+'连接失败，正在重试。';room.nextPoll=this.now()+15000;}}
       }};
@@ -133,16 +135,17 @@ export class FlvRecorder {
   }
   maybeRecord(room){
     if(this.closed||this.paused||!this.started||room.active||room.blocked||!this.wanted(room)||!room.streaming||this.now()<room.retryAt)return;
-    if(!room.metadata?.stream){this.store.diagnostics?.record(this.label+'录制',`房间 ${room.webRid}：未提供 H.264/AAC 画质，未开始录制`,{level:'警告'});room.error='该直播暂未提供可剪辑的 H.264/AAC 画质。';return;}
+    if(!room.metadata?.stream&&!room.metadata?.streams?.length){this.store.diagnostics?.record(this.label+'录制',`房间 ${room.webRid}：未提供可录制的画质或线路，继续监控`,{level:'警告'});room.error='已开播，平台暂未提供可录制的线路。';return;}
     room.active=this.capture(room).catch(error=>{this.store.diagnostics?.record(this.label+'录制',error,{level:'错误'});if(!this.closed)room.error='录像写入失败，请检查磁盘后重试。';room.blocked=true;}).finally(()=>{room.active=null;room.recording=false;room.nextPoll=0;});
   }
   async capture(room){
-    const metadata=room.metadata,abort=new AbortController();room.abort=abort;let response,flv,xml,source,session,normalizer;
+    const metadata=room.metadata,abort=new AbortController();room.abort=abort;room.openingRoomId=metadata.roomId;
+    let input,flv,xml,source,session,normalizer;
     let chatWriteBlocked=false;
     let lastData=this.now(),lastMedia=lastData,lastVideo=lastData,mediaValue=-1,videoValue=null,recordError,recoverable;
     const healthySince=this.now();
     const watchdog=setInterval(()=>{
-      if(abort.signal.aborted)return;
+      if(abort.signal.aborted||!input)return;
       const at=this.now();
       const reason=at-lastData>=this.idleMs?'直播连接长时间未收到数据。'
         :at-lastMedia>=this.mediaIdleMs||normalizer?.videoTime!==null&&normalizer?.videoTime!==undefined&&at-lastVideo>=this.mediaIdleMs?'直播仍收到数据，但有效画面时间未推进。':'';
@@ -150,17 +153,10 @@ export class FlvRecorder {
     },this.watchdogMs);
     const signal=AbortSignal.any([this.shutdown.signal,abort.signal]);
     try{
-      const origin=this.streamUrl(metadata.stream.url);if(!origin)throw new Error('直播服务器地址无效。');
-      let url=origin;
-      for(let attempt=0;attempt<6;attempt++){
-        const deadline=setTimeout(()=>abort.abort(new Error('直播连接超时。')),15000);
-        try{response=await this.request(url,{signal,redirect:'manual',headers:{'User-Agent':this.userAgent,Referer:this.referer}});}finally{clearTimeout(deadline);}
-        const next=response.headers.get('location');if(!next||![301,302,303,307,308].includes(response.status))break;
-        await response.body?.cancel();response=null;
-        url=this.streamRedirect(new URL(next,url).href,origin);if(!url)throw new Error('直播服务器跳转地址无效。');
-      }
-      if(!response?.ok||!response.body)throw new Error(`直播暂时无法连接（HTTP ${response?.status??'未收到响应'}）。`);
-      if(signal.aborted)throw signal.reason;
+      input=await openRecordingInput(metadata,this,signal,room.routePass);
+      signal.throwIfAborted();
+      room.routePass=0;room.error='';
+      normalizer=input.normalizer;lastData=lastMedia=lastVideo=this.now();
       const wall=new Date(this.now()).toISOString(),directory=path.join(this.store.root,'originals',this.platform,room.webRid);
       await fs.mkdir(directory,{recursive:true});const file=path.join(directory,wall.replace(/[^\d]/g,'')+'-'+randomUUID()+'.flv');
       flv=await fs.open(file,'wx');
@@ -170,7 +166,7 @@ export class FlvRecorder {
       const start=Math.max(0,session.duration,(Date.parse(wall)-Date.parse(session.created))/1000);
       source=this.store.addSource(session.id,file,start,wall);this.store.run('INSERT INTO source_storage(source,eligible) VALUES(?,1)',source.id);
       this.store.setting('linkmic-owner:'+source.id,{id:metadata.ownerId||'',name:metadata.name,roomId:metadata.roomId});
-      if(metadata.stream.cameraLayout)this.store.setting('recording-camera:'+source.id,metadata.stream.cameraLayout);
+      if(input.candidate.cameraLayout)this.store.setting('recording-camera:'+source.id,input.candidate.cameraLayout);
       room.sourceId=source.id;
       xml=await openChatXml(source.xml);
       await appendChatXml(xml,`<?xml version="1.0" encoding="utf-8"?>\n<i><CaibaoRecordInfo platform="${this.platform}" roomid="${metadata.roomId}" web_rid="${room.webRid}" start_time="${wall}" title="${xmlText(metadata.title)}"/>\n`);
@@ -181,8 +177,11 @@ export class FlvRecorder {
       } catch (error) {
         this.store.diagnostics?.record('自动投稿', error, {level:'警告'});
       }
-      normalizer=new FlvNormalizer();room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
-      try{const chatCredentials=this.resolver.cookie?await this.resolver.cookie(signal):room.metadata||metadata;this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
+      room.progress={observedAt:this.now(),bytes:0,mediaMs:0,writeLatencyMs:0,inFlightWriteSince:null};
+      const startChat = async () => {
+        const chatCredentials=this.resolver.cookie?await this.resolver.cookie(signal):room.metadata||metadata;
+        if(signal.aborted||room.sourceId!==source.id)return;
+        this.chat.start(source.id,{roomId:metadata.roomId,userUniqueId:chatCredentials.userUniqueId,cookie:chatCredentials.cookie,sourceStart:Date.parse(wall)},
         {write:async batch=>{
           if(chatWriteBlocked)throw new Error('弹幕文件暂时无法写入。');
           try{await appendChatXml(xml,chatXml(batch,this.platform));}
@@ -192,11 +191,14 @@ export class FlvRecorder {
           else if(status==='write-failed')room.chatError='弹幕保存失败。';
           else if(status==='retry')room.chatError='弹幕连接重试中。';
           const event=this.chatStatusMessage(room.webRid,status,detail);if(event)this.store.diagnostics?.record(this.label+'弹幕',event.message,{level:event.level});
-        }});}catch{room.chatError='弹幕暂时无法连接。';this.store.diagnostics?.record(this.label+'弹幕',`房间 ${room.webRid}：弹幕采集未能启动。`,{level:'警告'});}
-      for await(const chunk of response.body){
+        }});
+      };
+      void startChat().catch(()=>{
+        if(signal.aborted||room.sourceId!==source.id)return;
+        room.chatError='弹幕暂时无法连接。';this.store.diagnostics?.record(this.label+'弹幕',`房间 ${room.webRid}：弹幕采集未能启动。`,{level:'警告'});
+      });
+      for await(const frames of input.frames){
         lastData=this.now();if(signal.aborted)break;
-        let frames,change;
-        try{frames=normalizer.feed(chunk);}catch(error){if(error.code!=='DOUYIN_STREAM_CHANGE')throw error;frames=error.frames;change=error;}
         const started=this.now();let written=0;
         room.progress.inFlightWriteSince=started;
         for(const bytes of frames){await writeAll(flv,bytes);written+=bytes.length;}
@@ -208,22 +210,20 @@ export class FlvRecorder {
           if(advanced&&room.recoveryReason){room.recoveryReason='';room.error='';this.store.diagnostics?.record(this.label+'录制恢复',`房间 ${room.webRid}：已重新收到有效画面，继续录制。`);}
         }
         if(this.now()-healthySince>=30000&&this.now()-lastVideo<this.mediaIdleMs&&normalizer.duration>=20)room.recoveryFailures=0;
-        if(change)throw change;
       }
       if(signal.aborted&&signal.reason?.code==='DOUYIN_STREAM_CHANGE')throw signal.reason;
-      if(!signal.aborted)normalizer.finish();
     }catch(error){
-      recoverable=error.code==='DOUYIN_STREAM_CHANGE'?error:signal.reason?.code==='DOUYIN_STREAM_CHANGE'?signal.reason:null;
+      recoverable=signal.aborted?(signal.reason?.code==='DOUYIN_STREAM_CHANGE'?signal.reason:null):error.code==='DOUYIN_STREAM_CHANGE'?error:null;
       if(!this.closed&&(!room.abort?.signal.aborted||room.abort.signal.reason?.message==='直播连接超时。'))this.store.diagnostics?.record(this.label+'录制连接',error,{level:'警告'});
-      // Network failures retain the partial source and reconnect. Invalid
-      // codec/data or disk failures stop retries until the user starts again.
-      if(!recoverable&&!signal.aborted&&source&&(!response?.body||!/fetch|network|terminated|socket|abort/i.test(error.message))){recordError=error;room.blocked=true;room.error=error.message;}
+      if(error.code==='RECORDING_INPUT_UNAVAILABLE'){room.routePass=(room.routePass||0)+1;room.error=error.message;}
+      else if(!recoverable&&!signal.aborted&&input){recordError=error;room.blocked=true;room.error=error.message;}
       else if(!this.closed&&!abort.signal.aborted)room.error='直播连接中断，正在重试。';
     }finally{
       clearInterval(watchdog);if(!signal.aborted)abort.abort();
-      try{await response?.body?.cancel();}catch{}
+      await input?.close();
       if(source){
-        await this.chat.stop(source.id);
+        try { await this.chat.stop(source.id); }
+        catch { this.store.diagnostics?.record(this.label+'弹幕',`房间 ${room.webRid}：弹幕收尾失败。`,{level:'警告'}); }
         try{if(xml){await appendChatXml(xml,'</i>\n');await xml.sync();}await flv.sync();
           if((await flv.stat()).size<13)recordError??=new Error('本次录制未收到完整画面。');
         }catch(error){recordError??=error;room.blocked=true;room.error='录像保存失败，请检查磁盘。';}
@@ -236,7 +236,7 @@ export class FlvRecorder {
         this.store.run('UPDATE sources SET closed=MAX(closed,?),error=? WHERE id=?',recordError?2:1,recordError?.message||'',source.id);
         this.store.run("UPDATE sessions SET status=?,error=? WHERE id=?",recordError?'finishing':this.wanted(room)&&!this.closed?'waiting':'finishing',recordError?.message||'',session.id);
       }
-      room.recording=false;room.abort=null;room.sourceId=null;room.progress=null;room.retryAt=this.now()+3000;
+      room.recording=false;room.abort=null;room.openingRoomId=null;room.sourceId=null;room.progress=null;room.retryAt=this.now()+3000;
       if(recoverable&&!recordError&&!this.closed&&this.wanted(room)){
         const delay=Math.min(30000,1000*2**Math.min(room.recoveryFailures++,5));
         room.retryAt=this.now()+delay;room.nextPoll=room.retryAt;room.recoveryReason=`直播流切换或停滞，正在恢复录制（${delay/1000} 秒后重试）`;
@@ -251,6 +251,7 @@ export class FlvRecorder {
   async startRoom(key){this.assertOpen();const room=this.room(key);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.recoveryFailures=0;room.recoveryReason='';clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
   async setAuto(key,enabled){this.assertOpen();const room=this.room(key);room.followOnly=false;room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;if(!this.wanted(room))await this.finish(room);}this.save();await this.poll();}
   async finish(room){
+    room.routePass=0;
     clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.recoveryReason='';room.recoveryFailures=0;
     room.abort?.abort();await room.active;
     if(room.session){this.store.run("UPDATE sessions SET status='finishing' WHERE id=? AND status IN ('recording','waiting')",room.session);room.session=null;room.actualRoom=null;}

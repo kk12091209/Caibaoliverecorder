@@ -29,6 +29,7 @@
 | `recorder.js`、`bilibili-rooms.js`、`local-endpoint.js`、`service-runtime.js` | 连接录制核心、持久保存 B 站房间启停状态、本机地址与服务实例管理 |
 | `multi-platform-recorder.js`、`bilibili-platform.js`、`douyin-platform.js`、`xiaohongshu-platform.js`、`room-lookup.js` | 分发链接、数字房间查找和启停操作。平台适配器负责各自的监控、状态与 Cookie 应用 |
 | `flv-recorder.js`、`douyin-flv.js` | 抖音、小红书共用的 FLV 写盘、媒体时间推进检测、重连和封口。平台提供解析器、弹幕客户端与地址校验 |
+| `recording-input.js`、`hls-recording.js`、`bilibili-hls-bridge.js` | 候选线路试读、HLS 分片读取与转封装。B 站通过本机接口接回原录制核心，抖音和小红书复用同一 HLS 读取器 |
 | `douyin-room.js`、`douyin-recorder.js` | 抖音房间解析、独立摄像头流选择及平台默认依赖 |
 | `xiaohongshu-room.js`、`xiaohongshu-platform.js`、`xiaohongshu-chat.js` | 小红书分享核验、稳定 UID 开播监控、公开 H5 视频及弹幕客户端切换。能力限制见 [PLATFORMS.md](PLATFORMS.md) |
 | `xiaohongshu-web-session.js`、`xiaohongshu-browser.js`、`xiaohongshu-protocol.js` | 隔离后台浏览器、官方网页会话和有界协议解析。Cookie 经本机管道注入无痕上下文，视频请求被阻止 |

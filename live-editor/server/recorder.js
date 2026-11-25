@@ -115,7 +115,7 @@ export class Recorder {
       optionalWebHookUrlsV2:{hasValue:true,value:`http://127.0.0.1:${this.editorPort}/internal/recorder-event?token=${this.webhookSecret}`},
       ...CHAT_ONLY_CONFIG,
       optionalRecordDanmakuFlushInterval:{hasValue:true,value:0},optionalCuttingMode:{hasValue:true,value:0},
-      optionalRecordingQuality:{hasValue:true,value:'avc10000,avc400,avc250,avc150,avc80'}
+      optionalRecordingQuality:{hasValue:true,value:'avc10000,avc400,avc250,avc150,avc80,avc*'}
     });
     this.assertOpen();const rooms=await this.api('room');this.assertOpen();
     const resume=this.store.setting('recorder-resume-rooms');
@@ -156,7 +156,12 @@ export class Recorder {
       this.assertOpen();this.childFailure=null;this.coreStopReason='';
       await this.roomState.prepareLaunch(this.directory,()=>this.assertOpen());this.assertOpen();
       if(this.automaticPort){this.port=await this.lifecycle.availablePort();this.assertOpen();}
-      const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,BREC_SKIP_DISABLE_QUICK_EDIT:'1',BILILIVERECORDER_DISABLE_FILE_LOG:'1',BREC_EPHEMERAL_AUTH:'1'}});
+      const env = {
+        ...process.env, BREC_SKIP_DISABLE_QUICK_EDIT:'1', BILILIVERECORDER_DISABLE_FILE_LOG:'1', BREC_EPHEMERAL_AUTH:'1',
+        BREC_HLS_ENDPOINT:`http://127.0.0.1:${this.editorPort}/internal/recorder-hls`,
+        BREC_HLS_TOKEN:this.webhookSecret,
+      };
+      const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env});
       this.store.diagnostics?.attach(child.stdout,'B站核心输出');this.store.diagnostics?.attach(child.stderr,'B站核心错误');
       // Always drain the pipes, including embedded/test users without diagnostics.
       if(!this.store.diagnostics){child.stdout?.resume();child.stderr?.resume();}

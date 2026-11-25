@@ -75,6 +75,7 @@ namespace BililiveRecorder.Core.Recording
         public Guid SessionId { get; } = Guid.NewGuid();
 
         public int Qn => this.qn;
+        public bool HasRecordedOutput => this.progressWatchdog.HasRecordedOutput;
 
         #region Events
 
@@ -102,17 +103,35 @@ namespace BililiveRecorder.Core.Recording
                 throw new InvalidOperationException("Only one StartAsync call allowed per instance.");
             this.started = true;
 
-            var (fullUrl, codecQn) = await this.FetchStreamUrlAsync(this.room.RoomConfig.RoomId).ConfigureAwait(false);
+            var token = Environment.GetEnvironmentVariable("BREC_HLS_TOKEN");
+            var relay = BilibiliHlsRelay.ResolveEndpoint(Environment.GetEnvironmentVariable("BREC_HLS_ENDPOINT"),
+                token, this.room.RoomConfig.WebHookUrlsV2);
+            var source = await this.FetchStreamUrlAsync(this.room.RoomConfig.RoomId, relay != null).ConfigureAwait(false);
+            this.ct.ThrowIfCancellationRequested();
+            var fullUrl = source.Url;
+            var codecQn = source.Requested with { Qn = source.CurrentQn };
+            this.selectedRouteHost = source.Route;
 
             this.qn = codecQn.Qn;
             this.streamHost = new Uri(fullUrl).Host;
             var qnDesc = StreamQualityNumber.MapToString(codecQn.Qn);
 
             this.logger.Information("连接直播服务器 {Host} 录制画质 {Qn} ({QnDescription})", this.streamHost, codecQn, qnDesc);
-            this.logger.Debug("直播流地址 {Url}", fullUrl);
 
             Stream stream;
-            try { stream = await this.GetStreamAsync(fullUrl: fullUrl, timeout: (int)this.room.RoomConfig.TimingStreamConnect).ConfigureAwait(false); }
+            try
+            {
+                var timeout = (int)this.room.RoomConfig.TimingStreamConnect;
+                if (source.IsHls)
+                {
+                    this.logger.Information("使用 HLS 线路录制，保留原始音视频编码");
+                    this.streamHostFull = this.streamHost;
+                    stream = await BilibiliHlsRelay.OpenAsync(relay!, token!, this.room.RoomConfig.RoomId, fullUrl,
+                        Math.Max(30000, timeout), this.ct).ConfigureAwait(false);
+                }
+                else
+                    stream = await this.GetStreamAsync(fullUrl, timeout).ConfigureAwait(false);
+            }
             catch (Exception) when (!this.ct.IsCancellationRequested) { this.MarkStreamRouteFailed(); throw; }
 
             this.ioStatsLastTrigger = DateTimeOffset.UtcNow;
@@ -146,7 +165,8 @@ namespace BililiveRecorder.Core.Recording
 
         protected void MarkStreamRouteFailed()
         {
-            if (this.selectedRouteHost is { Length: > 0 } host) StreamRouteHealth.Shared.Failed(this.room.RoomConfig.RoomId, host, DateTimeOffset.UtcNow);
+            if (!this.ct.IsCancellationRequested && this.selectedRouteHost is { Length: > 0 } host)
+                StreamRouteHealth.Shared.Failed(this.room.RoomConfig.RoomId, host, DateTimeOffset.UtcNow);
         }
         private string? selectedRouteHost;
 
@@ -247,14 +267,16 @@ namespace BililiveRecorder.Core.Recording
         }
 
         internal static readonly char[] QnParseSeparator = new[] { ',', '，', '、', ' ' };
-        private static IReadOnlyList<StreamCodecQn> ParseAllowedQn(string? allowedQn)
+        internal static IReadOnlyList<StreamCodecQn> ParseAllowedQn(string? allowedQn)
         {
             if (string.IsNullOrWhiteSpace(allowedQn)) return Array.Empty<StreamCodecQn>();
 
             var qns = allowedQn!.Split(QnParseSeparator, StringSplitOptions.RemoveEmptyEntries)
                 .Select(static x =>
                 {
-                    if (int.TryParse(x, out var num))
+                    if (x.Equals("avc*", StringComparison.OrdinalIgnoreCase))
+                        return new StreamCodecQn { Qn = BilibiliRecordingSource.AnyCurrentQuality, Codec = StreamCodec.AVC };
+                    if (int.TryParse(x, out var num) && num >= 0)
                     {
                         return new StreamCodecQn
                         {
@@ -264,7 +286,7 @@ namespace BililiveRecorder.Core.Recording
                     }
                     else if (x.StartsWith("avc", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (int.TryParse(x[3..], out num))
+                        if (int.TryParse(x[3..], out num) && num >= 0)
                         {
                             return new StreamCodecQn
                             {
@@ -275,7 +297,7 @@ namespace BililiveRecorder.Core.Recording
                     }
                     else if (x.StartsWith("hevc", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (int.TryParse(x[4..], out num))
+                        if (int.TryParse(x[4..], out num) && num >= 0)
                         {
                             return new StreamCodecQn
                             {
@@ -292,94 +314,40 @@ namespace BililiveRecorder.Core.Recording
                         Codec = StreamCodec.AVC
                     };
                 })
-                .Where(x => x.Qn >= 0)
+                .Where(x => x.Qn >= 0 || x.Qn == BilibiliRecordingSource.AnyCurrentQuality)
                 .ToList();
 
             return qns;
         }
 
-        protected async Task<(string url, StreamCodecQn codecQn)> FetchStreamUrlAsync(int roomid)
+        private async Task<BilibiliRecordingSource> FetchStreamUrlAsync(int roomId, bool allowHls)
         {
-            var allowedQn = ParseAllowedQn(this.room.RoomConfig.RecordingQuality);
+            var qualities = ParseAllowedQn(this.room.RoomConfig.RecordingQuality);
 
-            // 优先使用用户脚本获取直播流地址
-            if (this.userScriptRunner.CallOnFetchStreamUrl(this.logger, roomid, allowedQn) is { } urlFromScript)
+            if (this.userScriptRunner.CallOnFetchStreamUrl(this.logger, roomId, qualities) is { } urlFromScript)
             {
-                this.logger.Information("使用用户脚本返回的直播流地址 {Url}", urlFromScript);
-                return (urlFromScript, new StreamCodecQn { Codec = StreamCodec.AVC, Qn = -1 });
+                this.logger.Information("使用用户脚本返回的直播流地址");
+                return new(urlFromScript, string.Empty, false, new StreamCodecQn { Codec = StreamCodec.AVC, Qn = -1 }, -1);
             }
 
-            const int DefaultQn = 10000;
-            var codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: roomid, qn: DefaultQn).ConfigureAwait(false);
-            //?? throw new Exception("no supported stream url, qn: " + DefaultQn);
-
-            var allAvailableCodecQn = new List<StreamCodecQn>();
-
-            if (codecItems.avc is not null)
+            const int defaultQn = 10000;
+            async Task<BilibiliRecordingSource> SelectAsync(int qn)
             {
-                allAvailableCodecQn.AddRange(codecItems.avc.AcceptQn.Select(x => new StreamCodecQn
-                {
-                    Codec = StreamCodec.AVC,
-                    Qn = x
-                }));
-            }
-            if (codecItems.hevc is not null)
-            {
-                allAvailableCodecQn.AddRange(codecItems.hevc.AcceptQn.Select(x => new StreamCodecQn
-                {
-                    Codec = StreamCodec.HEVC,
-                    Qn = x
-                }));
+                var response = await this.apiClient.GetStreamUrlAsync(roomId, qn).ConfigureAwait(false);
+                var streams = response.Data?.PlayurlInfo?.Playurl?.Streams ?? Array.Empty<Api.Model.RoomPlayInfo.StreamItem>();
+                var source = BilibiliRecordingSource.Select(streams, qualities, allowHls, StreamRouteHealth.Shared, roomId, DateTimeOffset.UtcNow);
+                if (source != null) return source;
+
+                this.logger.Warning("已开播，当前没有与录制设置兼容的直播线路；稍后重新检查。设置画质 {QnSettings}", qualities);
+                throw new NoMatchingQnValueException();
             }
 
-            StreamCodecQn selectedCodecQn;
-            // Select first avaiable qn
-            foreach (var qn in allowedQn)
-            {
-                if (allAvailableCodecQn.Contains(qn))
-                {
-                    selectedCodecQn = qn;
-                    goto match_qn_success;
-                }
-            }
-
-            this.logger.Information("没有符合设置要求的画质，稍后再试。设置画质 {QnSettings}, 可用画质 {AcceptQn}", allowedQn, allAvailableCodecQn);
-            throw new NoMatchingQnValueException();
-
-        match_qn_success:
-            this.logger.Debug("设置画质 {QnSettings}, 可用画质 {AcceptQn}, 最终选择 {SelectedQn}", allowedQn, allAvailableCodecQn, selectedCodecQn);
-
-            if (selectedCodecQn.Qn != DefaultQn)
-            {
-                // 最终选择的 qn 与默认不同，需要重新请求一次
-                codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: roomid, qn: selectedCodecQn.Qn).ConfigureAwait(false);
-            }
-
-            var item = selectedCodecQn.Codec switch
-            {
-                StreamCodec.AVC => codecItems.avc,
-                StreamCodec.HEVC => codecItems.hevc,
-                _ => throw new Exception("unknown codec")
-            };
-
-            if (item is null)
-                throw new Exception("no supported stream url for " + selectedCodecQn);
-
-            if (item.CurrentQn != selectedCodecQn.Qn)
-                this.logger.Information("平台提供画质 {CurrentQn}，请求画质 {SelectedQn}；继续录制平台实际提供的画质，不因此重启", item.CurrentQn, selectedCodecQn);
-
-            var url_infos = item.UrlInfos;
-            if (url_infos is null || url_infos.Length == 0)
-                throw new Exception("no url_info");
-
-            // Refreshing the API supplies fresh URLs; avoid a recently failed host
-            // without changing quality or restarting a healthy recording.
-            this.selectedRouteHost = StreamRouteHealth.Shared.Select(roomid, url_infos.Select(x => x.Host), DateTimeOffset.UtcNow);
-            var url_info = url_infos.First(x => x.Host == this.selectedRouteHost);
-
-            var fullUrl = url_info.Host + item.BaseUrl + url_info.Extra;
-
-            return (fullUrl, new StreamCodecQn { Codec = selectedCodecQn.Codec, Qn = item.CurrentQn });
+            var selected = await SelectAsync(defaultQn).ConfigureAwait(false);
+            if (selected.Requested.Qn != defaultQn && selected.CurrentQn != selected.Requested.Qn)
+                selected = await SelectAsync(selected.Requested.Qn).ConfigureAwait(false);
+            if (selected.CurrentQn != selected.Requested.Qn)
+                this.logger.Information("平台提供画质 {CurrentQn}，请求画质 {SelectedQn}；继续录制平台实际提供的画质，不因此重启", selected.CurrentQn, selected.Requested);
+            return selected;
         }
 
         protected async Task<Stream> GetStreamAsync(string fullUrl, int timeout)

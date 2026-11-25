@@ -104,41 +104,87 @@ export function safeStreamRedirect(input,origin) {
     return isPublicMediaIp(url.hostname)?url.href:'';
   }catch{return '';}
 }
-export function selectDouyinFlv(stream = {}) {
-  const candidates = [], incompatible=new Set(),priorities = { origin:100,uhd:90,FULL_HD1:80,hd:80,HD1:60,sd:50,SD2:40,SD1:20,ld:20,md:10 };
-  for (const [quality, input] of Object.entries(stream.flv_pull_url || {})) {
-    const url = safeStreamUrl(input); if (url && !/h265|hevc|av1/i.test(quality)) candidates.push({ quality, url, priority: priorities[quality] || priorities[quality.toLowerCase()] || 10, bitrate: 0 });
-  }
-  try {
-    const sdk = stream.live_core_sdk_data?.pull_data?.stream_data;
-    const data = typeof sdk === 'string' ? JSON.parse(sdk) : sdk;
-    for (const [quality, entry] of Object.entries(data?.data || {})) {
-      if(quality==='ao')continue;
-      // The room API can return a separate compatible backup CDN for each
-      // quality. Keep main first when both offer the same quality and bitrate.
-      for (const variant of [entry?.main, entry?.backup]) {
-        if(!variant)continue;
-        let parameters;try{parameters=typeof variant.sdk_params==='string'?JSON.parse(variant.sdk_params):variant.sdk_params||{};}catch{continue;}
-        const url = safeStreamUrl(variant.flv), codec = String(parameters?.VCodec || parameters?.vcodec || parameters?.codec || '');
-        if(url&&/h265|hevc|av1/i.test(codec)){incompatible.add(url);continue;}
-        if (url) candidates.push({ quality, url, priority: priorities[quality] || priorities[quality.toLowerCase()] || 10, bitrate: Number(parameters?.vbitrate) || 0 });
-      }
-    }
-  } catch { /* A valid ordinary FLV list remains usable when an optional SDK field is malformed. */ }
-  candidates.sort((a, b) => b.priority - a.priority || b.bitrate - a.bitrate);
-  return candidates.find(candidate=>!incompatible.has(candidate.url)) || null;
+// A platform CDN can redirect an HLS playlist to a public IP. Relative
+// resources on that same origin inherit the verified redirect. A playlist
+// can never nominate another literal IP on its own.
+export function safeDouyinHlsResource(input, parent, root) {
+  const known = safeStreamUrl(input);
+  if (known) return known;
+  const redirected = safeStreamRedirect(input, root);
+  if (!redirected) return '';
+  try { return new URL(redirected).origin === new URL(parent).origin ? redirected : ''; }
+  catch { return ''; }
 }
 
-export function selectDouyinIndependentFlv(stream={}) {
-  // The web player pairs a pull_data's stream_data and extension. Never apply
-  // coordinates from another quality, an unrelated stream or the legacy mix.
-  const entries=Object.values(stream.pull_datas||{}).slice(0,16),candidates=[];
-  for(const entry of entries) {
-    const layout=douyinCameraLayout(entry?.extension);if(!layout)continue;
-    const selected=selectDouyinFlv({live_core_sdk_data:{pull_data:entry}});
-    if(selected)candidates.push({...selected,cameraLayout:layout});
+const qualityRanks = { origin:100, uhd:90, full_hd1:80, hd:80, hd1:60, sd:50, sd2:40, sd1:20, ld:20, md:10 };
+function parseStreamObject(value) {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return null; }
   }
-  return candidates.sort((a,b)=>b.priority-a.priority||b.bitrate-a.bitrate)[0]||null;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+export function douyinStreamCandidates(stream) {
+  if (!stream) return [];
+  const candidates = [], incompatible = new Set();
+  function add(protocol, input, quality, parameters = {}, cameraLayout) {
+    if (typeof input !== 'string' || /^ao$|audio.?only/i.test(quality)) return;
+    const url = safeStreamUrl(input);
+    if (!url) return;
+    const video = parameters.VCodec || parameters.vcodec || parameters.v_codec || parameters.codec || '';
+    const audio = parameters.ACodec || parameters.acodec || '';
+    // A legacy map sometimes repeats a URL whose SDK description identifies
+    // an unsupported codec. Exclude that URL from every alias.
+    if (/h\.?265|hevc|bytevc1|av01|av1|vp9/i.test(quality + ' ' + video) || /opus|ac-?3|mp3/i.test(audio)) {
+      incompatible.add(url);
+      return;
+    }
+    candidates.push({ protocol, url, quality, priority:qualityRanks[quality.toLowerCase()] ?? 10,
+      bitrate:Number(parameters.vbitrate) || 0, ...(cameraLayout ? {cameraLayout} : {}) });
+  }
+  function readSdk(pull, cameraLayout) {
+    const data = parseStreamObject(pull?.stream_data)?.data;
+    for (const [quality, entry] of Object.entries(data || {})) {
+      for (const variant of [entry?.main, entry?.backup]) {
+        if (!variant) continue;
+        const parameters = parseStreamObject(variant.sdk_params || {});
+        if (!parameters) continue;
+        add('flv', variant.flv, quality, parameters, cameraLayout);
+        add('hls', variant.hls, quality, parameters, cameraLayout);
+      }
+    }
+  }
+
+  for (const pull of Object.values(stream.pull_datas || {}).slice(0, 16)) {
+    const layout = douyinCameraLayout(pull?.extension);
+    if (layout) readSdk(pull, layout);
+  }
+  readSdk(stream.live_core_sdk_data?.pull_data);
+  for (const [quality, url] of Object.entries(stream.flv_pull_url || {})) {
+    add('flv', url, quality, parseStreamObject(stream.flv_pull_url_params?.[quality]) || {});
+  }
+  for (const [quality, url] of Object.entries(stream.hls_pull_url_map || {})) add('hls', url, quality);
+  add('hls', stream.hls_pull_url, 'default', parseStreamObject(stream.hls_pull_url_params) || {});
+
+  // Keep the existing independent-camera FLV and mixed FLV preferences.
+  // Carry the exact crop on each candidate when switching CDNs or protocols.
+  candidates.sort((a, b) => Number(a.protocol === 'hls') - Number(b.protocol === 'hls')
+    || Number(Boolean(b.cameraLayout)) - Number(Boolean(a.cameraLayout))
+    || b.priority - a.priority || b.bitrate - a.bitrate);
+  const seen = new Set(incompatible);
+  return candidates.filter(candidate => {
+    if (seen.has(candidate.url)) return false;
+    seen.add(candidate.url);
+    return true;
+  });
+}
+
+export function selectDouyinFlv(stream) {
+  return douyinStreamCandidates({...stream, pull_datas:undefined}).find(candidate => candidate.protocol === 'flv') ?? null;
+}
+
+export function selectDouyinIndependentFlv(stream) {
+  return douyinStreamCandidates(stream).find(candidate => candidate.protocol === 'flv' && candidate.cameraLayout) ?? null;
 }
 
 export class DouyinResolver {
@@ -202,12 +248,12 @@ export class DouyinResolver {
     }
     const room = data?.data?.data?.[0];
     if (data.status_code !== 0 || !room || ![2,3,4].includes(Number(room.status))) throw new Error('抖音直播信息无效，请稍后重试。');
-    const roomId = String(room.id_str || ''), stream = Number(room.status) === 2 ? selectDouyinIndependentFlv(room.stream_url)||selectDouyinFlv(room.stream_url) : null;
+    const roomId = String(room.id_str || ''), streams = Number(room.status) === 2 ? douyinStreamCandidates(room.stream_url) : [];
     if (!/^\d{1,20}$/.test(roomId)) throw new Error('抖音未返回有效房间编号。');
     return { platform: 'douyin', webRid, roomId, streaming: Number(room.status) === 2,
       ownerId:String(room.owner?.id_str||data.data.user?.id_str||''),
       title: String(room.title || '抖音直播').slice(0,300), name: String(room.owner?.nickname || data.data.user?.nickname || '抖音直播间').slice(0,100),
-      stream, cookie: visitor.cookie, userUniqueId: visitor.userUniqueId };
+      stream:streams[0] ?? null, streams, cookie: visitor.cookie, userUniqueId: visitor.userUniqueId };
   }
   async linkmic({roomId,anchorId,channel,version,scene,signal}) {
     if(![roomId,anchorId,channel].every(value=>/^\d{1,20}$/.test(value)))throw new Error('连麦房间编号无效。');

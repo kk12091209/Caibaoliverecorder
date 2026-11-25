@@ -1,5 +1,5 @@
 import {FlvRecorder} from './flv-recorder.js';
-import {XiaohongshuResolver, XHS_USER_AGENT, isXiaohongshuLink, safeXiaohongshuStream, safeXiaohongshuRedirect} from './xiaohongshu-room.js';
+import {XiaohongshuResolver, XHS_USER_AGENT, isXiaohongshuLink, safeXiaohongshuStream, safeXiaohongshuRedirect, safeXiaohongshuResource} from './xiaohongshu-room.js';
 import {XiaohongshuChat} from './xiaohongshu-chat.js';
 import {XiaohongshuWebSession} from './xiaohongshu-web-session.js';
 
@@ -22,6 +22,8 @@ export class XiaohongshuPlatform {
       referer: 'https://www.xiaohongshu.com/',
       streamUrl: safeXiaohongshuStream,
       streamRedirect: safeXiaohongshuRedirect,
+      streamResource: safeXiaohongshuResource,
+      ffmpeg: options.ffmpeg,
       ...options.xiaohongshu,
     });
     if (this.core.resolver instanceof XiaohongshuResolver && !this.core.resolver.session) this.core.resolver.session = this.session;

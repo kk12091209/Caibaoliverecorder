@@ -30,6 +30,7 @@ import { SessionDeletion } from './session-deletion.js';
 import { WaveformService } from './waveform.js';
 import { DensityService } from './density.js';
 import { MultiPlatformRecorder } from './multi-platform-recorder.js';
+import { serveBilibiliHls } from './bilibili-hls-bridge.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
 import { DesktopExit } from './desktop-exit.js';
@@ -78,7 +79,7 @@ async function createManagedApp(options,runtime) {
   store.giftIcons=new GiftIcons(store,{ffmpeg});
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
-  const recorder=new MultiPlatformRecorder(store,{credentials,executable,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,xiaohongshu:options.xiaohongshu,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
+  const recorder=new MultiPlatformRecorder(store,{credentials,executable,ffmpeg,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,xiaohongshu:options.xiaohongshu,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
   const lotteries=new LotteryRecorder(store,options.lotteryOptions);
   const cookieValidation=new PlatformCookieValidation(credentials,recorder.platforms,{diagnostics});
   const credentialSnapshot=()=>({...credentials.snapshot(),checks:Object.fromEntries(COOKIE_PLATFORMS.map(platform=>[platform,cookieValidation.status(platform)])),bilibiliCore:{...recorder.bilibili.credentialStatus}});
@@ -159,6 +160,13 @@ async function createManagedApp(options,runtime) {
       // Record only the operation name, never query strings or request bodies.
       if(req.method==='POST'&&p.startsWith('/api/'))res.once('finish',()=>{const parts=p.split('/');diagnostics.record('操作结果',`${parts[2]} / ${parts.length>4?parts.at(-1):''}；HTTP ${res.statusCode}`,{level:res.statusCode>=400?'警告':'信息'});});
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
+      if(p==='/internal/recorder-hls'){
+        return await serveBilibiliHls(req,res,{
+          token:recorder.bilibili.webhookSecret, ffmpeg, diagnostics,
+          stopping:closing||runtime.stopping||autoUpdate.applying,
+          shutdownSignal:recorder.bilibili.shutdown.signal,
+        });
+      }
       if(p!=='/internal/desktop'&&p!=='/internal/recorder-event'&&!requireLocalAccess(req,res,runtime))return;
       if(p==='/internal/desktop'){
         if(!runtime.authorized(req))return json(res,{error:'无效的桌面连接。'},403);

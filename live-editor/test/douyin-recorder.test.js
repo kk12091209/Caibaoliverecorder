@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {execFileSync} from 'node:child_process';
 import {DouyinRecorder,chatXml} from '../server/douyin-recorder.js';
 import {DouyinFlv} from '../server/douyin-flv.js';
 import {Store} from '../server/store.js';
@@ -157,10 +158,24 @@ test('facade routes Douyin string namespace without touching Bilibili APIs',asyn
 test('XML serialization escapes user/content attributes and strips invalid control characters',()=>{
  const result=chatXml({messages:[{time:1.5,text:'<script>\u0000&',user:'"',id:'2',color:'16777215'}],density:[{second:1,count:100,kept:1}]});assert.ok(result.includes('&lt;script&gt;&amp;'));assert.ok(result.includes('user="&quot;"'));assert.equal(result.includes('\u0000'),false);
 });
-test('cancelling before the first video bytes seals the empty failed source instead of leaving indexing blocked',async t=>{
+test('stopping while a line has returned headers but no video cancels without enrolling an empty source',async t=>{
  const f=await fixture(t,{request:async(url,{signal})=>new Response(new ReadableStream({start(controller){signal.addEventListener('abort',()=>controller.close(),{once:true});}}))});
- f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.rooms[0].recording);await f.recorder.stopRoom('123');const source=f.store.sources(f.store.sessions()[0].id)[0];
- assert.equal(source.closed,2);assert.match(source.error,/未收到/);assert.equal(f.recorder.room('123').active,null);
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.recorder.room('123').active);
+ assert.equal(f.recorder.rooms[0].recording,false);await f.recorder.stopRoom('123');
+ assert.equal(f.store.sessions().length,0);assert.equal(f.recorder.room('123').active,null);
+});
+test('delayed chat credentials do not hold up the video or attach chat after the user stops',async t=>{
+ const f=await fixture(t);
+ let release;
+ f.recorder.resolver.cookie=()=>new Promise(resolve=>{release=resolve;});
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);
+ await until(()=>f.recorder.room('123').progress?.mediaMs>=2000);
+ assert.equal(f.writes.length,0);
+ const source=f.store.sources(f.recorder.room('123').session)[0];
+ assert.ok((await fs.stat(source.path)).size>13);
+ await f.recorder.stopRoom('123');
+ release({cookie:'',userUniqueId:'123'});await delay(0);
+ assert.equal(f.writes.length,0);assert.equal(f.recorder.rooms[0].recording,false);
 });
 test('turning auto recording off while offline disables monitoring; manual start can still record the current broadcast',async t=>{
  const f=await fixture(t);f.state.metadata.streaming=false;f.recorder.start();await f.recorder.add({webRid:'123'},true);await f.recorder.setAuto('123',false);assert.equal(f.recorder.rooms[0].recordingEnabled,false);
@@ -286,4 +301,43 @@ test('confirmed Douyin expiry reconnects chat anonymously while the same video s
  assert.equal(f.state.streams,1);
  const source=f.store.sources(f.store.sessions()[0].id)[0];
  assert.match(await fs.readFile(source.xml,'utf8'),/匿名接续后的弹幕/);
+});
+
+test('a failed Douyin camera FLV switches to mixed HLS and persists one decodable recording with its chat', async t => {
+  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg', ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
+  const segment = execFileSync(ffmpeg, ['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=160x90:rate=12',
+    '-f','lavfi','-i','sine=sample_rate=44100','-t','2','-threads','1','-c:v','libx264','-g','12','-c:a','aac','-f','mpegts','pipe:1']);
+  const base = 'https://pull-test.douyincdn.com', requests = [];
+  let playlistReads = 0;
+  const resolver = new DouyinResolver({ request:async url => String(url) === 'https://live.douyin.com/'
+    ? new Response('page',{headers:{'set-cookie':'ttwid=test'}})
+    : Response.json({status_code:0, data:{data:[{id_str:'901', status:2, owner:{id_str:'456'}, stream_url:{
+      pull_datas:{camera:{
+        extension:{game_clip:{x:0,y:.25,w:.5,h:.5},camera_clip:{x:.75,y:.25,w:.25,h:1/3}},
+        stream_data:{data:{origin:{main:{flv:base + '/camera.flv', sdk_params:{VCodec:'h264'}}}}}
+      }}, hls_pull_url:base + '/mixed.m3u8'
+    }}]}}) });
+  const f = await fixture(t, {resolver, ffmpeg, request:async (url, options) => {
+    requests.push(new URL(url).pathname);
+    assert.equal(new Headers(options.headers).has('cookie'), false);
+    if (url === base + '/camera.flv') return new Response(null,{status:503});
+    if (url === base + '/mixed.m3u8') return new Response('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\npart.ts\n' + (playlistReads++ ? '#EXT-X-ENDLIST' : ''));
+    assert.equal(url, base + '/part.ts');
+    return new Response(segment);
+  }});
+  f.recorder.start();
+  await f.recorder.add({webRid:'123'});
+  const room = f.recorder.entries.get('123');
+  await room.active;
+  assert.deepEqual(requests,['/camera.flv','/mixed.m3u8','/part.ts','/mixed.m3u8']);
+  assert.equal(f.store.sessions().length,1);
+  const [source] = f.store.sources(room.session);
+  assert.equal(f.store.sources(room.session).length,1);
+  assert.equal(source.error,'');
+  assert.ok(!f.store.setting('recording-camera:' + source.id));
+  assert.match(await fs.readFile(source.xml,'utf8'),/正常&amp;聊天/);
+  const metadata = JSON.parse(execFileSync(ffprobe,['-v','error','-show_format','-show_streams','-of','json',source.path]));
+  assert.deepEqual(metadata.streams.map(s=>s.codec_name),['h264','aac']);
+  assert.ok(Math.abs(Number(metadata.format.duration) - 2) < 0.3, metadata.format.duration);
+  execFileSync(ffmpeg,['-v','error','-i',source.path,'-f','null','-']);
 });

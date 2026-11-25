@@ -73,7 +73,7 @@ export class DouyinUserDiscovery{
     if(decimal(ownWebRid)){
       try{
         const metadata=await this.resolver.room(ownWebRid,{signal});
-        if(metadata.ownerId===uid&&metadata.streaming&&metadata.stream)return {state:'self-live',metadata};
+        if(metadata.ownerId===uid&&metadata.webRid===ownWebRid&&decimal(metadata.roomId)&&metadata.streaming)return {state:'self-live',metadata};
         if(metadata.ownerId===uid&&metadata.webRid===ownWebRid&&metadata.streaming===false)
           ownOffline={webRid:ownWebRid,roomId:metadata.roomId};
       }catch(error){signal?.throwIfAborted();}
@@ -86,7 +86,7 @@ export class DouyinUserDiscovery{
     const link=await resolveDouyinLink('https://webcast.amemv.com/douyin/webcast/reflow/'+candidate.roomId,{request:this.request,signal});
     const metadata=await this.resolver.room(link.webRid,{signal});
     if(metadata.roomId!==candidate.roomId)return {state:'unknown',reason:'直播间已发生变化，等待重新核验'};
-    if(!metadata.streaming||!metadata.stream)return {state:'unknown',reason:'主直播间暂未提供可录制画面'};
+    if(!metadata.streaming)return {state:'unknown',reason:'主直播间暂未确认开播'};
     if(metadata.ownerId===uid)return {state:'self-live',metadata};
     const people=await this.resolver.linkmic({roomId:metadata.roomId,anchorId:metadata.ownerId,channel:metadata.roomId,version:15,signal});
     if(!people.some(person=>person.id===uid))return {state:'unknown',reason:'未在当前连麦名单中核验到目标，等待确认'};

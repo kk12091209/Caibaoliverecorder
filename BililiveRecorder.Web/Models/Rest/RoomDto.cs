@@ -14,6 +14,7 @@ namespace BililiveRecorder.Web.Models.Rest
         public string? AreaNameParent { get; set; }
         public string? AreaNameChild { get; set; }
         public bool Recording { get; set; }
+        public bool RecordingHasOutput { get; set; }
         public bool Streaming { get; set; }
         public bool DanmakuConnected { get; set; }
         public bool AutoRecordForThisSession { get; set; }

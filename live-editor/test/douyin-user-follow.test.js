@@ -146,3 +146,26 @@ test('own-room offline cannot end a verified guest capture or make an idle monit
  assert.equal(f.following.snapshot[0].kind,'guest');
  assert.equal(f.recorder.rooms[0].recording,true);
 });
+
+test('confirmed live with no stream reports the waiting state, creates no media, and preserves a healthy writer',async t=>{
+  const f=await fixture(t),uid=await f.enable('111');
+  const own={state:'self-live',metadata:{...guest().metadata,ownerId:uid}};
+  const missing={...own,metadata:{...own.metadata,stream:null}};
+  f.replies.set(uid,missing); await f.poll();
+  let snapshot=f.following.snapshot[0];
+  assert.equal(snapshot.streaming,true);
+  assert.equal(snapshot.recording,false);
+  assert.match(snapshot.state,/等待可录制/);
+  assert.equal(f.streams,0);
+  const room=f.recorder.entries.get(own.metadata.webRid);
+  f.recorder.resolver.room=async()=>own.metadata;
+  await f.recorder.poll(true); await until(()=>room.recording);
+  const id=room.session;
+  await f.poll();
+  assert.equal(room.session,id);
+  assert.equal(room.recording,true);
+  f.replies.set(uid,{state:'unknown',reason:'暂无可靠身份'}); await f.poll();
+  snapshot=f.following.snapshot[0];
+  assert.equal(snapshot.streaming,false);
+  assert.equal(snapshot.recording,true);
+});

@@ -12,7 +12,7 @@ export class DouyinPlatform {
 
   constructor(store, options) {
     this.store = store;
-    this.core = new DouyinRecorder(store, { credentials: options.credentials, ...options.douyin });
+    this.core = new DouyinRecorder(store, { credentials: options.credentials, ffmpeg: options.ffmpeg, ...options.douyin });
     this.following = new DouyinUserFollow(store, { recorder: this.core, ...options.douyinFollow });
     this.roomTransfers = new Map();
     this.core.onRoomMetadata = (room, metadata) => this.adoptMonitoredRoom(room, metadata);
@@ -94,7 +94,7 @@ export class DouyinPlatform {
         this.following.save();
       }
       // Attach the running own-room capture before removing the old room intent.
-      if (target.enabled && metadata.streaming && metadata.stream) {
+      if (target.enabled && metadata.streaming) {
         target.generation++;
         target.abort?.abort();
         await this.following.check(target, { state: 'self-live', metadata });

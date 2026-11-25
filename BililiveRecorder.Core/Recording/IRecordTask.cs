@@ -9,6 +9,7 @@ namespace BililiveRecorder.Core.Recording
         Guid SessionId { get; }
 
         int Qn { get; }
+        bool HasRecordedOutput { get; }
 
         event EventHandler<IOStatsEventArgs>? IOStats;
         event EventHandler<RecordingStatsEventArgs>? RecordingStats;

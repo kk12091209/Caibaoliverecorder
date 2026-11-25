@@ -110,3 +110,15 @@ test('missing user status preserves verified own-room offline evidence only',asy
   metadata=original;
  }
 });
+
+test('the verified live host or guest stays identifiable when no compatible transport is advertised',async()=>{
+  const info={webRid:'123',roomId,ownerId:uid,streaming:true,stream:null};
+  const discovery=new DouyinUserDiscovery({resolver:{room:async()=>info,linkmic:async()=>[{id:uid}]},
+    request:async()=>new Response(null,{status:302,headers:{location:'https://live.douyin.com/123'}})});
+  discovery.json=async()=>response([user()]);
+  assert.deepEqual(await discovery.observe(uid,{ownWebRid:'123'}),{state:'self-live',metadata:info});
+  info.ownerId='77';
+  assert.deepEqual(await discovery.observe(uid),{state:'guest-confirmed',metadata:info});
+  discovery.resolver.linkmic=async()=>[{id:'78'}];
+  assert.equal((await discovery.observe(uid)).state,'unknown');
+});

@@ -20,6 +20,12 @@ namespace BililiveRecorder.Core.Recording
                     .ThenBy(host => this.failures.TryGetValue(room + ":" + host, out var until) ? until : DateTimeOffset.MinValue).First();
             }
         }
+        internal bool IsCoolingDown(int room, string host, DateTimeOffset now)
+        {
+            lock (this.sync)
+                return this.failures.TryGetValue(room + ":" + host, out var until) && until > now;
+        }
+
         internal void Failed(int room, string host, DateTimeOffset now)
         {
             if (string.IsNullOrEmpty(host)) return;

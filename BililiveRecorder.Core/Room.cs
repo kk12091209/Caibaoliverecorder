@@ -122,6 +122,7 @@ namespace BililiveRecorder.Core
         public bool DanmakuConnected { get => this.danmakuConnected; private set => this.SetField(ref this.danmakuConnected, value); }
 
         public bool Recording => this.recordTask != null;
+        public bool RecordingHasOutput => this.recordTask?.HasRecordedOutput == true;
 
         public RoomConfig RoomConfig { get; }
         public RoomStats Stats { get; } = new RoomStats();

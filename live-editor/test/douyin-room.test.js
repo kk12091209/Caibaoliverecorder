@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {resolveDouyinLink,isDouyinLink,selectDouyinFlv,safeStreamUrl,safeStreamRedirect,DouyinResolver} from '../server/douyin-room.js';
+import {resolveDouyinLink,isDouyinLink,selectDouyinFlv,douyinStreamCandidates,safeDouyinHlsResource,safeStreamUrl,safeStreamRedirect,DouyinResolver} from '../server/douyin-room.js';
 const cdn=name=>'https://pull-test.douyincdn.com/'+name+'.flv';
 
 test('platform CDN redirects can reach public IPv4/IPv6 without accepting direct IP stream inputs',()=>{
@@ -117,4 +117,53 @@ test('removing a login during a room lookup cannot return the old credentials to
  }});
  const pending=resolver.room('123');while(!release)await new Promise(resolve=>setImmediate(resolve));login='';release();
  const result=await pending;assert.equal(requests,2);assert.equal(result.cookie,'ttwid=anonymous');
+});
+
+test('Douyin supplies deduplicated FLV and HLS candidates including legacy maps and the SDK backup', async () => {
+  const hls = name => 'https://pull-test.douyincdn.com/' + name + '.m3u8';
+  const stream = {
+    flv_pull_url:{ SD1:cdn('main') }, hls_pull_url:hls('default'),
+    hls_pull_url_map:{ SD1:hls('low'), FULL_HD1:hls('high'), AO:hls('audio'), HD1:hls('opus') },
+    live_core_sdk_data:{ pull_data:{ stream_data:JSON.stringify({ data:{
+      origin:{ main:{ flv:cdn('main'), hls:hls('main'), sdk_params:{VCodec:'h264'} },
+               backup:{ flv:cdn('backup'), hls:hls('backup'), sdk_params:{VCodec:'h264'} } },
+      hd:{main:{hls:hls('opus'), sdk_params:{ACodec:'opus'}}},
+      low:{main:{hls:'https://unrelated.invalid/manifest.m3u8'}}
+    } }) } }
+  };
+  const candidates = douyinStreamCandidates(stream);
+  assert.deepEqual(candidates.map(candidate => candidate.url), [
+    cdn('main'), cdn('backup'), hls('main'), hls('backup'), hls('high'), hls('low'), hls('default')
+  ]);
+  assert.equal(candidates[0].protocol, 'flv');
+  assert.equal(candidates.at(-1).protocol, 'hls');
+  assert.equal(safeDouyinHlsResource('https://127.0.0.1/foo.ts',hls('playlist'),hls('root')), '');
+  const redirected = 'https://111.2.123.206/';
+  assert.equal(safeDouyinHlsResource(redirected + 'part.ts', redirected + 'list.m3u8', hls('root')), redirected + 'part.ts');
+  assert.equal(safeDouyinHlsResource('https://111.2.123.207/part.ts', redirected + 'list.m3u8', hls('root')), '');
+  assert.equal(safeDouyinHlsResource(redirected + 'part.ts', hls('playlist'), hls('root')), '');
+  assert.equal(safeStreamUrl('https://pull.douyincdn.com.example.com/foo.ts'), '');
+  assert.equal(safeStreamUrl('https://pull-test.douyincdn.com/init.mp4'), 'https://pull-test.douyincdn.com/init.mp4');
+  assert.equal(douyinStreamCandidates({hls_pull_url:'http://pull-test.douyincdn.com/official.m3u8'})[0].protocol, 'hls');
+  assert.deepEqual(douyinStreamCandidates({
+    hls_pull_url:hls('default'), hls_pull_url_params:'{"VCodec":"bytevc1"}',
+    hls_pull_url_map:{HD1:hls('default')}, flv_pull_url:{HD1:cdn('old')},
+    flv_pull_url_params:{HD1:{VCodec:'hevc'}}
+  }), []);
+
+  const resolver = new DouyinResolver({ request:async url => String(url) === 'https://live.douyin.com/'
+    ? new Response('page',{headers:{'set-cookie':'ttwid=example'}})
+    : Response.json({status_code:0, data:{data:[{status:2, id_str:'123', stream_url:{hls_pull_url:hls('only')}}]}}) });
+  const room = await resolver.room('111');
+  assert.equal(room.stream.protocol, 'hls');
+  assert.equal(room.stream.url, hls('only'));
+  assert.deepEqual(room.stream, room.streams[0]);
+});
+
+test('only the stream paired with validated independent-camera geometry carries the crop', () => {
+  const url = 'https://pull-test.douyincdn.com/camera.m3u8', mixed = cdn('mixed');
+  const entry = {extension:{game_clip:{x:0,y:0,w:0.8,h:0.8}, camera_clip:{x:0,y:0.8,w:0.2,h:0.2}},
+    stream_data:{data:{origin:{main:{hls:url}}}}};
+  const candidates = douyinStreamCandidates({pull_datas:{camera:entry},flv_pull_url:{FULL_HD1:mixed}});
+  assert.deepEqual(candidates.map(c => [c.url, Boolean(c.cameraLayout)]), [[mixed, false], [url, true]]);
 });

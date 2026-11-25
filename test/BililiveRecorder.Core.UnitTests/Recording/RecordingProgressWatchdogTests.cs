@@ -52,7 +52,24 @@ namespace BililiveRecorder.Core.UnitTests.Recording
         public void HeadersAloneAreNotEffectiveMedia()
         {
             var guard = Create(); guard.Written(20000, 100);
+            Assert.False(guard.HasRecordedOutput);
             Assert.Contains("尚未写入有效音视频", guard.Check(20000, 1, 10000));
+        }
+
+        [Theory]
+        [InlineData(0, -1)]
+        [InlineData(-1, 0)]
+        public void FirstCompletedMediaWriteConfirmsOutputUntilNextTask(int video, int audio)
+        {
+            var guard = Create();
+            guard.Written(1, 0, video, audio);
+            Assert.False(guard.HasRecordedOutput);
+            guard.Written(2, 100, video, audio);
+            Assert.True(guard.HasRecordedOutput);
+            guard.NewFile();
+            Assert.True(guard.HasRecordedOutput);
+            guard.Start(0, true);
+            Assert.False(guard.HasRecordedOutput);
         }
 
         [Theory]
@@ -84,7 +101,10 @@ namespace BililiveRecorder.Core.UnitTests.Recording
         [Fact]
         public void RawModeChecksActualWritesWithoutRequiringParsedFrames()
         {
-            var guard = Create(false); guard.Written(30000, 100);
+            var guard = Create(false);
+            Assert.False(guard.HasRecordedOutput);
+            guard.Written(30000, 100);
+            Assert.True(guard.HasRecordedOutput);
             Assert.Null(guard.Check(30000, 100, 10000));
             Assert.Contains("文件停止写入", guard.Check(45000, 100, 10000));
         }

@@ -13,7 +13,7 @@ export class DouyinUserFollow{
     for(const saved of Array.isArray(savedUsers)?savedUsers:[]){const uid=decimal(saved?.uid);if(!uid||this.targets.size>=64)continue;this.targets.set(uid,{uid,name:String(saved.name||'抖音用户').slice(0,100),secUid:String(saved.secUid||''),profile:String(saved.profile||''),ownWebRid:decimal(saved.ownWebRid),enabled:saved.enabled===true,generation:0,nextAt:0,state:saved.enabled?'监控中，等待开播或连麦':'已停止',failures:0});}
     recorder.followCaptured=room=>{for(const target of this.targets.values())if(target.active?.webRid===room.webRid)this.attachMaterial(target);};
   }
-  get snapshot(){return [...this.targets.values()].map(target=>({uid:target.uid,name:target.name,profile:target.profile,ownWebRid:target.ownWebRid||'',enabled:target.enabled,state:this.recorder.entries.get(target.active?.webRid)?.recoveryReason||target.state,kind:target.active?.kind||'',webRid:target.active?.webRid||'',host:target.active?.host||'',recording:!!target.active&&!!this.recorder.entries.get(target.active.webRid)?.recording,error:this.recorder.entries.get(target.active?.webRid)?.error||'',chatError:this.recorder.entries.get(target.active?.webRid)?.chatError||'',history:this.store.all('SELECT * FROM douyin_follow_intervals WHERE uid=? ORDER BY discovered DESC LIMIT 10',target.uid).map(row=>({...row,materials:this.store.all('SELECT session FROM douyin_follow_materials WHERE interval=?',row.id).map(item=>item.session)}))}));}
+  get snapshot(){return [...this.targets.values()].map(target=>({uid:target.uid,name:target.name,profile:target.profile,ownWebRid:target.ownWebRid||'',enabled:target.enabled,streaming:target.enabled && target.streaming === true,state:this.recorder.entries.get(target.active?.webRid)?.recoveryReason||target.state,kind:target.active?.kind||'',webRid:target.active?.webRid||'',host:target.active?.host||'',recording:!!target.active&&!!this.recorder.entries.get(target.active.webRid)?.recording,error:this.recorder.entries.get(target.active?.webRid)?.error||'',chatError:this.recorder.entries.get(target.active?.webRid)?.chatError||'',history:this.store.all('SELECT * FROM douyin_follow_intervals WHERE uid=? ORDER BY discovered DESC LIMIT 10',target.uid).map(row=>({...row,materials:this.store.all('SELECT session FROM douyin_follow_materials WHERE interval=?',row.id).map(item=>item.session)}))}));}
   save(){this.store.setting('douyin-follow-users',[...this.targets.values()].map(({uid,secUid,name,profile,ownWebRid,enabled})=>({uid,secUid,name,profile,ownWebRid,enabled})));}
   register(identity,{enabled=false}={}){
     if(this.closed)throw Error('录制服务已关闭。');if(!decimal(identity?.uid))throw Error('主播身份无效。');
@@ -37,7 +37,7 @@ export class DouyinUserFollow{
   schedule(){if(this.closed||this.paused||!this.started||this.timer)return;this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch{this.store.diagnostics?.record('连麦跟录','监控循环暂时失败，将继续重试。',{level:'警告'});}finally{this.schedule();}},1000);this.timer.unref?.();}
   async enable(uid,enabled){
     const target=this.targets.get(uid);if(!target||this.closed)throw Error('跟随用户不存在。');if(typeof enabled!=='boolean')throw Error('请明确选择是否开启监控。');
-    target.enabled=enabled;target.generation++;target.abort?.abort();target.nextAt=0;target.failures=0;target.exitSince=null;target.exitCount=0;this.save();
+    target.enabled=enabled;target.streaming=false;target.generation++;target.abort?.abort();target.nextAt=0;target.failures=0;target.exitSince=null;target.exitCount=0;this.save();
     if(!enabled)await this.finish(target,'用户停止');target.state=enabled?'监控中，等待开播或连麦':'已停止';
     if(enabled)void this.poll().catch(()=>{});
   }
@@ -57,11 +57,13 @@ export class DouyinUserFollow{
     try{
       const result=verified||await this.discovery.observe(target.uid,{ownWebRid:target.ownWebRid,signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});if(!current())return;
       target.failures=0;target.nextAt=this.now()+(target.active?this.pollMs:30000);this.attachMaterial(target);
+      target.streaming=false;
       const ownOffline=result.ownOffline,active=target.active;
       const ownBroadcastEnded=ownOffline&&active?.kind==='self'&&ownOffline.webRid===active.webRid&&
         (ownOffline.roomId===''||ownOffline.roomId===active.roomId);
       if(result.state==='guest-confirmed'||result.state==='self-live'&&result.metadata){
-        const m=result.metadata,kind=result.state==='self-live'?'self':'guest';if(!decimal(m?.webRid)||!decimal(m?.roomId)||!m.streaming||!m.stream||(m.ownerId===target.uid)!==(kind==='self'))throw Error('invalid verified room');
+        const m=result.metadata,kind=result.state==='self-live'?'self':'guest';if(!decimal(m?.webRid)||!decimal(m?.roomId)||!m.streaming||(m.ownerId===target.uid)!==(kind==='self'))throw Error('invalid verified room');
+        target.streaming=true;
         if(kind==='self'&&(target.ownWebRid!==m.webRid||target.name!==m.name)){target.ownWebRid=m.webRid;target.name=m.name;this.save();}
         target.lastVerified=this.now();target.exitCount=0;target.exitSince=null;
         if(!target.active||target.active.webRid!==m.webRid||target.active.roomId!==m.roomId){
@@ -73,7 +75,13 @@ export class DouyinUserFollow{
           const id=randomUUID();target.active={id,webRid:m.webRid,roomId:m.roomId,host:m.name,kind,since:this.now()};
           this.store.run('INSERT INTO douyin_follow_intervals(id,uid,name,web_rid,room_id,host,discovered,kind) VALUES(?,?,?,?,?,?,?,?)',id,target.uid,target.name,m.webRid,m.roomId,m.name,this.now(),kind);
         }
-        this.attachMaterial(target);target.state=kind==='self'?'本人直播中':'连麦跟录中';target.nextAt=this.now()+this.pollMs;
+        this.attachMaterial(target);
+        if (!m.stream && !this.recorder.entries.get(m.webRid)?.recording) {
+          target.state=kind==='self'?'本人开播，等待可录制画面':'已确认连麦，等待可录制画面';
+        } else {
+          target.state=kind==='self'?'本人直播中':'连麦跟录中';
+        }
+        target.nextAt=this.now()+this.pollMs;
       }else if(result.state==='offline-observation'||result.state==='self-live'||ownBroadcastEnded){
         target.exitCount=(target.exitCount||0)+1;target.exitSince??=this.now();
         const monitoring=result.state==='self-live'?'本人开播，等待可录制画面':'监控中，等待开播或连麦';
@@ -92,7 +100,7 @@ export class DouyinUserFollow{
           '待确认：'+String(result.reason||'状态暂时不可用').slice(0,100);
       }
     }catch{
-      if(!current())return;target.exitCount=0;target.exitSince=null;target.failures=Math.min(4,target.failures+1);target.nextAt=this.now()+Math.min(120000,this.pollMs*2**target.failures);target.state='待确认：查询失败，稍后重试';
+      if(!current())return;target.streaming=false;target.exitCount=0;target.exitSince=null;target.failures=Math.min(4,target.failures+1);target.nextAt=this.now()+Math.min(120000,this.pollMs*2**target.failures);target.state='待确认：查询失败，稍后重试';
     }finally{
       if(target.abort===controller)target.abort=null;
       if(current()&&target.active){

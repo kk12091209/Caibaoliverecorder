@@ -23,6 +23,7 @@ namespace BililiveRecorder.Core
         JObject? RawBilibiliApiJsonData { get; }
 
         bool Recording { get; }
+        bool RecordingHasOutput { get; }
         bool Streaming { get; }
         bool DanmakuConnected { get; }
         bool AutoRecordForThisSession { get; }
