@@ -10,12 +10,14 @@ export function useMessageBrowser({
 }) {
   const query=ref(''),messages=shallowRef([]),giftRows=shallowRef([]),lotteryRows=shallowRef([]);
   const showGiftList=ref(false),followMessages=ref(true),messageList=ref(null);
+  const searchChat=ref(true),searchGifts=ref(true);
   let queryTimer,messageRequest=0,dmBusy=false,lastMessageKey='';
   const messagePage=ref({hasBefore:false,hasAfter:false}),messageLoading=ref(false),messageFollowPaused=ref(false);
   const feedKey=row=>`${row.type==='d'?'d':row.type==='lottery'?'l':'g'}:${row.id}`;
   const messageWindowAnchor=ref(0),messageBrowseTime=ref(0),messageNavigationPinned=ref(false);
   const searchKeyword=computed(()=>query.value.trim());
   const searching=computed(()=>!!searchKeyword.value);
+  const emptySearch=computed(()=>searching.value&&!searchChat.value&&!searchGifts.value);
   const searchPattern=computed(()=>{
     const keyword=searchKeyword.value.slice(0,200);
     return keyword?new RegExp('('+keyword.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'):null;
@@ -68,18 +70,20 @@ export function useMessageBrowser({
   }
   function assignFeed(rows){messages.value=rows.filter(row=>row.type==='d');giftRows.value=rows.filter(row=>row.type!=='d'&&row.type!=='lottery');lotteryRows.value=rows.filter(row=>row.type==='lottery');}
   async function loadMessages(force=false,direction,at,dragSignal){
-    if(!selectionReady.value||!danmakuVisible.value||document.hidden)return;
+    if(!selectionReady.value||!danmakuVisible.value||document.hidden||emptySearch.value)return;
     if(dmBusy){if(!force)return;messageRequest++;dmBusy=false;}
     const scope={...messageRange.value},target=at!==undefined?Math.max(scope.from,Math.min(scope.to,at)):followMessageList.value?messageTime(position.value,duration.value):undefined;
     if(!force&&!direction&&(queryTimer||scrubbing.value||messageFollowPaused.value||messageMenu.value||modal.value))return;
     const id=selected.value,version=selectionVersion();
     const mode=searching.value?'search':showGiftList.value?'gifts':'chat';
-    const key=JSON.stringify([id,followMessageList.value?Math.floor(position.value/5):'all',searchKeyword.value,mode,activeSenderFilter.value]);
+    const searchKind=searchGifts.value?(searchChat.value?'all':'gifts'):'chat';
+    const key=JSON.stringify([id,followMessageList.value?Math.floor(position.value/5):'all',searchKeyword.value,mode,searchKind,activeSenderFilter.value]);
     if(!force&&!direction&&key===lastMessageKey)return;
     const request=++messageRequest;dmBusy=true;messageLoading.value=true;automaticMessageRequest=!force&&!direction;
     const anchor=messageList.value?.capture(),current=()=>!dragSignal?.aborted&&request===messageRequest&&version===selectionVersion()&&id===selected.value;
     try{
       const params=new URLSearchParams({q:searchKeyword.value,gifts:mode==='chat'?'0':'1',onlyGifts:mode==='gifts'?'1':'0',from:String(scope.from),to:String(scope.to)});
+      if(mode==='search')params.set('searchKind',searchKind);
       if(activeSenderFilter.value)params.set('sender',JSON.stringify(activeSenderFilter.value));
       if(direction){const row=direction==='before'?visibleMessages.value[0]:visibleMessages.value.at(-1);if(row)params.set('cursor',JSON.stringify({time:row.time,key:feedKey(row)}));params.set('direction',direction);}
       else if(target!==undefined)params.set('at',String(target));
@@ -125,6 +129,9 @@ export function useMessageBrowser({
   watch([position,followMessageList,danmakuVisible],followMessagePosition,{flush:'post'});
   watch(danmakuVisible,value=>{if(value)void loadMessages(true);});
   watch(selected,()=>{messageFollowPaused.value=false;messageWindowAnchor.value=0;messageBrowseTime.value=0;messageNavigationPinned.value=false;messagePage.value={hasBefore:false,hasAfter:false};});
+  watch(searching,value=>{
+    if(!value){searchChat.value=true;searchGifts.value=true;}
+  },{flush:'sync'});
   function searchChanged(){
     stopMessageDrag();
     messageNavigationPinned.value=false;
@@ -135,8 +142,10 @@ export function useMessageBrowser({
     dmBusy=false;
     assignFeed([]);
     messagePage.value={hasBefore:false,hasAfter:false};
-    messageLoading.value=selectionReady.value;
     clearTimeout(queryTimer);
+    queryTimer=null;
+    messageLoading.value=selectionReady.value&&!emptySearch.value;
+    if(emptySearch.value)return;
     queryTimer=setTimeout(()=>{queryTimer=null;void loadMessages(true);},250);
   }
   function changeGiftList(enabled){
@@ -165,7 +174,7 @@ export function useMessageBrowser({
   return {
     query, messages, giftRows, lotteryRows, showGiftList, followMessages, messageList, feedKey,
     messagePage, messageLoading, messageFollowPaused, messageBrowseTime, messageRange,
-    searchKeyword, searching, searchPattern, followMessageList, activeSenderFilter,
+    searchKeyword, searching, searchChat, searchGifts, emptySearch, searchPattern, followMessageList, activeSenderFilter,
     pauseMessageFollow, manualMessageScroll, syncMessageBrowseTime, jumpMessages, resumeMessageFollow,
     startMessageNavigation, previewMessageNavigation, stopMessageDrag, shouldFollowPlayback,
     loadMessages, loadMessagePage, searchChanged, changeGiftList, clearMessageSearch,

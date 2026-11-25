@@ -467,7 +467,7 @@ svg { flex-shrink: 0; }
 .playback-right { gap: 14px; margin-left: auto; }
 .preview-display-options { display: inline-flex; align-items: center; gap: 12px; flex: none; margin-left: auto; }
 .checkbox { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 12px; color: var(--muted); }
-.preview-display-options input[type=checkbox], .message-follow-control input[type=checkbox] { accent-color: var(--selection-edge, var(--rose)); }
+.preview-display-options input[type=checkbox], .message-follow-control input[type=checkbox], .message-search-filters input[type=checkbox] { accent-color: var(--selection-edge, var(--rose)); }
 
 .timeline-section { border-top: 1px solid var(--line); padding-top: 14px; }
 .recording-gap-notice { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--gap-notice-edge); border-radius: var(--radius-control); background: var(--warning-surface); color: var(--warning-text); font-size: 12px; line-height: 1.6; }
@@ -686,9 +686,11 @@ svg { flex-shrink: 0; }
 .message-follow-control label { display: flex; align-items: center; gap: 6px; width: fit-content; }
 .message-follow-control input { width: 14px; height: 14px; }
 .message-follow-paused { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-.message-search-scope { padding: 11px 2px; }
-.message-search-scope h2 { margin: 0 0 4px; font-size: 15px; }
-.message-search-scope small { color: var(--muted); font-size: 12px; }
+.message-search-scope { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 2px; }
+.message-search-scope h2 { margin: 0; font-size: 15px; }
+.message-search-filters { display: flex; align-items: center; gap: 12px; }
+.message-search-filters .checkbox { gap: 6px; }
+.message-search-filters input { width: 14px; height: 14px; }
 .danmaku-list { overflow: auto; flex: 1; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; padding: 0 4px 8px 12px; }
 .message-browser { display: flex; flex: 1; min-height: 0; padding-right: 6px; }
 .virtual-message-list > [data-row-key] { padding-bottom: 4px; }

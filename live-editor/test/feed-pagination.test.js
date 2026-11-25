@@ -67,10 +67,10 @@ test('任意时间定位可直达两小时末尾；异常弹幕时间和历史�
 });
 
 
-test('搜索覆盖当前窗口和礼物视图，旧礼物 UID 与弹幕按时间合并',async t=>{
+test('全场搜索按类型筛选后翻页，旧礼物 UID 与弹幕按时间合并',async t=>{
   const store=await fixture(t,0),source=store.addSource('history',path.join(store.root,'search.flv'),0);
   const uid='12345678901234567';
-  await fs.writeFile(source.xml,`<i><d p="10,1,25,16777215,0,0,${uid},0" user="同一观众">普通弹幕提到醒目留言</d><gift ts="130" uid="${uid}" user="同一观众" giftname="小花" total_price="2"/><sc ts="150" uid="${uid}" user="同一观众" price="30">一条付费内容</sc></i>`);
+  await fs.writeFile(source.xml,`<i><d p="10,1,25,16777215,0,0,${uid},0" user="同一观众">普通弹幕提到醒目留言和嘉年华</d><gift ts="130" uid="${uid}" user="同一观众" giftname="嘉年华" total_price="2"/><sc ts="150" uid="${uid}" user="同一观众" price="30">一条付费内容</sc></i>`);
   await new Ingestor(store).readDanmaku(source);
   store.run("INSERT INTO lottery_records(id,session,activity,room,time,first_seen,time_kind,phrase,state,last_live) VALUES('lottery-search','history','1',1,160,0,'draw','醒目留言抽奖','complete',0)");
   // Simulate an existing recording indexed before gift sender IDs were stored.
@@ -80,6 +80,19 @@ test('搜索覆盖当前窗口和礼物视图，旧礼物 UID 与弹幕按时间
   assert.deepEqual(messageFeed(store,'history',{gifts:true,onlyGifts:true}).rows.map(row=>row.type),['gift','sc','lottery']);
   const controls={gifts:false,onlyGifts:true,from:0,to:60,sender:{mode:'name',name:'其他观众'},style:{preview:true,export:false,minBilibili:100,minDouyin:0,currency:'CNY'}};
   assert.deepEqual(messageFeed(store,'history',{...controls,search:'醒目留言'}).rows.map(row=>[row.type,row.time]),[['d',10],['sc',150],['lottery',160]]);
+  const carnival={...controls,search:'嘉年华'};
+  assert.deepEqual(messageFeed(store,'history',carnival).rows.map(row=>row.type),['d','gift']);
+  assert.deepEqual(messageFeed(store,'history',{...carnival,searchKind:'chat'}).rows.map(row=>row.type),['d']);
+  assert.deepEqual(messageFeed(store,'history',{...carnival,searchKind:'gifts'}).rows.map(row=>row.type),['gift']);
+
+  const giftSearch={...controls,search:'醒目留言',searchKind:'gifts',limit:1};
+  const firstGiftPage=messageFeed(store,'history',giftSearch);
+  assert.deepEqual(firstGiftPage.rows.map(row=>row.type),['sc']);
+  assert.equal(firstGiftPage.hasAfter,true);
+  const nextGiftPage=messageFeed(store,'history',{...giftSearch,cursor:firstGiftPage.after});
+  assert.deepEqual(nextGiftPage.rows.map(row=>row.type),['lottery']);
+  assert.equal(nextGiftPage.hasAfter,false);
+
   for(const search of [uid,'同一观众']){
     assert.deepEqual(messageFeed(store,'history',{...controls,search}).rows.map(row=>[row.type,row.time]),[['d',10],['gift',130],['sc',150]]);
   }

@@ -102,7 +102,7 @@ export async function handleMaterialRoutes({req,res,url,p},{store,media,preparat
     const search=(params.get('q')||'').trim().slice(0,200);
     await store.chatRules.prepare(id);await store.senders.prepare(id);
     if(/^[1-9]\d{0,30}$/.test(search))await store.senders.prepare(id,true);
-    const page=messageFeed(store,id,{at,sender,from:params.has('from')?Number(params.get('from')):0,to:params.has('to')?Number(params.get('to')):undefined,search,gifts:params.get('gifts')==='1',onlyGifts:params.get('onlyGifts')==='1',
+    const page=messageFeed(store,id,{at,sender,from:params.has('from')?Number(params.get('from')):0,to:params.has('to')?Number(params.get('to')):undefined,search,searchKind:params.get('searchKind')??undefined,gifts:params.get('gifts')==='1',onlyGifts:params.get('onlyGifts')==='1',
       cursor:params.has('cursor')?JSON.parse(params.get('cursor')):undefined,direction:params.get('direction')||'after'});
     void store.giftIcons.enrich(page.rows.filter(row=>row.type!=='d'&&row.type!=='lottery')).catch(()=>{});
     return json(res,page);

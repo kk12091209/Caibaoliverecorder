@@ -318,7 +318,7 @@ const {
 const {
   query, messages, giftRows, lotteryRows, showGiftList, followMessages, messageList, feedKey,
   messagePage, messageLoading, messageFollowPaused, messageBrowseTime, messageRange,
-  searchKeyword, searching, searchPattern, followMessageList, activeSenderFilter,
+  searchKeyword, searching, searchChat, searchGifts, emptySearch, searchPattern, followMessageList, activeSenderFilter,
   pauseMessageFollow, manualMessageScroll, syncMessageBrowseTime, jumpMessages, resumeMessageFollow,
   startMessageNavigation, previewMessageNavigation, stopMessageDrag, shouldFollowPlayback,
   loadMessages, loadMessagePage, searchChanged, changeGiftList, clearMessageSearch,
@@ -1014,9 +1014,12 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
             </div>
             <button type="button" class="icon-button message-undo" :title="ui.workbench.撤销最近一次排除" :aria-label="ui.workbench.撤销弹幕删除" :disabled="!edit.undo.length||saving" @click="undoMessage"><RotateCcw :size="17"/></button>
           </div>
-          <div v-if="searching" class="message-search-scope" role="status">
+          <div v-if="searching" class="message-search-scope">
             <h2>{{ ui.workbench.全场搜索结果 }}</h2>
-            <small>{{ ui.workbench.全场搜索范围 }}</small>
+            <div class="message-search-filters" role="group" :aria-label="ui.workbench.记录类型" @keydown.stop>
+              <label class="checkbox"><input v-model="searchChat" type="checkbox" @change="searchChanged"/>{{ ui.workbench.弹幕 }}</label>
+              <label class="checkbox"><input v-model="searchGifts" type="checkbox" @change="searchChanged"/>{{ ui.gifts.礼物 }}</label>
+            </div>
           </div>
           <template v-else>
             <div class="message-modes" role="group" :aria-label="ui.workbench.记录类型" @keydown.stop>
@@ -1037,9 +1040,9 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
           <small v-if="senderWarning" role="status">{{ senderWarning }}</small>
         </div>
         <div class="message-browser" :class="{'message-searching':searching}">
-          <VirtualMessageList ref="messageList" :rows="visibleMessages" :automatic="followMessageList&&!messageFollowPaused" :busy="messageLoading" :has-before="messagePage.hasBefore" :has-after="messagePage.hasAfter||!followMessageList&&['recording','waiting'].includes(activeSession?.status)" :bounded="followMessageList" @time="syncMessageBrowseTime" @manual="manualMessageScroll" @page="loadMessagePage">
+          <VirtualMessageList ref="messageList" :rows="visibleMessages" :automatic="followMessageList&&!messageFollowPaused" :busy="messageLoading" :has-before="messagePage.hasBefore" :has-after="messagePage.hasAfter||!emptySearch&&!followMessageList&&['recording','waiting'].includes(activeSession?.status)" :bounded="followMessageList" @time="syncMessageBrowseTime" @manual="manualMessageScroll" @page="loadMessagePage">
             <template #empty>
-              <div v-if="!messageLoading" class="danmaku-empty"><Radio :size="28"/><strong>{{ searching?ui.workbench.没有匹配记录:showGiftList?ui.workbench.暂无礼物:ui.workbench.暂无弹幕 }}</strong></div>
+              <div v-if="!messageLoading&&!emptySearch" class="danmaku-empty"><Radio :size="28"/><strong>{{ searching?ui.workbench.没有匹配记录:showGiftList?ui.workbench.暂无礼物:ui.workbench.暂无弹幕 }}</strong></div>
             </template>
             <template #default="{message}">
               <div :id="'danmaku-'+message.id" class="danmaku-row" :class="{

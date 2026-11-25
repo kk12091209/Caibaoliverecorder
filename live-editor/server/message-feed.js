@@ -3,7 +3,7 @@ import {lotteryMessages} from './lottery-records.js';
 import {compareFeed,cursorFor,validateCursor} from './feed-cursor.js';
 import {messageTime} from '../shared/message-navigation.js';
 
-export function messageFeed(store,id,{search='',sender=null,gifts=false,onlyGifts=false,style,from=0,to,at,cursor,direction='after',limit=300}={}) {
+export function messageFeed(store,id,{search='',searchKind='all',sender=null,gifts=false,onlyGifts=false,style,from=0,to,at,cursor,direction='after',limit=300}={}) {
   const duration=messageTime(store.session(id)?.duration,store.session(id)?.duration);
   to??=duration;
   if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<0))throw new Error('弹幕列表时间范围无效。');
@@ -11,8 +11,9 @@ export function messageFeed(store,id,{search='',sender=null,gifts=false,onlyGift
   if(search){
     from=0;
     to=duration;
-    gifts=true;
-    onlyGifts=false;
+    if(!['all','chat','gifts'].includes(searchKind))throw new Error('搜索记录类型无效。');
+    gifts=searchKind!=='chat';
+    onlyGifts=searchKind==='gifts';
     sender=null;
     style=undefined;
   }
