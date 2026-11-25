@@ -7,6 +7,7 @@ import { Store } from '../server/store.js';
 import { ChatIntake } from '../server/chat-intake.js';
 import { chatRate, isLongChat, validateChatRate, CHAT_RATE_SETTING, RepeatWindow } from '../server/chat-rules.js';
 import { Media, assText } from '../server/media.js';
+import { danmakuAssSize } from '../server/danmaku-font.js';
 import { DANMAKU_FONT_SIZE } from '../src/danmaku-layout.js';
 import { RENDER_VERSION } from '../server/render-plan.js';
 import {createApp,fetch} from './helpers/authenticated-app.js';
@@ -88,13 +89,14 @@ test('上限1和50逐房间独立生效，调整时缩减排队批次且保持�
   const next=intake.take('a');assert.equal(next.messages.length,50);next.release();assert.equal(intake.bytes,0);
 });
 
-test('预览和成片字号均为原来的三分之二，缓存版本更新防止复用大字号成片',()=>{
+test('预览保留字号预设，成片转换为 ASS 尺寸，渲染版本区分旧缓存',()=>{
   assert.equal(DANMAKU_FONT_SIZE,22*2/3);
   for(const height of [360,720,1080,2160]){
     const output=assText([{time:0,text:'普通弹幕'}],1920,height),size=Number(output.match(/Style: Default,Microsoft YaHei,([^,]+)/)[1]);
-    assert.ok(Math.abs(size-Math.max(20,Math.round(height/24))*2/3)<.001);
+    const base=Number((Math.max(20,Math.round(height/24))*2/3).toFixed(3));
+    assert.equal(size,danmakuAssSize(base));
   }
-  assert.ok(RENDER_VERSION>=5);
+  assert.ok(RENDER_VERSION>=11);
 });
 
 test('B站和抖音XML索引均执行录制上限与长消息过滤，源文件保持原样',async t=>{

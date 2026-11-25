@@ -269,13 +269,21 @@ export class BilibiliPublisher {
       "SELECT 1 FROM bilibili_publisher_jobs WHERE status IN ('queued','uploading','submitting') LIMIT 1"));
   }
 
-  tick(authorize) {
+  yieldAutomaticUpload(){
+    const active=this.#active;
+    if(active?.automatic&&!active.committing&&!active.controller.signal.aborted){
+      active.controller.abort();
+      active.cancelUpload?.();
+    }
+  }
+
+  tick(authorize, { automaticAllowed = true } = {}) {
     if (this.#closed) return;
     if (this.#active) return this.#active.done;
-    const row = this.store.get("SELECT * FROM bilibili_publisher_jobs WHERE status='queued' ORDER BY rowid LIMIT 1");
+    const row = this.store.get("SELECT * FROM bilibili_publisher_jobs WHERE status='queued' AND (? OR owner_kind<>'auto') ORDER BY rowid LIMIT 1", +automaticAllowed);
     if (!row) return;
     const controller = new AbortController();
-    const active = { id: row.id, controller, progress: 0, cancelUpload: null, committing: false };
+    const active = { id: row.id, controller, progress: 0, cancelUpload: null, committing: false, automatic: row.owner_kind === 'auto' };
     this.#active = active;
     active.done = this.run(row, active, authorize).finally(() => { this.#active = null; });
     return active.done;
@@ -340,9 +348,12 @@ export class BilibiliPublisher {
           throw new PublicationError('B站 Cookie 或投稿账号已改变，请在设置中检查。');
         }
         const upload = new this.#sdk.WebVideoUploader({ path: part.path, title: part.title }, verified.client.auth, {
-          concurrency: 2, retryTimes: 2, retryDelay: 750,
+          // The SDK applies this limit per chunk in KiB/s. One chunk means
+          // the upload's aggregate rate is also bounded.
+          concurrency: active.automatic ? 1 : 2, limitRate: active.automatic ? 1024 : 0,
+          retryTimes: 2, retryDelay: 750,
         });
-        requestOptions(upload.request, signal, 12000);
+        requestOptions(upload.request, signal, active.automatic ? 90000 : 12000);
         active.cancelUpload = () => upload.cancel();
         upload.on('error', () => {});
         upload.on('progress', event => {

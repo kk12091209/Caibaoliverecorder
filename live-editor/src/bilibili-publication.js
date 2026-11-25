@@ -32,6 +32,8 @@ export function publicationStatus(status) {
   return ({
     queued: copy.等待导出,
     'waiting-source': copy.等待录制收尾,
+    'waiting-media': copy.等待媒体任务,
+    'waiting-upload': copy.等待上传,
     'waiting-idle': copy.等待系统空闲,
     'waiting-preparation': copy.等待自动预处理,
     preparing: copy.正在自动预处理,

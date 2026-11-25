@@ -145,14 +145,26 @@ test('preview and real H264 export retain matching glyph positions across both i
     await media.renderer.renderVideo(plan,plan.sources[0],time,time+1/60,file);
     const expected=execFileSync(ffmpeg,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','gray','pipe:1'],{input:rendered.bytes,maxBuffer:16*1024*1024,windowsHide:true});
     const actual=run(['-i',file,'-frames:v','1','-f','rawvideo','-pix_fmt','gray','pipe:1']);
-    let union=0,intersection=0,lower=0,error=0;
+    const closeToInk=(pixels,i,x)=>[i-STYLE_PREVIEW_WIDTH,i,i+STYLE_PREVIEW_WIDTH].some(center=>
+      pixels[center]>50||x>0&&pixels[center-1]>50||x+1<STYLE_PREVIEW_WIDTH&&pixels[center+1]>50);
+    let union=0,intersection=0,lower=0,error=0,expectedInk=0,actualInk=0,nearExpected=0,nearActual=0;
     for(let i=0;i<expected.length;i++){
-      const a=expected[i]>50,b=actual[i]>50;if(a||b){union++;if(a&&b)intersection++;error+=Math.abs(expected[i]-actual[i]);}
+      const a=expected[i]>50,b=actual[i]>50,x=i%STYLE_PREVIEW_WIDTH;
+      // Rasterizing an imported thin glyph after a subpixel move or H.264
+      // encode can move a thresholded edge by one pixel. Check ink size as
+      // well as positions, so tolerance cannot hide a font-scale regression.
+      if(a){expectedInk++;if(b||closeToInk(actual,i,x))nearExpected++;}
+      if(b){actualInk++;if(a||closeToInk(expected,i,x))nearActual++;}
+      if(a||b){union++;if(a&&b)intersection++;error+=Math.abs(expected[i]-actual[i]);}
       if(b&&i>=STYLE_PREVIEW_WIDTH*STYLE_PREVIEW_HEIGHT/2)lower++;
     }
     const overlap=intersection/union;
     t.diagnostic(`size=${style.size}, opacity=${style.opacity}, font=${fontId?'imported':'default'}, bright mask overlap=${(overlap*100).toFixed(2)}%, mean glyph error=${(error/union).toFixed(2)}, lower-half pixels=${lower}`);
-    assert.ok(union>100);assert.ok(lower>100);assert.ok(overlap>.94,`preview/export mask overlap ${overlap}`);assert.ok(error/union<12);
+    assert.ok(union>100);assert.ok(lower>100);assert.ok(overlap>.89,`preview/export mask overlap ${overlap}`);assert.ok(error/union<12);
+    const nearest=Math.min(nearExpected/expectedInk,nearActual/actualInk);
+    assert.ok(nearest>.95,`preview/export ink within one pixel: ${nearest}`);
+    const areaDifference=Math.abs(expectedInk-actualInk)/Math.max(expectedInk,actualInk);
+    assert.ok(areaDifference<.06,`preview/export glyph area differs by ${areaDifference}`);
     if(style.areaHeight){
       for(const pixels of [expected,actual]){
         assert.ok(!pixels.subarray(0,STYLE_PREVIEW_WIDTH*Math.floor(STYLE_PREVIEW_HEIGHT*style.areaTop)).some(value=>value>50));

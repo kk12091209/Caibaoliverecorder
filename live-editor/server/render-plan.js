@@ -13,6 +13,7 @@ import {foregroundRenderConcurrency} from './foreground-render-policy.js';
 export {exportSegments} from './export-plan.js';
 import { preparedEncoderArguments, checkpointEncoderArguments, videoGeometryFilter, detectExportEncoder, softwareEncoder, canCopyFullSource } from './export-encoding.js';
 import { clipFile } from './output-names.js';
+import {danmakuAssSize} from './danmaku-font.js';
 import { savedDanmakuStyle, normalizedDanmakuStyle, danmakuGeometry, danmakuDuration } from '../shared/danmaku-style.js';
 import { linkmicAss } from './linkmic.js';
 import { avatarFilter } from './linkmic-avatars.js';
@@ -25,7 +26,7 @@ import { recordingLayoutFilter } from './recording-layout.js';
 import {savedHighlightStyle,normalizedHighlightStyle} from '../shared/highlight-style.js';
 import {applyMessageEdit,messageEditsKey} from '../shared/message-edits.js';
 
-export const RENDER_VERSION = 10;
+export const RENDER_VERSION = 11;
 export const CPU_EXPORT_ROUTE = 'cpu-chunks-v1';
 export const CPU_CHECKPOINT_SECONDS = 60;
 export const hashRender = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -225,7 +226,8 @@ export class RenderPipeline {
     }
     const info=await this.media.probeSource(sources[0],sources[0].start,{...options,...(live?{fresh:true}:{})});
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
-    const selected=encoder||await this.encoder(options);
+    let selected=encoder||await this.encoder(options);
+    if(options.cpuCheckpoints&&snapshot.autoPost&&!selected.hardware)selected={...selected,threads:Math.min(2,selected.threads)};
     if(live&&(!selected.hardware||!['h264_videotoolbox','h264_nvenc','h264_qsv','h264_amf'].includes(selected.id)))return {waiting:'codec',live:true,blocks:[],allBlocks};
     const selectedFont=Object.hasOwn(snapshot,'font')?snapshot.font:this.media.fonts.selected();
     const font=selectedFont?.id?await this.media.fonts.selection(selectedFont.id):selectedFont;
@@ -239,9 +241,9 @@ export class RenderPipeline {
     const linkmicEvents=structuredClone(snapshot.linkmicEvents??this.store.linkmic?.events(id)??[]);
     const recordingStyle=Object.hasOwn(snapshot,'mode')?normalizedRecordingStyle(snapshot.recordingStyle??originalRecordingStyle()):savedRecordingStyle(this.store);
     const cameraEvents=recordingStyle.cameraPosition==='original'?[]:structuredClone(snapshot.cameraEvents??(Object.hasOwn(snapshot,'mode')?[]:this.store.linkmic?.cameraEvents?.(id)??[]));
-    const profile={font:font?.id||null,danmakuStyle,highlightStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
+    const profile={font:font?.id||null,assFontScale:danmakuAssSize(1,font),danmakuStyle,highlightStyle,danmakuPerSecond,version:RENDER_VERSION,width,height,fps:danmakuStyle.fps,encoder:selected,arguments:options.cpuCheckpoints?checkpointEncoderArguments(selected):preparedEncoderArguments(selected,this.media.idlePolicy?.threads||2),...(options.cpuCheckpoints?{checkpointSeconds:CPU_CHECKPOINT_SECONDS,cleanClock:'output-v1'}:{})};
     if(cameraEvents.length)profile.recordingStyle=recordingStyle;
-    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font,highlightStyle,highlighted,messageEdits}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
+    return {id,session,sources,info,font,profile,profileHash:hashRender(profile),linkmicEvents,recordingStyle,cameraEvents,automatic:!!snapshot.autoPost,cpuCheckpoints:!!options.cpuCheckpoints,layout:snapshot.mode==='clean'?[]:await this.layout(id,options.signal,danmakuPerSecond,{width,height,style:danmakuStyle,font,highlightStyle,highlighted,messageEdits}),snapshot:{excluded:new Set(snapshot.excluded||[]),filterLottery:snapshot.filterLottery!==false},blocks:live?liveSelection.blocks:renderBlocks(sources,this.blockSeconds,danmakuStyle.fps),...(live?{live,allBlocks,waiting:liveSelection.waiting,nextEligibleAt:liveSelection.nextEligibleAt,retryAfterMs:liveSelection.retryAfterMs}:{})};
   }
   async sourceFingerprint(source,from,to) {
     const stable=await stableSourceFingerprint(this.store,source,from,to);
@@ -382,7 +384,7 @@ export class RenderPipeline {
       }});
     return {...lease,spec};
   }
-  async prepareNext(id,{signal,onProgress,live}={}) {
+  async prepareNext(id,{signal,onProgress,live,automatic}={}) {
     const operation={sessionId:id},leases=[];this.operations.add(operation);
     try {
       const plan=await this.describe(id,this.store.edit(id),null,{signal,background:true,live});
@@ -424,13 +426,13 @@ export class RenderPipeline {
       const report=()=>({preparedSeconds:state.preparedSeconds,totalSeconds,bytes:state.bytes});
       onProgress?.(report());
       if(state.missing.length) {
-        const media=this.media,policy=media.idlePolicy,decision=live?{concurrency:1,reason:'live-recording'}:policy?await policy.choose(id,signature,plan,state.missing,cache):{concurrency:1};
+        const media=this.media,policy=media.idlePolicy,decision=live||automatic?{concurrency:1,reason:live?'live-recording':'automatic-publication'}:policy?await policy.choose(id,signature,plan,state.missing,cache):{concurrency:1};
         const timing=media.preparationContext?.getStore();if(timing)timing.policy={...decision};
         let batch=state.missing.slice(0,decision.concurrency);
         const adjacent=state.missing.slice(0,2).map(b=>({...b,from:b.startMs/1000,to:b.endMs/1000}));
         const sequenceBytes=adjacent.reduce((sum,p)=>sum+Math.ceil((p.to-p.from)*2*1024**2),0);
         const cacheUsed=[...(cache.entries?.values()||[])].reduce((sum,e)=>sum+e.bytes,0);
-        if(decision.concurrency===1&&!['last-block','cache-budget','disk-pressure','memory-pressure','small-device','resources-unavailable'].includes(decision.reason)&&
+        if(!automatic&&decision.concurrency===1&&!['last-block','cache-budget','disk-pressure','memory-pressure','small-device','resources-unavailable'].includes(decision.reason)&&
           this.sequenceAllowed(plan,adjacent)&&cacheUsed+(cache.reserved||0)+sequenceBytes<=cache.maxBytes)batch=state.missing.slice(0,2);
         operation.blocks=batch;
         const started=performance.now();
@@ -520,7 +522,7 @@ export class RenderPipeline {
   async renderForegroundParts(plan,parts,workDir,{onProgress,checkpoint}={}) {
     const prepared=parts.map((part,index)=>({...part,file:part.file||path.join(workDir,`part-${index}${plan.cleanVideo?'-danmaku':''}.mp4`),duration:frameSpan(part.from,part.to,plan.profile?.fps).duration}));
     const missing=prepared.filter(part=>!part.cached),cachedDuration=prepared.filter(part=>part.cached).reduce((sum,part)=>sum+part.duration,0),completedParts=new Set();
-    const concurrency=await foregroundRenderConcurrency(plan,missing,{recording:this.media.isRecording?.()===true,resources:this.media.idlePolicy?.resources});let reported=0;
+    const concurrency=await foregroundRenderConcurrency(plan,missing,{recording:plan.automatic||this.media.isRecording?.()===true,resources:this.media.idlePolicy?.resources});let reported=0;
     const progress=value=>{reported=Math.max(reported,value);onProgress?.(reported);};
     const renderAttempt=async concurrency=>{
       const pending=missing.filter(part=>!completedParts.has(part)),remaining=[];

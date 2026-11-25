@@ -15,6 +15,7 @@ import {DEFAULT_DANMAKU_STYLE,danmakuGeometry} from '../shared/danmaku-style.js'
 import {layoutComments,layoutCommentsAsync,commentSignature} from '../server/render-plan.js';
 import {layoutDanmaku} from '../src/danmaku-layout.js';
 import {assText} from '../server/media.js';
+import {danmakuAssSize} from '../server/danmaku-font.js';
 import {DEFAULT_GIFT_STYLE,validateGiftStyle,giftPrice,giftYuan} from '../shared/gifts.js';
 import {giftFromXml,saveGift,giftMessages} from '../server/gifts.js';
 import {decodeChat} from '../server/douyin-protocol.js';
@@ -68,7 +69,7 @@ test('mixed highlight sizes, sender prefixes and colors share browser/export lay
   assert.ok(Math.min(a.y+ah,b.y+bh)-Math.max(a.y,b.y)<.01,'sparse comments reserve real vertical size');
  }
  const state={},resumed=[];for(let n=0;n<raw.length;n+=3)resumed.push(...await layoutCommentsAsync(raw.slice(n,n+3),{...options,state}));assert.deepEqual(resumed,output);
- const ass=assText(output);assert.match(ass,/\\fs60/);assert.match(ass,/\\1c&HAB3412&/);assert.match(ass,/USER：SAMPLE/);
+ const ass=assText(output);assert.ok(ass.includes(`\\fs${danmakuAssSize(60)}`));assert.match(ass,/\\1c&HAB3412&/);assert.match(ass,/USER：SAMPLE/);
  assert.notEqual(commentSignature(output),commentSignature(layoutComments(raw,{...options,highlightStyle:{...highlightStyle,scale:1}})));
 });
 test('API filters before LIMIT, validates edits/settings atomically and persists independent single-message highlights',async t=>{

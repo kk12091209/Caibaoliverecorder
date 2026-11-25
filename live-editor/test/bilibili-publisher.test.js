@@ -333,3 +333,31 @@ test('closing while B站 could already have the draft records an uncertain submi
   assert.equal((await publisher.task(queued.taskId)).status, 'uncertain');
   assert.equal(requests.filter(row => row[0] === 'commit').length, 1);
 });
+
+test('automatic upload caps aggregate throughput and yields without committing twice', async t => {
+  const { publisher, requests, state, files } = await fixture(t);
+  const { taskId } = await publisher.submit({ ...request(files), owner: { kind: 'auto', id: 'recording-123' } });
+  await publisher.task(taskId);
+  assert.equal(publisher.tick(allow, { automaticAllowed: false }), undefined);
+
+  let started, finishPart;
+  const entered = new Promise(resolve => { started = resolve; });
+  state.onPart = () => new Promise(resolve => { finishPart = resolve; started(); });
+  state.cancelPart = () => finishPart();
+  const first = publisher.tick(allow);
+  await entered;
+  const options = requests.find(record => record[0] === 'uploader')[3];
+  assert.equal(options.concurrency, 1);
+  assert.equal(options.limitRate, 1024);
+  publisher.yieldAutomaticUpload();
+  await first;
+  assert.equal((await publisher.task(taskId)).status, 'queued');
+  assert.equal(requests.filter(record => record[0] === 'commit').length, 0);
+
+  delete state.onPart;
+  await publisher.tick(allow);
+  assert.equal((await publisher.task(taskId)).status, 'submitted');
+  const commits = requests.filter(record => record[0] === 'commit');
+  assert.equal(commits.length, 1);
+  assert.deepEqual(commits[0][1].map(part => part.title), ['弹幕版', '纯净版']);
+});

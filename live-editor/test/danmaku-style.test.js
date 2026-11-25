@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createApp,fetch} from './helpers/authenticated-app.js';
 import {assText} from '../server/media.js';
+import {danmakuAssSize} from '../server/danmaku-font.js';
 import {danmakuGeometry,validateDanmakuStyle,DANMAKU_SIZE_STEPS,DEFAULT_DANMAKU_STYLE,normalizedDanmakuStyle,DANMAKU_SPEED_STEPS,danmakuDuration,MIN_DANMAKU_AREA_HEIGHT,adjustDanmakuArea} from '../shared/danmaku-style.js';
 import {layoutDanmaku,commentX} from '../src/danmaku-layout.js';
 import {scrollingTracks} from '../shared/danmaku-tracks.js';
@@ -85,9 +86,9 @@ test('0.6 preserves export size across source resolutions; every size fits its l
   assert.equal(danmakuGeometry(1080,{size:1.5,opacity:100}).size,75);
 });
 test('ASS applies imported font, size and transparency to fill and outline, including fully transparent',()=>{
-  const text=assText([{time:0,text:'TEST',lane:7}],1920,1080,{family:'Custom Font'},{size:1.5,opacity:50});
-  assert.match(text,/Style: Default,Custom Font,75,&H80FFFFFF,&H80FFFFFF,&H80111111/);
-  assert.match(assText([{time:0,text:'TEST'}],1280,720,null,{size:0.6,opacity:0}),/20,&HFFFFFFFF,&HFFFFFFFF,&HFF111111/);
+  const text=assText([{time:0,text:'TEST',lane:7}],1920,1080,{family:'Custom Font',assScale:1.2},{size:1.5,opacity:50});
+  assert.match(text,/Style: Default,Custom Font,90,&H80FFFFFF,&H80FFFFFF,&H80111111/);
+  assert.ok(assText([{time:0,text:'TEST'}],1280,720,null,{size:0.6,opacity:0}).includes(`Default,Microsoft YaHei,${danmakuAssSize(20)},&HFFFFFFFF,&HFFFFFFFF,&HFF111111`));
   for(const value of [{size:0.5,opacity:100},{size:0.6,opacity:101},{size:0.6,opacity:2.2},{size:0.6,opacity:100,extra:true},null])assert.throws(()=>validateDanmakuStyle(value));
 });
 test('workbench export-style layout retains simultaneous bursts regardless of lane capacity and preserves six-second travel',()=>{

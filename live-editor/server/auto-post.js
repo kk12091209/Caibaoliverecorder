@@ -163,7 +163,8 @@ export class AutoPost {
   snapshot() {
     const busy = this.busy();
     const preparation = this.media.preparation;
-    const jobs = this.store.all(`SELECT p.*,s.status AS recording_status,${unfinishedSource} AS source_pending
+    const jobs = this.store.all(`SELECT p.*,s.status AS recording_status,${unfinishedSource} AS source_pending,
+      (SELECT status FROM jobs WHERE id=p.export_job) AS export_status
       FROM auto_post_jobs p JOIN sessions s ON s.id=p.session
       WHERE s.deleted_at='' ORDER BY s.created DESC LIMIT 200`).map(row => {
       const { title, mode, live } = JSON.parse(row.config);
@@ -171,11 +172,12 @@ export class AutoPost {
       let stage;
       if (row.status === 'queued') {
         if (row.recording_status !== 'finished' || row.source_pending) stage = 'waiting-source';
-        else if (busy) stage = 'waiting-idle';
+        else if (busy || this.media.canStartAutomaticMedia?.() === false) stage = 'waiting-idle';
         else if (preparation?.automaticExportPriority === row.session) {
           stage = preparation.active?.id === row.session ? 'preparing' : 'waiting-preparation';
-        }
-      }
+        } else stage = 'waiting-media';
+      } else if (row.status === 'exporting' && row.export_status === 'queued') stage = 'waiting-media';
+      else if (row.status === 'uploading' && result?.waitingUpload) stage = 'waiting-upload';
       return { id: row.session, session: row.session, title, mode, status: row.status, stage, error: row.error,
         parts: result?.parts?.map(part => ({ title: part.title })), progress: result?.progress,
         aid: result?.aid, bvid: result?.bvid, canRetry: live === true && row.status === 'failed' && !result?.taskId };
@@ -192,64 +194,71 @@ export class AutoPost {
   async process() {
     await this.refreshUploads();
     const preparation = this.media.preparation;
-    preparation?.prioritizeAutomaticExport();
     const busy = this.busy();
     const rows = this.store.all(`SELECT p.*,s.duration,s.status AS recording_status,${unfinishedSource} AS source_pending,
       (SELECT error FROM sources WHERE session=s.id AND closed<>2 AND error<>'' LIMIT 1) AS source_error
       FROM auto_post_jobs p JOIN sessions s ON s.id=p.session
       WHERE s.deleted_at='' AND p.status IN ('queued','exporting','blocked')
-      ORDER BY s.created ASC`);
-    for (const row of rows) {
-      const key = sourceAnchor(row.room), config = JSON.parse(row.config), current = this.store.setting(settingsKey(key));
-      if (!config.live || !current?.live || !current.enabled || config.enabledAt !== current.enabledAt ||
-          !this.hasAnchor(key)) {
-        this.status(row.session, 'cancelled');
-        continue;
-      }
-      if (row.source_error && ['finished', 'finishing'].includes(row.recording_status)) {
-        this.status(row.session, 'failed', row.source_error);
-        continue;
-      }
-      if (busy || row.recording_status !== 'finished' || row.source_pending || this.store.deletions?.has(row.session)) continue;
-      if (!this.uid || this.uid !== config.uid || this.uid !== current.uid) {
-        this.status(row.session, 'blocked', 'B站 Cookie 当前不可用或投稿账号已改变。');
-        continue;
-      }
-      try {
-        const publication = this.publisher.snapshot();
-        if (!publication.configured) {
-          this.status(row.session, 'blocked', publication.accountError || 'B站 Cookie 当前不可用。');
+      ORDER BY p.status='exporting' DESC,s.created ASC`);
+    try {
+      for (const row of rows) {
+        const key = sourceAnchor(row.room), config = JSON.parse(row.config), current = this.store.setting(settingsKey(key));
+        if (!config.live || !current?.live || !current.enabled || config.enabledAt !== current.enabledAt ||
+            !this.hasAnchor(key)) {
+          this.status(row.session, 'cancelled');
           continue;
         }
-        if (!row.duration || !config.title || config.title.length > 80) throw new Error('请检查录像时长和投稿标题。');
-        const existing = this.store.get("SELECT * FROM jobs WHERE session=? AND json_valid(data) AND json_extract(data,'$.autoPost')=? ORDER BY rowid DESC LIMIT 1", row.session, row.session);
-        if (!existing) {
-          if (preparation?.prioritizeAutomaticExport(row.session)) {
-            this.status(row.session, 'queued');
+        if (row.source_error && ['finished', 'finishing'].includes(row.recording_status)) {
+          this.status(row.session, 'failed', row.source_error);
+          continue;
+        }
+        if (busy || row.recording_status !== 'finished' || row.source_pending || this.store.deletions?.has(row.session)) continue;
+        if (!this.uid || this.uid !== config.uid || this.uid !== current.uid) {
+          this.status(row.session, 'blocked', 'B站 Cookie 当前不可用或投稿账号已改变。');
+          continue;
+        }
+        try {
+          const publication = this.publisher.snapshot();
+          if (!publication.configured) {
+            this.status(row.session, 'blocked', publication.accountError || 'B站 Cookie 当前不可用。');
+            continue;
+          }
+          if (!row.duration || !config.title || config.title.length > 80) throw new Error('请检查录像时长和投稿标题。');
+          const existing = this.store.get("SELECT * FROM jobs WHERE session=? AND json_valid(data) AND json_extract(data,'$.autoPost')=? ORDER BY rowid DESC LIMIT 1", row.session, row.session);
+          if (!existing) {
+            if (this.media.canStartAutomaticMedia?.() === false || this.media.hasForegroundWork?.({includeInteractive:false})) continue;
+            if (preparation?.prioritizeAutomaticExport(row.session)) {
+              this.status(row.session, 'queued');
+              return;
+            }
+            const job = await this.media.enqueue(row.session, { scope: 'full', mode: config.mode }, { autoPost: row.session });
+            this.store.run('UPDATE auto_post_jobs SET export_job=? WHERE session=?', job?.id ?? null, row.session);
+            this.status(row.session, 'exporting');
+            this.store.diagnostics?.record('自动投稿', `${key}：已加入导出队列。`);
             return;
           }
-          await this.media.enqueue(row.session, { scope: 'full', mode: config.mode }, { autoPost: row.session });
-          this.status(row.session, 'exporting');
-          this.store.diagnostics?.record('自动投稿', `${key}：已加入导出队列。`);
-          return;
-        }
-        if (existing.status === 'done') {
-          const files = await publicationFiles(this.store, existing, this.store.jobDetails(existing));
-          if (existing.mode !== config.mode || files.size !== (config.mode === 'dual' ? 2 : 1)) {
-            throw new Error('自动导出的成片已移动、修改或删除。');
+          if (existing.status === 'done') {
+            const files = await publicationFiles(this.store, existing, this.store.jobDetails(existing));
+            if (existing.mode !== config.mode || files.size !== (config.mode === 'dual' ? 2 : 1)) {
+              throw new Error('自动导出的成片已移动、修改或删除。');
+            }
+            await this.submit(row, config, existing, [...files.values()]);
+            return;
+          } else if (['queued', 'running', 'saving', 'finalizing', 'cancelling'].includes(existing.status)) {
+            this.status(row.session, 'exporting');
+          } else {
+            this.store.run(`UPDATE auto_post_jobs SET export_job=? WHERE session=?`, existing.id, row.session);
+            this.status(row.session, 'blocked', '请在导出任务中继续处理。');
           }
-          await this.submit(row, config, existing, [...files.values()]);
-          return;
-        } else if (['queued', 'running', 'saving', 'finalizing', 'cancelling'].includes(existing.status)) {
-          this.status(row.session, 'exporting');
-        } else {
-          this.store.run(`UPDATE auto_post_jobs SET export_job=? WHERE session=?`, existing.id, row.session);
-          this.status(row.session, 'blocked', '请在导出任务中继续处理。');
+        } catch (error) {
+          this.status(row.session, 'failed', error.message);
+          this.store.diagnostics?.record('自动投稿', error, { level: '警告' });
         }
-      } catch (error) {
-        this.status(row.session, 'failed', error.message);
-        this.store.diagnostics?.record('自动投稿', error, { level: '警告' });
       }
+    } finally {
+      // A health pause retains the selected material and its finished blocks.
+      const previous=preparation?.automaticExportPriority;
+      if(previous&&!this.store.get("SELECT 1 FROM auto_post_jobs WHERE session=? AND status='queued'",previous))preparation.prioritizeAutomaticExport();
     }
   }
 
@@ -282,7 +291,7 @@ export class AutoPost {
           if (!this.canSubmit(row, config, exportJob)) throw pausedBeforeSubmission;
         },
       });
-      this.saveResult(row.session, 'uploading', { ...result, taskId });
+      this.saveResult(row.session, 'uploading', { ...result, taskId, waitingUpload: true });
       this.store.diagnostics?.record('自动投稿', `${sourceAnchor(row.room)}：已加入投稿队列，共 ${parts.length} P。`);
     } catch (error) {
       if (error === pausedBeforeSubmission) {
@@ -306,7 +315,7 @@ export class AutoPost {
         const status = ['queued', 'submitting'].includes(current.status) ? 'uploading' : current.status;
         const error = current.error || (status === 'uncertain' ? unknownSubmission : '');
         const taskId = status === 'failed' && current.canRetry === true ? undefined : result.taskId;
-        this.saveResult(row.session, status, { ...result, taskId, progress: current.progress, aid: current.aid, bvid: current.bvid }, error);
+        this.saveResult(row.session, status, { ...result, taskId, progress: current.progress, aid: current.aid, bvid: current.bvid, waitingUpload: current.status === 'queued' }, error);
       } catch (error) {
         this.saveResult(row.session, error.taskMissing ? 'uncertain' : 'uploading', result,
           error.taskMissing ? unknownSubmission : error.message);

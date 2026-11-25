@@ -129,8 +129,13 @@ export class BackgroundPreparation {
     let reason;
     try { reason = this.gate(); }
     catch (error) { this.lastError = error.message; reason = 'foreground'; }
-    if (reason === 'recording' && this.liveEnabled) return this.tickLive();
-    if (reason) {
+    // Only the selected, finalized automatic-post material can use this
+    // admission path. Ordinary idle preparation retains its original gate.
+    const automatic = ['recording', 'indexing'].includes(reason) && this.automaticExportPriority &&
+      this.media.canStartAutomaticMedia?.() ? this.automaticExportPriority : null;
+    if (reason === 'recording' && this.liveEnabled && !automatic) return this.tickLive();
+    if (automatic && this.active && this.active.id !== automatic) return this.interrupt('recording');
+    if (reason && !automatic) {
       this.liveState = {active:false,sessionId:this.active?.live ? this.active.id : null,reason};
       // An explicit export consumer owns only this currently running batch.
       // Recording, invalidation, user pause and shutdown still cancel it.
@@ -158,16 +163,18 @@ export class BackgroundPreparation {
       ORDER BY CASE WHEN session=? THEN 0 ELSE 1 END,prepared_seconds DESC,updated,session`,
     now, this.automaticExportPriority ?? '');
     for (const row of candidates) {
-      if (!this.available(row.session)) continue;
+      if ((automatic && row.session !== automatic) || !this.available(row.session)) continue;
       const session = this.store.session(row.session), sources = this.store.sources(row.session);
       if (session.status !== 'finished' || !sources.length || sources.some(source => source.closed !== 2 || source.error)) {
         this.store.run("UPDATE preparation_jobs SET status='waiting',reason='source' WHERE session=?", row.session); continue;
       }
       // A newly queued item must be checked even if history spans many batches.
       await this.reconciliation.check(row.session);
-      if(this.closed||this.gate()||this.active)return this.active?.done;
+      const currentGate=this.gate();
+      if(this.closed||this.active||currentGate&&!(automatic===this.automaticExportPriority&&
+        ['recording','indexing'].includes(currentGate)&&this.media.canStartAutomaticMedia?.()))return this.active?.done;
       if(!this.available(row.session)||!['queued','waiting'].includes(this.row(row.session)?.status))continue;
-      const active = { id: row.session, generation: row.generation, controller: new AbortController(), reason: '', done: null };
+      const active = { id: row.session, automatic: row.session===this.automaticExportPriority, generation: row.generation, controller: new AbortController(), reason: '', done: null };
       this.active = active;
       this.store.run("UPDATE preparation_jobs SET status='preparing',reason='',error='',live_next_source_seconds=NULL,updated=? WHERE session=?", this.stamp(), row.session);
       active.done = Promise.resolve().then(() => this.perform(active)).finally(() => {
@@ -249,7 +256,7 @@ export class BackgroundPreparation {
     let outcome='interrupted';
     try {
       if (active.controller.signal.aborted || !this.current(active)) return;
-      const result = await this.media.prepareNext(active.id, { signal: active.controller.signal, ...(active.live ? {live:active.live} : {}), onProgress: value => this.progress(active, value) });
+      const result = await this.media.prepareNext(active.id, { signal: active.controller.signal, automatic: active.automatic, ...(active.live ? {live:active.live} : {}), onProgress: value => this.progress(active, value) });
       if (active.controller.signal.aborted) throw Object.assign(new Error('后台预处理已让出资源。'), { code: 'PREP_CANCELLED' });
       const row = this.current(active); if (!row || row.paused) return;
       if (!result || typeof result.done !== 'boolean') throw new Error('后台预处理没有返回有效状态。');

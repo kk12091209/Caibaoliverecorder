@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { Store } from '../server/store.js';
-import { DanmakuFonts, fontMetadata, MAX_FONT_BYTES } from '../server/danmaku-font.js';
+import { DanmakuFonts, danmakuAssSize, fontMetadata, MAX_FONT_BYTES } from '../server/danmaku-font.js';
 import { assText } from '../server/media.js';
 import {createApp,fetch} from './helpers/authenticated-app.js';
 function font(family='Test Font',advance=1000){
@@ -16,6 +16,17 @@ function font(family='Test Font',advance=1000){
 async function setup(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibo-font-test-')),store=new Store(root);t.after(async()=>{store.close();await fs.rm(root,{recursive:true,force:true});});return {root,store,fonts:new DanmakuFonts(store)};}
 test('字体名来自文件而非文件名，中文字体名安全用于 ASS',()=>{assert.equal(fontMetadata(font('测试字体')).family,'测试字体');assert.match(assText([{time:0,text:'hello'}],640,360,fontMetadata(font('测试字体'))),/Style: Default,测试字体,/);});
 test('宽字体的水平度量用于避让并随选择保留',async t=>{const {fonts}=await setup(t),selected=await fonts.import(font('Wide Font',3000));assert.ok(selected.advanceRatio>3);assert.equal(fonts.snapshot().advanceRatio,selected.advanceRatio);assert.equal((await fonts.selection(selected.id)).advanceRatio,selected.advanceRatio);});
+test('导出按自定义字体 em 和行高转换字号，普通和突出使用同一基准',async t=>{
+  const {fonts}=await setup(t),bytes=font('Measured Font'),offset=bytes.readUInt32BE(12+5*16+8);
+  bytes.writeInt16BE(1000,offset+4);
+  bytes.writeInt16BE(-250,offset+6);
+  const selected=await fonts.import(bytes),fontForRender=await fonts.selection(selected.id);
+  assert.equal(danmakuAssSize(20,fontForRender),25);
+  const normal=assText([{time:0,text:'ordinary'},{time:1,text:'H3x3d',highlighted:true}],1280,720,fontForRender,
+    undefined,{scale:2,showSender:false,color:'#00FF00'});
+  assert.match(normal,/Style: Default,Measured Font,25,/);
+  assert.match(normal,/\\fs50[^\n]*H3x3d/);
+});
 test('旧式 Mac 名称表的 ASCII 字体名也可导入',()=>{const bytes=font('AppleGothic'),nameOffset=bytes.readUInt32BE(20);bytes.writeUInt16BE(1,nameOffset+6);bytes.writeUInt16BE(0,nameOffset+8);bytes.writeUInt16BE(0,nameOffset+10);bytes.writeUInt16BE(11,nameOffset+14);bytes.write('AppleGothic',nameOffset+18);assert.equal(fontMetadata(bytes).family,'AppleGothic');});
 test('拒绝无效格式、表越界、超大文件和 ASS 名称注入',()=>{for(const bytes of [Buffer.from('not font'),Buffer.alloc(MAX_FONT_BYTES+1),font('bad,Default'),font('x\nInjected')])assert.throws(()=>fontMetadata(bytes));const bytes=font();bytes.writeUInt32BE(0xffffffff,20);assert.throws(()=>fontMetadata(bytes));});
 test('导入拷贝并持久保存，重设默认不破坏正在导出的字体快照',async t=>{const {fonts,store,root}=await setup(t);const selected=await fonts.import(font('Preview Font'));assert.equal(new DanmakuFonts(store).selected().id,selected.id);const work=path.join(root,'work');await fs.mkdir(work);fonts.reset();const relative=await fonts.stage(selected,work);assert.deepEqual(await fs.readFile(path.join(work,relative,'danmaku.ttf')),font('Preview Font'));assert.equal(fonts.selected(),null);});

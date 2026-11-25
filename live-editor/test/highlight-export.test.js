@@ -9,6 +9,7 @@ import {Ingestor} from '../server/ingest.js';
 import {Media} from '../server/media.js';
 import {HIGHLIGHT_SETTING} from '../shared/highlight-style.js';
 import {DanmakuStylePreview} from '../server/danmaku-style-preview.js';
+import {saveGift,giftFromXml} from '../server/gifts.js';
 import {DEFAULT_DANMAKU_STYLE} from '../shared/danmaku-style.js';
 const ffmpeg=process.env.FFMPEG_PATH,ffprobe=process.env.FFPROBE_PATH;
 test('real dual export freezes highlighted message and style; enlarged green text appears only in the baked file',async t=>{
@@ -43,4 +44,50 @@ test('real style preview paints selected highlight samples with custom color and
  const count=bytes=>{let n=0;for(let i=0;i<bytes.length;i+=3)if(bytes[i+1]>150&&bytes[i]<70&&bytes[i+2]<70)n++;return n;};
  assert.ok(count(colors(large.bytes))>count(colors(small.bytes))*1.5,'2x sample size changes actual preview pixels');
  if(process.env.CAIBO_HIGHLIGHT_EVIDENCE)await fs.writeFile(path.join(process.env.CAIBO_HIGHLIGHT_EVIDENCE,'highlight-style-preview.png'),large.bytes);
+});
+
+test('export preserves preview-scale glyph height with and without a real gift card', async t => {
+  if (!ffmpeg || !ffprobe) { t.skip('FFmpeg runtime is unavailable'); return; }
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'highlight-size-'));
+  const width = 640, height = 360, file = path.join(root, 'source.flv');
+  execFileSync(ffmpeg, ['-v','error','-f','lavfi','-i','color=c=0x101820:size=640x360:rate=15','-t','7',
+    '-c:v','libx264','-preset','ultrafast','-g','15','-pix_fmt','yuv420p','-f','flv','-y',file]);
+  const store = new Store(path.join(root, 'data'));
+  const media = new Media(store, { ffmpeg, ffprobe, exportAcceleration: 'software' });
+  t.after(async () => { await media.close(); store.close(); await fs.rm(root, { recursive:true, force:true }); });
+
+  const session = store.createSession({ status:'finished', title:'highlight-size' });
+  const source = store.addSource(session.id, file, 0, '2026-10-30T06:00:00Z', true);
+  await fs.writeFile(source.xml,'<i><d p="1,1,25,16777215,0,0,123,0" user="H3x3d">在</d></i>');
+  const ingest = new Ingestor(store);
+  await ingest.tick();
+  store.saveEdit(session.id, { ...store.edit(session.id), highlighted:[store.messages(session.id)[0].id] });
+  store.setting(HIGHLIGHT_SETTING, { scale:2.5, showSender:true, color:'#00FF00' });
+  saveGift(store,giftFromXml('gift',{ts:'2',user:'TEST',giftname:'SAMPLE',giftcount:'1',total_price:'198'},source,1));
+
+  const bounds = [];
+  const work = media.work.bind(media);
+  for (const giftsEnabled of [false,true]) {
+    media.work = () => {};
+    const job = await media.enqueue(session.id, { scope:'clips', ranges:[{start:0,end:6}], mode:'danmaku',
+      giftsEnabled, exportDirectory:path.join(root, 'out') });
+    media.work = work;
+    await work();
+    const row = store.get('SELECT * FROM jobs WHERE id=?', job.id);
+    assert.equal(row.status, 'done', row.error);
+    const pixels = execFileSync(ffmpeg, ['-v','error','-ss','4','-i',row.file,'-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','pipe:1']);
+    let minY = height, maxY = -1, giftPixels = 0;
+    for (let i = 0; i < pixels.length; i += 3) {
+      const [r,g,b] = [pixels[i],pixels[i+1],pixels[i+2]], x = i / 3 % width, y = Math.floor(i / 3 / width);
+      if (g > 110 && g > 1.8*r && g > 1.8*b) { minY = Math.min(minY,y); maxY = Math.max(maxY,y); }
+      if (x > width*.75 && y < height*.19 && r > g*1.3 && r > 31) giftPixels++;
+    }
+    assert.equal(giftPixels > 100, giftsEnabled);
+    bounds.push(maxY-minY+1);
+  }
+  // WKWebView measured 32px with the same 640x360 frame and selected scale.
+  // Allow for fallback-font and rasterization differences across runtimes.
+  assert.ok(bounds[0] >= 26 && bounds[0] <= 39, `unexpected rendered text heights: ${bounds}`);
+  if (process.platform === 'darwin') assert.ok(Math.abs(bounds[0]-32) <= 3, `macOS glyph height ${bounds[0]}`);
+  assert.ok(Math.abs(bounds[0]-bounds[1]) <= 1, `gift toggle changed glyph height: ${bounds}`);
 });

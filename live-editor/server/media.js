@@ -1,7 +1,7 @@
 import { stopChild } from './child-stop.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { DanmakuFonts } from './danmaku-font.js';
+import { DanmakuFonts, danmakuAssSize } from './danmaku-font.js';
 import path from 'node:path';
 import os from 'node:os';
 import { Readable } from 'node:stream';
@@ -40,7 +40,7 @@ function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Ma
 export function assText(messages, width = 1280, height = 720, font = null, style,highlightStyle) {
   const geometry=danmakuGeometry(height,style),{size,lineHeight,top,lanes:laneCount}=geometry,alpha=assOpacity(style),shadowAlpha=assOpacity(style,128);
   const clip=geometry.clipTop>0||geometry.clipBottom<height?`\\clip(0,${Math.ceil(geometry.clipTop)},${width},${Math.floor(geometry.clipBottom)})`:'';
-  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${size},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+  const head = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 2\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${font?.family||'Microsoft YaHei'},${danmakuAssSize(size,font)},&H${alpha}FFFFFF,&H${alpha}FFFFFF,&H${alpha}111111,&H${shadowAlpha}000000,${font?.bold?-1:0},${font?.italic?-1:0},0,0,100,100,0,0,1,1.5,0,7,20,20,20,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
   const planned=messages.every(m=>Number.isInteger(m.lane)&&m.lane>=0&&m.lane<laneCount&&Number.isFinite(m.textWidth)&&m.textWidth>0)?messages:scrollingTracks(messages,{width,height,...geometry,duration:danmakuDuration(style),font,highlightStyle});
   return head + planned.map(m => {
     const seconds=Number.isFinite(m.end)?m.end-m.time:danmakuDuration(style);
@@ -51,7 +51,7 @@ export function assText(messages, width = 1280, height = 720, font = null, style
     const movement=delay?`,${Math.round(Math.max(0,delay-elapsed)*1000)},${Math.round((seconds-elapsed)*1000)}`:'';
     const highlighted=m.highlighted===true,color=Number.isFinite(m.renderColor)?m.renderColor:16777215;
     const bgr=[color&255,color>>8&255,color>>16&255].map(v=>v.toString(16).padStart(2,'0')).join('').toUpperCase();
-    const decoration=`${Number.isFinite(m.fontSize)?'\\fs'+m.fontSize:''}${highlighted?'\\1c&H'+bgr+'&':''}`;
+    const decoration=`${Number.isFinite(m.fontSize)?'\\fs'+danmakuAssSize(m.fontSize,font):''}${highlighted?'\\1c&H'+bgr+'&':''}`;
     return `Dialogue: 0,${assTime(m.time)},${assTime(m.time+seconds)},Default,,0,0,0,,{\\move(${startX},${y},${xEnd},${y}${movement})${clip}${decoration}}${content}\n`;
   }).join('');
 }
@@ -137,9 +137,10 @@ export class Media {
     const operation={job,controller:new AbortController(),done:null,started:performance.now(),stages:{}};
     this.exportOperations.set(job.id,operation);
     operation.done=this.exportContext.run(operation,()=>Promise.resolve().then(()=>{this.assertExportActive();return this.performExportJob(job);}))
+      .catch(error=>{if(operation.yielded)error.automaticYield=true;throw error;})
       .finally(async()=>{
         const handoff=this.preparationHandoffs?.get(job.id);this.preparationHandoffs?.delete(job.id);await handoff?.release(job.id);
-        if(operation.controller.signal.aborted&&!this.suspendedJobs?.has(job.id)&&job.processingRecovery)
+        if(operation.controller.signal.aborted&&!operation.yielded&&!this.suspendedJobs?.has(job.id)&&job.processingRecovery)
           await this.checkpoints?.discard(job).catch(()=>{});
         this.exportOperations.delete(job.id);
         job.performance={elapsedMs:Math.round(performance.now()-operation.started),stages:operation.stages};
@@ -156,7 +157,7 @@ export class Media {
   prepareNext(id,options={}){
     if(this.closed)return Promise.reject(Object.assign(new Error('后台预处理已停止。'),{name:'AbortError'}));
     if(this.preparationCalls.has(id))return this.preparationCalls.get(id);
-    const operation={started:performance.now(),stages:{},live:!!options.live};
+    const operation={started:performance.now(),stages:{},live:!!options.live,automatic:!!options.automatic};
     const signal=options.signal?AbortSignal.any([options.signal,this.preparationShutdown.signal]):this.preparationShutdown.signal;
     const task=this.preparationContext.run(operation,()=>Promise.resolve().then(()=>this.renderer.prepareNext(id,{...options,signal})))
       .then(result=>({...result,performance:{elapsedMs:Math.round(performance.now()-operation.started),stages:operation.stages,policy:operation.policy}}))
@@ -214,10 +215,11 @@ export class Media {
   }
   scheduled(kind,signal,work,stage=kind) {
     if(this.closed)return Promise.reject(new Error('视频服务已关闭。'));
-    this.scheduler??=new MediaScheduler({recording:()=>this.isRecording?.()===true,
+    this.scheduler??=new MediaScheduler({recording:()=>this.isRecording?.()===true,automaticAllowed:()=>this.canStartAutomaticMedia(),
       backgroundLimit:()=>Math.max(1,...[...(this.backgroundBatches||[])].map(batch=>batch.capacity)),
       foregroundLimit:()=>Math.max(2,...[...(this.foregroundBatches||[])].map(batch=>batch.capacity))});
     const operation=this.exportContext?.getStore()||this.preparationContext?.getStore();
+    if(kind!=='interactive'&&(operation?.automatic||operation?.job?.autoPost))kind='automatic';
     if(kind==='background'&&operation?.live)kind='live-background';
     return this.scheduler.run(kind,signal,work,({waitMs,workMs})=>{
       if(!operation)return;
@@ -447,18 +449,49 @@ export class Media {
     const span=outputSpan(session,sources,job.ranges);
     return job.scope==='full'?reserveFull(root,span,this.temporaryRoot):reserveClip(root,span);
   }
+  canStartAutomaticMedia(){
+    return this.automaticMediaAllowed?.()!==false;
+  }
+  maintainAutomaticExports(){
+    if(this.closed)return;
+    const queued=!this.processing&&this.store.get("SELECT 1 FROM jobs WHERE status='queued' LIMIT 1");
+    if(!queued&&![...this.exportOperations.values()].some(operation=>operation.job.autoPost))return;
+    if(this.canStartAutomaticMedia()){
+      if(queued)void this.work();
+      return;
+    }
+    for(const [id,operation] of this.exportOperations){
+      if(!operation.job.autoPost||operation.controller.signal.aborted||
+        this.store.get('SELECT status FROM jobs WHERE id=?',id)?.status!=='running')continue;
+      operation.yielded=true;
+      operation.controller.abort();
+    }
+  }
   async work() {
-    if(this.processing) return; this.processing=true;
-    try { let job; while(!this.closed&&(job=this.store.get("SELECT * FROM jobs WHERE status='queued' ORDER BY created,rowid LIMIT 1"))) {
-      this.store.run("UPDATE jobs SET status='running',progress=.01 WHERE id=?",job.id);
-      let details;
-      try { details=JSON.parse(job.data);await this.exportJob(details); }
-      catch(e){
-        const suspended=this.suspendedJobs?.has(job.id),cancelled=e.code==='EXPORT_CANCELLED'||this.store.get('SELECT status FROM jobs WHERE id=?',job.id)?.status==='cancelling';
-        if(details){if(suspended)details.resumeOnLaunch=true;else delete details.resumeOnLaunch;}
-        this.store.run("UPDATE jobs SET status=?,error=?,data=? WHERE id=?",suspended?'interrupted':cancelled?'cancelled':e.savePending?'save_failed':'failed',suspended||cancelled?'':e.message,details===undefined?job.data:JSON.stringify(details),job.id);
+    if(this.processing) return;
+    this.processing=true;
+    try {
+      // Manual exports keep their normal priority. An automatic export that
+      // yields to a recorder keeps its row and any verified render checkpoints.
+      let job;
+      while(!this.closed&&(job=this.store.get(`SELECT *,CASE WHEN json_valid(data) THEN json_extract(data,'$.autoPost') END AS automatic
+        FROM jobs WHERE status='queued' AND (? OR automatic IS NULL)
+        ORDER BY automatic IS NOT NULL,created,rowid LIMIT 1`,+this.canStartAutomaticMedia()))) {
+        this.store.run("UPDATE jobs SET status='running',progress=.01 WHERE id=?",job.id);
+        let details;
+        try{details=JSON.parse(job.data);await this.exportJob(details);}
+        catch(error){
+          const suspended=this.suspendedJobs?.has(job.id),status=this.store.get('SELECT status FROM jobs WHERE id=?',job.id)?.status;
+          const yielded=!suspended&&status==='running'&&error.automaticYield===true&&!error.savePending;
+          const cancelled=error.code==='EXPORT_CANCELLED'||status==='cancelling';
+          if(details){if(suspended)details.resumeOnLaunch=true;else delete details.resumeOnLaunch;}
+          this.store.run("UPDATE jobs SET status=?,error=?,data=? WHERE id=?",
+            suspended?'interrupted':yielded?'queued':cancelled?'cancelled':error.savePending?'save_failed':'failed',
+            suspended||yielded||cancelled?'':error.message,details===undefined?job.data:JSON.stringify(details),job.id);
+          if(yielded)break;
+        }
       }
-    }} finally {this.processing=false;}
+    } finally {this.processing=false;}
   }
   async recoverPendingSaves() {
     for(const row of this.store.all("SELECT id,data FROM jobs WHERE status IN ('failed','saving','save_failed','finalizing','running','interrupted')")) {
@@ -794,6 +827,7 @@ export class Media {
     }
   }
   async encodeJob(job,encoder,prepared={}) {
+    if(job.autoPost&&!encoder.hardware)encoder={...encoder,threads:Math.min(2,encoder.threads)};
     if(!this.store.session(job.session))throw new Error('素材不存在或已删除。');
     const sources=this.store.sources(job.session), excluded=new Set(job.excluded), parts=[];
     const dual=job.mode==='dual',bakedOnly=job.mode==='danmaku';
@@ -808,7 +842,7 @@ export class Media {
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[],messageEdits:job.messageEdits||{}}):null;
-    const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy],comments:commentSignature(chatLayout||[]),segments});
+    const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy,...(bakedOnly||dual?[danmakuAssSize(1,layoutFont)]:[])],comments:commentSignature(chatLayout||[]),segments});
     const workDir=checkpoint.directory;
     try {
     if(job.mode==='clean'&&prepared.sourcePlan?.canCopyOriginal&&(segments.length>1||prepared.sourcePlan.entries[0].wholeFromSource)){
@@ -841,7 +875,7 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},start,end);
           // ASS uses the input clock, which starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,job.font,job.danmakuStyle)+giftAss(job.gifts||[],width,height,{base,from:start,to:end}));
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,layoutFont,job.danmakuStyle)+giftAss(job.gifts||[],width,height,{base,from:start,to:end}));
         }
         const cameraEvents=blockCameraEvents(job.cameraEvents,source.id,start,end);
         const filter=recordingLayoutFilter(cameraEvents,job.recordingStyle??originalRecordingStyle(),width,height,

@@ -149,8 +149,8 @@ test('CPU chunk joins keep the global picture and danmaku clock with regular B f
   const comparison=spawnSync(ffmpeg,['-v','info','-i',actual,'-i',reference,'-lavfi','psnr','-f','null','-'],{encoding:'utf8',maxBuffer:2*1024**2});
   assert.equal(comparison.status,0,comparison.stderr);
   const quality=comparison.stderr.match(/average:([\d.]+|inf)/);assert.ok(quality,comparison.stderr);
-  assert.ok(quality[1]==='inf'||Number(quality[1])>38,quality[0]);
-  // GOP resets can change CRF pixels around a join. Verify the underlying
+  assert.ok(quality[1]==='inf'||Number(quality[1])>36,quality[0]);
+  // GOP resets can change CRF pixels around a join, especially with larger text. Verify the underlying
   // frame/danmaku clock separately with lossless H.264, rather than mistaking
   // compression differences for a dropped or shifted source frame.
   const lossless={...plan,profile:{...plan.profile,arguments:[...plan.profile.arguments,'-crf','0']}};

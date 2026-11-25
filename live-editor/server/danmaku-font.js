@@ -30,8 +30,17 @@ export function fontMetadata(bytes){
   // https://learn.microsoft.com/en-us/typography/opentype/spec/hhea
   const hhea=tables.get('hhea'),em=head?.length>=20?head.readUInt16BE(18):0;
   const advanceRatio=hhea?.length>=12&&em>=16?Math.max(1.25,hhea.readUInt16BE(10)/em*1.15):1.25;
-  return {id:createHash('sha256').update(bytes).digest('hex'),family:matches[0].text,bold,italic,advanceRatio,extension:signature===0x4f54544f?'.otf':'.ttf'};
+  const winHeight=os2?.length>=78 ? os2.readInt16BE(74)+os2.readInt16BE(76) : 0;
+  const lineHeight=winHeight || (hhea?.length>=8 ? hhea.readInt16BE(4)-hhea.readInt16BE(6) : 0);
+  const assScale=em>=16 && lineHeight/em>=.5 && lineHeight/em<=3 ? lineHeight/em : undefined;
+  return {assScale,id:createHash('sha256').update(bytes).digest('hex'),family:matches[0].text,bold,italic,advanceRatio,extension:signature===0x4f54544f?'.otf':'.ttf'};
 }
+// Canvas sizes the em square. libass sizes the ascender–descender span.
+const defaultAssScale = process.platform === 'darwin' ? 1.38 : 1.32;
+export function danmakuAssSize(size, font) {
+  return Number((size * (font?.assScale ?? defaultAssScale)).toFixed(3));
+}
+
 export class DanmakuFonts{
   constructor(store){this.store=store;this.root=path.join(store.root,'fonts');this.changing=false;}
   snapshot(){const font=this.store.setting('danmaku-font');return font&&validHash(font.id)?{id:font.id,family:font.family,bold:!!font.bold,italic:!!font.italic,advanceRatio:font.advanceRatio||1.25,url:`/api/danmaku-font/${font.id}`} : null;}
@@ -39,7 +48,7 @@ export class DanmakuFonts{
   async directory(){await fs.mkdir(this.root,{recursive:true,mode:0o700});const stat=await fs.lstat(this.root);if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('字体目录异常。');}
   async file(font){if(!font||!validHash(font.id))throw new Error('字体记录无效。');await this.directory();for(const extension of ['.ttf','.otf']){const directory=path.join(this.root,font.id);const folder=await fs.lstat(directory);if(!folder.isDirectory()||folder.isSymbolicLink())throw new Error('字体目录异常。');const file=path.join(directory,'danmaku'+extension);try{const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink())throw new Error('字体文件类型异常。');const bytes=await fs.readFile(file);if(fontMetadata(bytes).id!==font.id)throw new Error('字体文件校验失败，请重新导入。');return file;}catch(error){if(error.code!=='ENOENT')throw error;}}throw new Error('字体文件不存在，请重新导入。');}
   async import(bytes,{select=true}={}){const font=fontMetadata(bytes);await this.directory();const directory=path.join(this.root,font.id);await fs.mkdir(directory,{recursive:true,mode:0o700});const stat=await fs.lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('字体目录异常。');const file=path.join(directory,'danmaku'+font.extension);try{await fs.writeFile(file,bytes,{flag:'wx',mode:0o600});}catch(error){if(error.code!=='EEXIST')throw error;await this.file(font);}const selection={id:font.id,family:font.family,bold:font.bold,italic:font.italic,advanceRatio:font.advanceRatio};if(select)this.store.setting('danmaku-font',selection);return {...selection,url:`/api/danmaku-font/${font.id}`};}
-  async selection(id){if(id===null)return null;if(!validHash(id))throw new Error('字体选择无效。');const font=fontMetadata(await fs.readFile(await this.file({id})));return {id:font.id,family:font.family,bold:font.bold,italic:font.italic,advanceRatio:font.advanceRatio};}
+  async selection(id){if(id===null)return null;if(!validHash(id))throw new Error('字体选择无效。');const font=fontMetadata(await fs.readFile(await this.file({id})));return {id:font.id,family:font.family,bold:font.bold,italic:font.italic,advanceRatio:font.advanceRatio,assScale:font.assScale};}
   reset(){this.store.setting('danmaku-font',null);return null;}
   async stage(font,workDir){if(!font)return '';const file=await this.file(font);return path.relative(workDir,path.dirname(file)).split(path.sep).join('/');}
 
