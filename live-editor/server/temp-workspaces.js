@@ -10,6 +10,7 @@ const NAME = /^bili-(probe|export|full)-[A-Za-z0-9_-]+$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const jobIdValid = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 const retainedValid = value => value && typeof value === 'object' && !Array.isArray(value) && jobIdValid(value.jobId)&&(!Object.hasOwn(value,'ownerReleased')||typeof value.ownerReleased==='boolean');
+const unrecognizedReason = '临时工作区有无法确认归属的文件，已保留。';
 const pidValid = value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647;
 
 export function processRunning(pid) {
@@ -45,6 +46,7 @@ function readMarker(root, directory) {
     || !Array.isArray(data.childPids) || data.childPids.length > 1000 || data.childPids.some(pid => !pidValid(pid))
     || !Number.isSafeInteger(data.pendingSpawns) || data.pendingSpawns < 0
     || ('sessionId' in data && !jobIdValid(data.sessionId))
+    || ('cleanupKept' in data && (data.cleanupKept !== true || !data.sessionId || data.retained || data.pendingSpawns || data.childPids.length))
     || ('retained' in data && (!retainedValid(data.retained) || NAME.exec(path.basename(directory))?.[1] !== 'export'))) return null;
   return data;
 }
@@ -58,14 +60,15 @@ function allowedFile(directory, name) {
   if (kind === 'export' && (name === '.bili-export-publication.json' || /^\.bili-export-publication-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/i.test(name))) return true;
   if (kind === 'export' && /^(?:audio-\d+\.flac|audio-concat\.txt|video-concat(?:-danmaku)?\.txt|video(?:-danmaku)?\.mp4|audio\.m4a)$/.test(name)) return true;
   if (kind === 'export' && /^(?:original-\d+\.mp4|original-concat\.txt|audio-copy-\d+\.m4a|audio-copy-concat\.txt|(?:clean-)?names-\d+\.ass|names\.ass|sequence-\d+\.mp4)$/.test(name)) return true;
-  if (kind === 'export' && /^avatar-[a-f0-9]{64}\.png$/.test(name)) return true;
-  if (kind === 'export') return /^(?:part-\d+(?:-danmaku)?\.mp4|part-\d+\.ass|concat(?:-danmaku)?\.txt|final(?:-danmaku)?\.mp4)$/.test(name);
+  if (kind === 'export' && /^(?:avatar-[a-f0-9]{64}|gift-(?:default-gift|default-guard|[a-f0-9]{64}))\.png$/.test(name)) return true;
+  if (kind === 'export' && /^filter-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.txt$/.test(name)) return true;
+  if (kind === 'export') return /^(?:part-\d+(?:-block-\d+(?:-[01]){0,6})?(?:-danmaku)?\.mp4|(?:names-)?part-\d+(?:-block-\d+(?:-[01]){0,6})?\.ass|(?:concat|split-\d+)(?:-danmaku)?\.txt|final(?:-danmaku)?\.mp4)$/.test(name);
   return false;
 }
 
 export class TemporaryWorkspaces {
   constructor(root, { processAlive = processRunning } = {}) {
-    this.root = path.resolve(root); this.processAlive = processAlive; this.active = new Map(); this.cleaning = null;
+    this.root = path.resolve(root); this.processAlive = processAlive; this.active = new Map(); this.removing = new Set(); this.cleaning = null;
   }
   async create(prefix, sessionId) {
     if (!['bili-probe-','bili-export-'].includes(prefix)) throw new Error('无效的临时工作区类型。');
@@ -96,7 +99,7 @@ export class TemporaryWorkspaces {
     directory = path.resolve(directory);
     if (NAME.exec(path.basename(directory))?.[1] !== 'export') throw new Error('仅导出临时目录可以保留待发布的视频。');
     const marker = readMarker(this.root, directory);
-    if (!marker || (marker.retained && marker.retained.jobId !== jobId) || (requireRetained && !marker.retained)) throw new Error('保留导出的所有权或任务标记不匹配，已保留文件。');
+    if (!marker || marker.cleanupKept || (marker.retained && marker.retained.jobId !== jobId) || (requireRetained && !marker.retained)) throw new Error('保留导出的所有权或任务标记不匹配，已保留文件。');
     let state = this.active.get(key(directory));
     if (state) {
       if (state.finishing) throw new Error('临时工作区正在清理，不能改变保留状态。');
@@ -152,32 +155,88 @@ export class TemporaryWorkspaces {
   alive(pid) {
     try { return this.processAlive(pid) !== false; } catch { return true; }
   }
-  async remove(directory, expected, ownActive = false, { control }={}) {
-    control?.check();
-    const marker = readMarker(this.root, directory);
-    if (!marker || marker.token !== expected.token || marker.ownerPid !== expected.ownerPid || marker.retained || marker.pendingSpawns || (!ownActive && this.alive(marker.ownerPid)) || marker.childPids.some(pid => this.alive(pid))) return false;
-    const files = [];
-    for (const name of await fs.readdir(directory)) {
-      if (!allowedFile(directory, name)) return false;
-      const file = path.join(directory, name), stat = await fs.lstat(file, { bigint: true });
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) return false;
-      files.push({ file, stat, marker: name === MARKER });
-    }
-    // Keep proof of ownership until all large work files are removed. Partial
-    // failures retain the marker and can be retried without broad directory rm.
-    files.sort((a,b) => Number(a.marker) - Number(b.marker));
-    for (const entry of files) {
-      ownedDirectory(this.root, directory);
+  async remove(directory, expected, ownActive = false, { control, preserveUnknown = false, keepRetained = false } = {}) {
+    const directoryKey = key(directory);
+    if (this.removing.has(directoryKey)) return null;
+    this.removing.add(directoryKey);
+    const currentOwner = () => {
       const owner = readMarker(this.root, directory);
-      if (!owner || owner.token !== expected.token || owner.ownerPid !== expected.ownerPid || owner.retained || owner.pendingSpawns || (!ownActive && this.alive(owner.ownerPid)) || owner.childPids.some(pid => this.alive(pid))) return false;
-      if(entry.marker&&(await fs.readdir(directory)).some(name=>name!==MARKER))return false;
-      const current = await fs.lstat(entry.file, { bigint: true });
-      if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1n || current.dev !== entry.stat.dev || current.ino !== entry.stat.ino || current.size !== entry.stat.size || current.mtimeNs !== entry.stat.mtimeNs) return false;
+      if (!owner || owner.token !== expected.token || owner.ownerPid !== expected.ownerPid || owner.retained || owner.pendingSpawns
+        || (owner.cleanupKept ? !preserveUnknown : !ownActive && this.alive(owner.ownerPid))
+        || owner.childPids.some(pid => this.alive(pid))) return null;
+      return owner;
+    };
+    const result = { freedBytes: 0, deletedFiles: 0, retained: [], removed: false, kept: false };
+    const keep = name => ({ path: path.join(directory, name), reason: unrecognizedReason });
+    try {
       control?.check();
-      await fs.unlink(entry.file);
+      const marker = currentOwner();
+      if (!marker) return null;
+      const names = (await fs.readdir(directory)).filter(name => name !== MARKER);
+      if (marker.cleanupKept) return { ...result, retained: names.map(keep), kept: true };
+
+      const markerFile = path.join(directory, MARKER);
+      const markerStat = await fs.lstat(markerFile, { bigint: true });
+      const files = [], unknown = new Set();
+      for (const name of names) {
+        const file = path.join(directory, name);
+        const stat = await fs.lstat(file, { bigint: true }).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+          return null;
+        });
+        if (!stat) continue;
+        if (!allowedFile(directory, name) || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) {
+          if (!preserveUnknown) return null;
+          unknown.add(name);
+        } else {
+          files.push({ file, stat });
+        }
+      }
+      const unchanged = (current, original) => current.isFile() && !current.isSymbolicLink() && current.nlink === 1n
+        && current.dev === original.dev && current.ino === original.ino && current.size === original.size
+        && current.mtimeNs === original.mtimeNs;
+      for (const { file, stat } of files) {
+        if (!currentOwner()) return null;
+        const current = await fs.lstat(file, { bigint: true }).catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+          return null;
+        });
+        if (!current) continue;
+        if (!unchanged(current, stat)) return null;
+        control?.check();
+        await fs.unlink(file);
+        result.freedBytes += Number(stat.size);
+        result.deletedFiles++;
+        control?.progress();
+      }
+      // Keep proof of ownership through partial deletion and until the user
+      // confirms what can stay. A kept directory is no longer swept for files.
+      const remaining = (await fs.readdir(directory)).filter(name => name !== MARKER);
+      const owner = currentOwner();
+      if (!owner || !unchanged(await fs.lstat(markerFile, { bigint: true }), markerStat)) return null;
+      control?.check();
+      if (remaining.length) {
+        if (!preserveUnknown || remaining.some(name => !unknown.has(name))) return null;
+        if (keepRetained) {
+          const state = this.active.get(directoryKey) ?? { directory, data: owner };
+          this.write(state, { ...owner, childPids: [], cleanupKept: true });
+          result.kept = true;
+        }
+        result.retained = remaining.map(keep);
+        return result;
+      }
+      await fs.unlink(markerFile);
+      result.freedBytes += Number(markerStat.size);
+      result.deletedFiles++;
+      ownedDirectory(this.root, directory);
+      control?.check();
+      await fs.rmdir(directory);
       control?.progress();
+      result.removed = true;
+      return result;
+    } finally {
+      this.removing.delete(directoryKey);
     }
-    ownedDirectory(this.root, directory); control?.check(); await fs.rmdir(directory); control?.progress(); return true;
   }
   async finish(directory) {
     const state = this.active.get(key(directory)); if (!state) return false;
@@ -186,7 +245,7 @@ export class TemporaryWorkspaces {
       try{this.write(state,{...state.data,retained:{...state.data.retained,ownerReleased:true}});}catch{ /* Uncertain markers stay protected. */ }
     if (state.finishing) return state.finishing;
     state.finishing = (async () => {
-      try { const removed = await this.remove(directory, state.data, true); if (removed) this.active.delete(key(directory)); return removed; }
+      try { const outcome = await this.remove(directory, state.data, true); if (outcome?.removed) this.active.delete(key(directory)); return !!outcome?.removed; }
       catch { return false; }
       finally { state.finishing = null; }
     })();
@@ -196,8 +255,8 @@ export class TemporaryWorkspaces {
     if (this.cleaning) return this.cleaning;
     this.cleaning = this.cleanup().finally(() => { this.cleaning = null; }); return this.cleaning;
   }
-  async removeSession(sessionId, { control }={}) {
-    const result={freedBytes:0,deletedFiles:0};
+  async removeSession(sessionId, { control, keepRetained = false }={}) {
+    const result={freedBytes:0,deletedFiles:0,retained:[]};
     if(this.cleaning){if(control)await control.wait(this.cleaning);else await this.cleaning;}
     if(!checkDirectory(this.root,true))return result;
     for(const name of await fs.readdir(this.root)) {
@@ -209,20 +268,19 @@ export class TemporaryWorkspaces {
       // Explicit material deletion may release its own inactive processing
       // checkpoints. Pending publication remains protected from this path.
       if(marker.retained?.processing&&!marker.retained.publicationIntent&&this.active.get(key(directory))?.completed!==false&&!marker.pendingSpawns&&!marker.childPids.some(pid=>this.alive(pid))){
-        await this.adoptRetained(directory,marker.retained.jobId);
-        await this.release(directory,marker.retained.jobId);marker=readMarker(this.root,directory);
+        const checkpoint = await this.adoptRetained(directory, marker.retained.jobId);
+        await this.release(directory, marker.retained.jobId);
+        checkpoint.completed = true;
+        marker = checkpoint.data;
       }
       const state=this.active.get(key(directory));
       if(state?.finishing){if(control)await control.wait(state.finishing);else await state.finishing;if(!this.active.has(key(directory)))continue;}
-      if(marker.retained||marker.pendingSpawns||marker.childPids.some(pid=>this.alive(pid))||(state?!state.completed:this.alive(marker.ownerPid)))throw new Error('这份素材的临时工作区仍在处理或等待保存，请稍后重试删除。');
-      let bytes=0,count=0;
-      for(const file of await fs.readdir(directory)) {
-        const stat=await fs.lstat(path.join(directory,file));
-        if(!allowedFile(directory,file)||!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw new Error('素材临时工作区中有无法确认的文件，已保留，请检查后重试删除。');
-        bytes+=stat.size;count++;
-      }
-      if(!await this.remove(directory,marker,!!state,{control}))throw new Error('素材临时工作区仍被占用或所有权发生变化，请稍后重试删除。');
-      this.active.delete(key(directory));result.freedBytes+=bytes;result.deletedFiles+=count;
+      if(marker.retained||marker.pendingSpawns||marker.childPids.some(pid=>this.alive(pid))||(!marker.cleanupKept&&(state?!state.completed:this.alive(marker.ownerPid))))throw new Error('这份素材的临时工作区仍在处理或等待保存，请稍后重试删除。');
+      const outcome=await this.remove(directory,marker,!!state,{control,preserveUnknown:true,keepRetained});
+      if(!outcome)throw new Error('素材临时工作区仍被占用或所有权发生变化，请稍后重试删除。');
+      if(outcome.removed||outcome.kept)this.active.delete(key(directory));
+      result.freedBytes+=outcome.freedBytes;result.deletedFiles+=outcome.deletedFiles;
+      result.retained.push(...outcome.retained);
     }
     return result;
   }
@@ -238,11 +296,11 @@ export class TemporaryWorkspaces {
       try {
         if (this.active.has(key(directory))) { result.skipped++; continue; }
         const marker = readMarker(this.root, directory);
-        if (!marker || marker.retained || marker.pendingSpawns || this.alive(marker.ownerPid) || marker.childPids.some(pid => this.alive(pid))) { result.skipped++; continue; }
+        if (!marker || marker.retained || marker.cleanupKept || marker.pendingSpawns || this.alive(marker.ownerPid) || marker.childPids.some(pid => this.alive(pid))) { result.skipped++; continue; }
         // Recheck all process identities immediately before removal. Reused PIDs
         // count as alive; access-denied and other unknown states also preserve.
         if (this.alive(marker.ownerPid) || marker.childPids.some(pid => this.alive(pid))) { result.skipped++; continue; }
-        if (await this.remove(directory, marker)) result.removed++; else result.skipped++;
+        if ((await this.remove(directory, marker))?.removed) result.removed++; else result.skipped++;
       } catch { result.skipped++; }
     }
     return result;

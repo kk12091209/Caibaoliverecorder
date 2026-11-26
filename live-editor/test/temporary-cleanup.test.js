@@ -56,8 +56,38 @@ test('按素材清理只处理自己的已退出工作区，活跃、待保存�
   const retained=await manager.create('bili-export-','saved-session');await fs.writeFile(path.join(retained,'final.mp4'),'only encoded copy');
   await orphan({...f,directory:retained},{retained:{jobId:'pending-save'}});
   await assert.rejects(collector(f.temporaryRoot).removeSession('saved-session'),/等待保存/);await fs.access(path.join(retained,'final.mp4'));
-  const unknown=await manager.create('bili-export-','unknown-session');await fs.writeFile(path.join(unknown,'keep.flv'),'user file');await orphan({...f,directory:unknown});
-  await assert.rejects(collector(f.temporaryRoot).removeSession('unknown-session'),/无法确认/);await fs.access(path.join(unknown,'keep.flv'));
+  const unknown = await manager.create('bili-export-', 'unknown-session');
+  const untouched = path.join(unknown, 'keep.flv');
+  const generated = path.join(unknown, 'gift-default-gift.png');
+  const generatedNameButDirectory = path.join(unknown, 'part-0.mp4');
+  await fs.writeFile(untouched, 'user file');
+  await fs.writeFile(generated, 'generated gift');
+  await fs.mkdir(generatedNameButDirectory);
+  // A completed workspace owned by this very process is eligible for both
+  // actions without restarting the service.
+  assert.equal(await manager.finish(unknown), false);
+  const first = await manager.removeSession('unknown-session');
+  assert.deepEqual(first.retained.map(entry => entry.path).sort(), [untouched,generatedNameButDirectory].sort());
+  assert.equal(first.deletedFiles, 1);
+  await missing(generated);
+
+  const finished = await manager.removeSession('unknown-session', { keepRetained: true });
+  assert.deepEqual(finished.retained, first.retained);
+  assert.equal([...manager.active.values()].some(state => state.directory === unknown), false);
+  await fs.unlink(untouched);
+  await fs.rmdir(generatedNameButDirectory);
+  await fs.writeFile(generatedNameButDirectory, 'user file with a recognized name');
+  assert.equal((await collector(f.temporaryRoot).cleanupStale()).removed, 0);
+  assert.equal(await fs.readFile(generatedNameButDirectory, 'utf8'), 'user file with a recognized name');
+});
+
+test('明确删除素材可清理已停止的编码检查点，等待发布的工作区继续保留', async () => {
+  const f = await workspace('session-checkpoints');
+  const directory = await f.manager.create('bili-export-', 'checkpoint-session');
+  await fs.writeFile(path.join(directory, 'part-0-block-12-0-danmaku.mp4'), 'encoded block');
+  await orphan({ ...f, directory }, { retained: { jobId: 'failed-export', processing: { signature: 'fixture' } } });
+  assert.equal((await collector(f.temporaryRoot).removeSession('checkpoint-session')).deletedFiles, 2);
+  await missing(directory);
 });
 
 test('目录联接、内部链接和marker硬链接都不会穿透到其他文件',async()=>{

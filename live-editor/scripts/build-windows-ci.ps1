@@ -54,7 +54,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows core startup/reuse/quit test failed.' 
 Remove-Item Env:CAIBO_CORE_SMOKE
 & ./live-editor/desktop/build.ps1
 
-$sourceUrl = "https://github.com/kk12091209/Caibaoliverecorder/releases/download/$tag/Caibo-$version-source.zip"
+$sourceName = if ($env:CAIBO_WINDOWS_MANUAL_PATCH -eq '1') { "Caibo-$version-r$buildRevision-source.zip" } else { "Caibo-$version-source.zip" }
+$sourceUrl = "https://github.com/kk12091209/Caibaoliverecorder/releases/download/$tag/$sourceName"
 & (Join-Path $PSScriptRoot 'build-release.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -DesktopRoot (Join-Path $root 'live-editor/desktop/package') -RuntimeRoot $runtime -ToolsRoot $tools -FFmpegRoot $media -NuGetRoot $env:NUGET_PACKAGES -OutputRoot $output -Version $version -ForPublic -SourceUrl $sourceUrl -Include7z
 $name = "BiliLiveEditor-$version-win-x64"
 foreach ($extension in @('zip','7z')) {
@@ -68,7 +69,7 @@ foreach ($launch in @('first','reopened')) {
     if ($LASTEXITCODE -ne 0) { throw "Packaged Windows desktop UI failed: $launch" }
 }
 & (Join-Path $PSScriptRoot 'test-installer.ps1') -ProjectRoot $root -Stage (Join-Path $output $name) -ToolsRoot $tools -Version $version
-& (Join-Path $PSScriptRoot 'package-source.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -OutputFile (Join-Path $output "Caibo-$version-source.zip") -RepositoryUrl 'https://github.com/kk12091209/Caibaoliverecorder.git'
+& (Join-Path $PSScriptRoot 'package-source.ps1') -ProjectRoot $root -AppRoot (Join-Path $root 'live-editor') -OutputFile (Join-Path $output $sourceName) -RepositoryUrl 'https://github.com/kk12091209/Caibaoliverecorder.git'
 $metadata = [ordered]@{version=$version;sourceRevision=$revision;sourceUrl=$sourceUrl;runtimeNode=$pinned.node.version;runtimeNodeSha256=$pinned.node.sha256;runtimeFFmpeg=$pinned.ffmpeg.version;runtimeFFmpegManifestSha256=(Get-FileHash -LiteralPath (Join-Path $media 'component.json') -Algorithm SHA256).Hash.ToLowerInvariant();workflowRun=$env:GITHUB_RUN_ID;nodeTests='passed';coreTests='passed';coreLifecycle='passed';portableZip='passed';portable7z='passed';installerUpgradeUninstall='passed';nativeDesktopUI='passed'}
 $metadata.buildRevision=[int]$buildRevision
 if ($version -cnotmatch '-beta\.') { $metadata.buildId="$version-r$buildRevision" }
