@@ -31,9 +31,12 @@ import { IdleRenderPolicy } from './idle-render-policy.js';
 import {ExportCheckpoints} from './export-checkpoints.js';
 import {retryMedia as retryMediaWork,mediaFailure} from './media-retry.js';
 import {hashRender,commentSignature} from './render-plan.js';
-import {giftMessages,giftAss} from './gifts.js';
+import {giftHistoryStart,giftMessages,giftAss} from './gifts.js';
+import {giftTimeline} from '../shared/gift-layout.js';
+import {giftArtwork,giftSubtitles} from './gift-render.js';
+import {prepareSuperChats} from './super-chat-history.js';
 import {giftIconFilter} from './gift-icons.js';
-import {savedGiftStyle} from '../shared/gifts.js';
+import {GIFT_LAYOUT_VERSION,savedGiftStyle} from '../shared/gifts.js';
 import {savedHighlightStyle} from '../shared/highlight-style.js';
 
 function assTime(t) { t = Math.max(0, t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60; return `${h}:${String(m).padStart(2,'0')}:${(t%60).toFixed(2).padStart(5,'0')}`; }
@@ -110,6 +113,7 @@ export class Media {
     const snapshot=[job.mode,job.scope,job.ranges,job.excluded,job.filterLottery,job.font,job.danmakuStyle,job.danmakuPerSecond,job.linkmicEvents,job.highlightStyle,job.highlighted,job.messageEdits];
     if(Object.hasOwn(job,'recordingStyle'))snapshot.push(job.recordingStyle,job.cameraEvents);
     if(job.gifts?.length)snapshot.push(job.gifts,job.giftIcons);
+    if(job.giftLayoutVersion)snapshot.push(job.giftLayoutVersion,job.giftStyle,job.giftCameras);
     const checkpoint=await this.checkpoints.open(job,hashRender([details.route,details.encoder,details.profile,details.comments,inputs,snapshot]));
     job.processingRecovery.route=details.route;this.persistExportJob(job);return checkpoint;
   }
@@ -420,7 +424,10 @@ export class Media {
     if(['includeDanmaku','burn','danmakuFps'].some(key=>key in input))throw new Error('不支持的导出选项，请使用纯净版、弹幕版或双文件模式。');
     const mode=input.mode??'dual';if(!['clean','danmaku','dual'].includes(mode))throw new Error('请选择纯净版、弹幕版或双文件版本。');
     if('giftsEnabled' in input&&typeof input.giftsEnabled!=='boolean')throw new Error('请选择是否在弹幕版显示礼物。');
+    if('superChatEnabled' in input&&typeof input.superChatEnabled!=='boolean')throw new Error('请选择是否显示醒目留言。');
     const giftStyle=savedGiftStyle(this.store),giftsEnabled=mode!=='clean'&&(input.giftsEnabled??giftStyle.export);
+    const superChatEnabled=mode!=='clean'&&(input.superChatEnabled??giftStyle.scExport);
+    if (superChatEnabled) await prepareSuperChats(this.store,id);
     await this.store.linkmic?.ensure(id);
     const linkmicEvents=this.store.linkmic?.events(id)||[];
     const cameraEvents=this.store.linkmic?.cameraEvents?.(id)||[];
@@ -432,12 +439,16 @@ export class Media {
       job.linkmicEvents=linkmicEvents.filter(event=>event.participants.length&&job.ranges.some(range=>event.time<range.end&&event.end>range.start));
       job.recordingStyle=savedRecordingStyle(this.store);
       job.cameraEvents=cameraEvents.filter(event=>job.ranges.some(range=>event.time<range.end&&event.end>range.start));
-      if(giftsEnabled){
-        job.giftStyle={...giftStyle,export:true};
-        job.gifts=giftMessages(this.store,id,{from:Math.max(0,job.ranges[0].start-5),to:job.ranges.at(-1).end,limit:20001,style:giftStyle})
-          .filter(g=>!job.excluded.includes(g.id)&&job.ranges.some(r=>g.time<r.end&&g.time+5>r.start));
-        if(job.gifts.length>20000)throw new Error('所选片段礼物过多，请拆成较短片段导出。');
-        job.giftIcons=await this.store.giftIcons?.snapshot(job.gifts)||{};
+      if(giftsEnabled || superChatEnabled){
+        job.giftStyle={...giftStyle,export:giftsEnabled,scExport:superChatEnabled};
+        job.giftLayoutVersion=GIFT_LAYOUT_VERSION;
+        const from=giftHistoryStart(this.store,id,job.ranges[0].start),to=job.ranges.at(-1).end;
+        const excluded=new Set(job.excluded);
+        job.gifts=giftMessages(this.store,id,{from,to,limit:-1,style:giftStyle,overlay:true,
+          includeGifts:giftsEnabled,includeSuperChat:superChatEnabled}).filter(g=>!excluded.has(g.id));
+        job.giftCameras=cameraEvents.filter(event=>event.time<to&&event.end>from);
+        const artwork=job.gifts.filter(g=>g.type!=='sc'&&g.time<to).sort((a,b)=>Number(a.time<job.ranges[0].start)-Number(b.time<job.ranges[0].start));
+        job.giftIcons=await this.store.giftIcons?.snapshot(artwork)||{};
       }
     }
     try {
@@ -868,6 +879,9 @@ export class Media {
     const width=Math.max(2,Math.floor(info.width/2)*2),height=Math.max(2,Math.floor(info.height/2)*2);
     const layoutFont=job.font?.id?await this.fonts.selection(job.font.id):job.font;
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[],messageEdits:job.messageEdits||{}}):null;
+    const giftTrack=job.giftLayoutVersion===GIFT_LAYOUT_VERSION&&job.gifts?.length
+      ? giftTimeline(job.gifts,width,height,job.giftStyle,{cameraEvents:job.giftCameras,recordingStyle:job.recordingStyle,
+        cameraSizeAt:event=>sources.find(source=>source.id===event.source)?.metadata}) : null;
     const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy,...(bakedOnly||dual?[danmakuAssSize(1,layoutFont)]:[])],comments:commentSignature(chatLayout||[]),segments});
     const workDir=checkpoint.directory;
     try {
@@ -901,7 +915,10 @@ export class Media {
         if(dual||bakedOnly) {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},start,end);
           // ASS uses the input clock, which starts at the preceding keyframe.
-          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,layoutFont,job.danmakuStyle)+giftAss(job.gifts||[],width,height,{base,from:start,to:end}));
+          const window={base,from:start,to:end};
+          const gifts=giftTrack ? giftSubtitles(giftTrack,job.giftIcons,width,height,job.giftStyle,window)
+            : giftAss(job.gifts||[],width,height,window);
+          await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,layoutFont,job.danmakuStyle)+gifts);
         }
         const cameraEvents=blockCameraEvents(job.cameraEvents,source.id,start,end);
         const filter=recordingLayoutFilter(cameraEvents,job.recordingStyle??originalRecordingStyle(),width,height,
@@ -910,7 +927,9 @@ export class Media {
         if(shownLabels.length)await fs.writeFile(path.join(workDir,labelFile),linkmicAss(shownLabels,width,height,cardOptions));
         const withNames=async prefix=>[await avatarFilter(this.store,shownLabels,width,height,workDir,{...cardOptions,prefix}),shownLabels.length?`ass=${labelFile}`:''].filter(Boolean).join(',');
         const labelFilter=await withNames('cleanmic'),danmakuLabelFilter=dual?await withNames('danmic'):labelFilter;
-        const giftFilter=await giftIconFilter(job.gifts||[],job.giftIcons,width,height,workDir,{base,from:start,to:end});
+        const giftWindow={base,from:start,to:end};
+        const giftFilter=giftTrack ? await giftArtwork(giftTrack,job.giftIcons,width,height,job.giftStyle,workDir,giftWindow)
+          : await giftIconFilter(job.gifts||[],job.giftIcons,width,height,workDir,giftWindow);
         const padding=videoOnly?',tpad=stop_mode=clone:stop_duration=0.2':'';
         const overlayFilter=`fps=${fps},ass=${subFile}${fontDirectory?':fontsdir='+fontDirectory:''}`+(giftFilter?','+giftFilter:'');
         const mux=singlePart&&!videoOnly?['-movflags','+faststart']:[];

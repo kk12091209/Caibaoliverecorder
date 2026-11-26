@@ -157,6 +157,19 @@ namespace BililiveRecorder.Core.Danmaku
             if (this.xmlWriter is null || this.config is null)
                 return Task.CompletedTask;
 
+            if (this.config.RecordDanmakuSuperChat &&
+                danmakuModel.RawObject?["cmd"]?.ToString() == "SUPER_CHAT_MESSAGE_DELETE" &&
+                danmakuModel.RawObject["data"]?["ids"] is Newtonsoft.Json.Linq.JArray deletedIds)
+            {
+                foreach (var id in deletedIds.Take(100))
+                {
+                    if (!ulong.TryParse(id.ToString(), out var value) || value == 0) continue;
+                    var marker = FormattableString.Invariant($"<sc_retract scid=\"{value}\"/>");
+                    this.pending.Add(new PendingMessage { Time = time, GiftXml = marker }, 640, (long)time, receiptGeneration, false);
+                }
+                return Task.CompletedTask;
+            }
+
             if (danmakuModel.MsgType is not (DanmakuMsgType.Comment or DanmakuMsgType.SuperChat or DanmakuMsgType.GiftSend or DanmakuMsgType.GuardBuy))
                 return Task.CompletedTask;
 
@@ -301,8 +314,16 @@ namespace BililiveRecorder.Core.Danmaku
                             await this.xmlWriter.WriteAttributeStringAsync(null, "ts", null, ts.ToString("F3")).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "user", null, RemoveInvalidXMLChars(danmakuModel.UserName)).ConfigureAwait(false);
                             await this.xmlWriter.WriteAttributeStringAsync(null, "uid", null, danmakuModel.UserID.ToString()).ConfigureAwait(false);
-                            await this.xmlWriter.WriteAttributeStringAsync(null, "price", null, danmakuModel.Price.ToString()).ConfigureAwait(false);
-                            await this.xmlWriter.WriteAttributeStringAsync(null, "time", null, danmakuModel.SCKeepTime.ToString()).ConfigureAwait(false);
+                            await this.xmlWriter.WriteAttributeStringAsync(null, "price", null, danmakuModel.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                            await this.xmlWriter.WriteAttributeStringAsync(null, "time", null, danmakuModel.SCKeepTime.ToString(System.Globalization.CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                            var scData = danmakuModel.RawObject?["data"];
+                            foreach (var (key, value) in new[] {
+                                ("scid", scData?["id"]?.ToString()),
+                                ("headcolor", scData?["background_top_color"]?.ToString()),
+                                ("bodycolor", (scData?["background_bottom_color"] ?? scData?["background_color"])?.ToString()),
+                            })
+                                if (value is { Length: > 0 and <= 30 })
+                                    await this.xmlWriter.WriteAttributeStringAsync(null, key, null, RemoveInvalidXMLChars(value)).ConfigureAwait(false);
                             if (recordDanmakuRaw)
                                 await this.xmlWriter.WriteAttributeStringAsync(null, "raw", null, RemoveInvalidXMLChars(danmakuModel.RawObject?["data"]?.ToString(Newtonsoft.Json.Formatting.None))).ConfigureAwait(false);
                             this.xmlWriter.WriteValue(RemoveInvalidXMLChars(danmakuModel.CommentText));

@@ -31,7 +31,10 @@ export async function appendChatXml(file,bytes){
 export function chatXml(batch,platform='douyin'){
   return batch.messages.map(message=>`<d platform="${platform}" p="${message.time.toFixed(3)},1,25,${xmlText(message.color)},0,0,0,0" user="${xmlText(message.user)}" uid="${xmlText(message.id)}"${message.senderId?` sender_id="${xmlText(message.senderId)}"`:''}>${xmlText(message.text)}</d>\n`).join('')+
     batch.density.map(bucket=>`<density ts="${bucket.second}" count="${bucket.count}" kept="${bucket.kept}"/>\n`).join('')+
-    (batch.gifts||[]).map(g=>`<gift platform="${platform}" eventid="${xmlText(g.id)}" ts="${g.time.toFixed(3)}" user="${xmlText(g.user)}"${g.senderId?` sender_id="${xmlText(g.senderId)}"`:''} giftid="${xmlText(g.giftId)}" giftname="${xmlText(g.name)}" giftcount="${g.count}"${g.totalPrice===null?'':` total_price="${g.totalPrice}"`} icon="${xmlText(g.icon)}"/>\n`).join('');
+    (batch.gifts||[]).flatMap(g=>{
+      const updates=g.updates?.length?g.updates:[{count:g.count,totalPrice:g.totalPrice}];
+      return updates.map(update=>`<gift platform="${platform}" eventid="${xmlText(g.id)}" ts="${g.time.toFixed(3)}"${Number.isFinite(update.time)?` update_at="${update.time.toFixed(3)}"`:''} user="${xmlText(g.user)}"${g.senderId?` sender_id="${xmlText(g.senderId)}"`:''} giftid="${xmlText(g.giftId)}" giftname="${xmlText(g.name)}" giftcount="${update.count}"${update.totalPrice===null?'':` total_price="${update.totalPrice}"`} icon="${xmlText(g.icon)}"/>\n`);
+    }).join('');
 }
 
 export class FlvRecorder {

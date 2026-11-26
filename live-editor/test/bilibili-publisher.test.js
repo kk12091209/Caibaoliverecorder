@@ -80,11 +80,16 @@ async function fixture(t) {
     constructor(part, auth, options) {
       super();
       this.part = part;
+      this.bandwidth = options.bandwidth;
       this.request = { defaults: {} };
       requests.push(['uploader', part, auth.accountUid, options]);
     }
     async upload() {
-      this.emit('progress', { event: 'uploading', progress: 0.5 });
+      const signal=this.request.defaults.signal;
+      await this.bandwidth.awaitOpen(signal);
+      const half = (await fs.stat(this.part.path)).size/2;
+      this.bandwidth.sent(1,0,half);
+      this.bandwidth.confirm(1,half);
       const index = files.findIndex(file => file.path === this.part.path);
       await state.onPart?.(this, index);
       return { cid: 111 + index, filename: `video-${index}`, title: 'untrusted returned title' };
@@ -334,7 +339,7 @@ test('closing while B站 could already have the draft records an uncertain submi
   assert.equal(requests.filter(row => row[0] === 'commit').length, 1);
 });
 
-test('automatic upload caps aggregate throughput and yields without committing twice', async t => {
+test('automatic upload changes the current part budget without creating another uploader', async t => {
   const { publisher, requests, state, files } = await fixture(t);
   const { taskId } = await publisher.submit({ ...request(files), owner: { kind: 'auto', id: 'recording-123' } });
   await publisher.task(taskId);
@@ -348,14 +353,20 @@ test('automatic upload caps aggregate throughput and yields without committing t
   await entered;
   const options = requests.find(record => record[0] === 'uploader')[3];
   assert.equal(options.concurrency, 1);
-  assert.equal(options.limitRate, 1024);
-  publisher.yieldAutomaticUpload();
-  await first;
-  assert.equal((await publisher.task(taskId)).status, 'queued');
+  assert.equal((await publisher.task(taskId)).transfer.limitBytesPerSecond, null);
+  publisher.updateRecording({state:'observing',reason:'新开播'});
+  assert.equal((await publisher.task(taskId)).transfer.limitBytesPerSecond, 1_048_576);
+  publisher.updateRecording({state:'paused',reason:'重连'});
+  assert.equal(options.bandwidth.paused(), true);
+  assert.equal((await publisher.task(taskId)).status, 'uploading');
   assert.equal(requests.filter(record => record[0] === 'commit').length, 0);
+  assert.equal(requests.filter(record => record[0] === 'uploader').length, 1);
 
+  publisher.updateRecording({state:'idle'});
+  assert.equal(options.bandwidth.paused(), false);
   delete state.onPart;
-  await publisher.tick(allow);
+  finishPart();
+  await first;
   assert.equal((await publisher.task(taskId)).status, 'submitted');
   const commits = requests.filter(record => record[0] === 'commit');
   assert.equal(commits.length, 1);

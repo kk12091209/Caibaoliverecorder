@@ -32,7 +32,7 @@ test('real dual export keeps clean output pure, burns optional gift artwork at t
  media.work=run;await media.work();
  const job=store.get('SELECT * FROM jobs WHERE id=?',id);assert.equal(job.status,'done',job.error);
  const details=JSON.parse(job.data),clean=job.file,baked=details.output.danmakuFile;
- const frame=(file,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-vf','crop=104:20:212:2','-pix_fmt','rgb24','-f','rawvideo','pipe:1']);
+ const frame=(file,time)=>execFileSync(ffmpeg,['-v','error','-ss',String(time),'-i',file,'-frames:v','1','-vf','crop=90:55:225:119','-pix_fmt','rgb24','-f','rawvideo','pipe:1']);
  const difference=(a,b)=>a.reduce((n,v,i)=>n+Math.abs(v-b[i]),0);
  const quiet=difference(frame(clean,.5),frame(baked,.5)),shown=difference(frame(clean,3),frame(baked,3));
  assert.ok(shown>10000&&shown>quiet*4,`gift pixel difference ${shown}, before event ${quiet}`);
@@ -43,6 +43,19 @@ test('real dual export keeps clean output pure, burns optional gift artwork at t
  const offId=off.id||off.jobs[0].id;for(let n=0;n<300;n++){if(store.get('SELECT status FROM jobs WHERE id=?',offId).status!=='queued'&&!media.processing)break;await new Promise(r=>setTimeout(r,20));}
  const offJob=store.get('SELECT * FROM jobs WHERE id=?',offId);assert.equal(offJob.status,'done',offJob.error);assert.equal(JSON.parse(offJob.data).gifts,undefined);
  assert.ok(difference(frame(clean,3),frame(offJob.file,3))<shown/4);
+
+ const marker=giftFromXml('sc',{ts:'1.2',user:'观众',price:'100',time:'8',bodycolor:'#eec44f'},source,2,'这张留言需要跨选段保留。');
+ saveGift(store,marker);
+ const chat=await media.enqueue(session.id,{scope:'clips',ranges:[{start:3,end:5}],mode:'danmaku',
+   giftsEnabled:false,superChatEnabled:true,exportDirectory:path.join(root,'out')});
+ const chatId=chat.id||chat.jobs[0].id;
+ for(let n=0;n<300;n++){if(store.get('SELECT status FROM jobs WHERE id=?',chatId).status!=='queued'&&!media.processing)break;await new Promise(r=>setTimeout(r,20));}
+ const chatJob=store.get('SELECT * FROM jobs WHERE id=?',chatId);
+ assert.equal(chatJob.status,'done',chatJob.error);
+ assert.deepEqual(JSON.parse(chatJob.data).gifts.map(event=>event.type),['sc']);
+ const chatFrame=frame(chatJob.file,.08);
+ assert.ok(chatFrame.some((v,i)=>i%3===0&&v>165&&chatFrame[i+1]>140&&chatFrame[i+2]<140),
+   'the first exported clip frame contains the SC already in progress');
  // A classified filter error splits only the failed span. Simulate disk
  // exhaustion after block zero, then verify that the real retry reuses it.
  store.setting('gift-style',DEFAULT_GIFT_STYLE);

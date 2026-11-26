@@ -129,11 +129,18 @@ async function createManagedApp(options,runtime) {
   const publicationUnavailable=()=>closing||store.recovery.recovering||autoUpdate.applying||
     (!options.noRecorder&&recorder.connectionPending);
   let writerHealth;
-  const automaticRecordingSafe=()=>{
-    if(!media.isRecording()){writerHealth=null;return true;}
+  const publicationRecordingState=()=>{
+    if(!media.isRecording()) {writerHealth=null;return {state:'idle'};}
     const now=performance.now();
-    if(!writerHealth||now-writerHealth.at>=500)writerHealth={at:now,healthy:liveHealth.automaticWorkHealthy()};
-    return writerHealth.healthy;
+    if(!writerHealth||now-writerHealth.at>=500)writerHealth={at:now,health:liveHealth.publicationState()};
+    return writerHealth.health;
+  };
+  const automaticRecordingSafe=()=>{
+    const evidence=publicationRecordingState();
+    return evidence.state==='idle'||liveHealth.automaticWorkHealthy(evidence);
+  };
+  const refreshUploadBudget=()=>{
+    if(publisher.hasWork())publisher.updateRecording(publicationRecordingState());
   };
   media.automaticMediaAllowed=()=>!publicationUnavailable()&&!storage.busy&&automaticRecordingSafe();
   autoPost=new AutoPost(store,credentials,media,recorder,publicationUnavailable,publisher);
@@ -324,7 +331,8 @@ async function createManagedApp(options,runtime) {
     if(closing||store.recovery.recovering||autoUpdate.applying)return;
     void autoPost.tick()?.catch(error=>diagnostics.record('自动投稿',error,{level:'警告'}));
     void quickPublish.tick()?.catch(error=>diagnostics.record('快速发布',error,{level:'警告'}));
-    if(publisher.hasWork())void publisher.tick(authorizePublication,{automaticAllowed:automaticRecordingSafe()})?.catch(error=>diagnostics.record('B站投稿',error,{level:'警告'}));
+    refreshUploadBudget();
+    if(publisher.hasWork())void publisher.tick(authorizePublication)?.catch(error=>diagnostics.record('B站投稿',error,{level:'警告'}));
     void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;diagnostics.record('自动清理',error,{level:'警告'});});
     if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;diagnostics.record('素材整理',error,{level:'警告'});});
     if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;diagnostics.record('缓存清理',error,{level:'警告'});});}
@@ -351,7 +359,7 @@ async function createManagedApp(options,runtime) {
     }
     if(!publicationUnavailable()){
       media.maintainAutomaticExports();
-      if(publisher.hasWork()&&!automaticRecordingSafe())publisher.yieldAutomaticUpload();
+      refreshUploadBudget();
     }
     if(clients.size){const message=`data: ${JSON.stringify(snapshot())}\n\n`;for(const client of clients)if(!client.writableNeedDrain)client.write(message);}
     }catch(error){diagnostics.record('界面状态推送',error,{level:'错误'});}

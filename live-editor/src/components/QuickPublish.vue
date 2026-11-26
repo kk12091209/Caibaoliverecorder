@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { LoaderCircle } from 'lucide-vue-next';
 import { ui } from '../../shared/ui-copy.js';
 import { api } from '../api.js';
-import { preventImplicitPublication, publicationAccountLabel, publicationModes, publicationStatus, publicationValidation } from '../bilibili-publication.js';
+import { preventImplicitPublication, publicationAccountLabel, publicationModes, publicationStatus, publicationTransferLabel, publicationValidation } from '../bilibili-publication.js';
 import PublicationTags from './PublicationTags.vue';
 import PublicationCopyright from './PublicationCopyright.vue';
 import PublicationCategory from './PublicationCategory.vue';
@@ -131,6 +131,7 @@ onBeforeUnmount(() => { request.abort(); clearTimeout(pollTimer); });
     <p v-if="accountError || !accountLabel" class="inline-warning" role="alert">{{ accountError || copy.投稿账号不可用 }}</p>
     <div v-if="publication" class="setting-info" role="status" :data-publish-status="publication.status">
       <strong>{{ publicationStatus(publication.status) }}</strong>
+      <small v-if="publication.transfer">{{ publicationTransferLabel(publication.transfer) }}</small>
       <span v-if="publication.bvid || publication.aid">{{ copy.稿件编号(publication.bvid || publication.aid) }}</span>
       <progress v-if="active && Number.isFinite(publication.progress)" :value="publication.progress" max="1" :aria-label="copy.上传中"/>
       <span v-if="publication.error">{{ publication.error }}</span>

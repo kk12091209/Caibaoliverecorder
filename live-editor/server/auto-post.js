@@ -181,9 +181,10 @@ export class AutoPost {
         } else stage = 'waiting-media';
       } else if (row.status === 'exporting' && row.export_status === 'queued') stage = 'waiting-media';
       else if (row.status === 'uploading' && result?.waitingUpload) stage = 'waiting-upload';
+      const transfer = row.status === 'uploading' ? this.publisher.transferStatus?.(result?.taskId) : undefined;
       return { id: row.session, session: row.session, room: sourceAnchor(row.room), exportJob: row.export_job,
         title, mode, status: row.status, stage, error: row.error,
-        parts: result?.parts?.map(part => ({ title: part.title })), progress: result?.progress,
+        parts: result?.parts?.map(part => ({ title: part.title })), progress: transfer?.progress ?? result?.progress, transfer,
         aid: result?.aid, bvid: result?.bvid, canRetry: live === true && row.status === 'failed' && !result?.taskId };
     });
     return { cookieConfigured: this.configured, simulation: false, jobs };

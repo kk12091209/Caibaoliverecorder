@@ -64,30 +64,60 @@ export class LiveRecordingHealth {
     return {recordingState,recordingHealthy:recordingState==='healthy',recordingWriteHealthy,ingestLagMs,
       sourceReady:source.duration>=150&&!!header?.video&&!!header?.audio};
   }
-  automaticWorkHealthy() {
+  automaticWorkHealthy(evidence=this.publicationState()) {
+    return evidence.state==='healthy' && os.availableParallelism()>=4;
+  }
+
+  publicationState() {
     const at=this.now();
-    if(this.closed||os.availableParallelism()<4||this.loopDelay()>250)return false;
+    const sessions=this.store.all(liveSessions),rooms=this.recorder.rooms.filter(room=>room.recording);
+    if (!sessions.length && !rooms.length) {
+      this.unmatchedSince = undefined;
+      this.observingSince = undefined;
+      return {state:'idle'};
+    }
+    if (this.closed) return {state:'paused',reason:'录制状态检查已关闭'};
+    if (rooms.length !== sessions.length || !sessions.length) {
+      this.unmatchedSince ??= at;
+      const waiting = sessions.find(session=>session.status==='waiting') ||
+        (at - this.unmatchedSince >= 8_000);
+      return {state:waiting?'paused':'observing',reason:waiting?'等待录制重连':'正在确认新录制'};
+    }
+    this.unmatchedSince = undefined;
+    if (this.platform === 'darwin') this.samplePublicationMemory(at);
+    const writers=rooms.map(room=>{
+      const session=sessions.find(candidate=>this.matches(candidate,room));
+      return {room:String(room.webRid||room.roomId),health:session&&this.writer(session,room,at)};
+    });
+    const stalled=writers.find(({health})=>health?.recordingState==='unhealthy');
+    if (stalled) return {state:'paused',reason:'录制进度停滞或正在重连',room:stalled.room};
+    const observing=writers.find(({health})=>!health||health.recordingState==='observing');
+    if (observing) {
+      this.observingSince ??= at;
+      return {state:at-this.observingSince>=8_000?'paused':'observing',reason:'等待录制写入观测',room:observing.room};
+    }
+    this.observingSince = undefined;
+    const slow=writers.find(({health})=>!health.recordingWriteHealthy||health.ingestLagMs>5000);
+    if (slow) return {state:'pressure',reason:'录制写入变慢或索引积压',room:slow.room};
+    if (this.loopDelay()>250) return {state:'pressure',reason:'后台响应变慢'};
     // On macOS immediately-free pages exclude reclaimable file cache. Share
     // the existing bounded memory-pressure sampler used by the render queue.
     if(this.platform==='darwin'){
       const sample=this.automaticMemory;
-      if(!this.automaticMemoryPending&&(!sample||at-sample.at>=5000)){
-        this.automaticMemoryPending=Promise.resolve().then(()=>this.media.idlePolicy?.resources())
-          .then(value=>{this.automaticMemory={at:this.now(),bytes:value?.available};},()=>{
-            this.automaticMemory={at:this.now(),bytes:undefined};
-          }).finally(()=>{this.automaticMemoryPending=null;});
-      }
-      if(!sample||at-sample.at>35000||!(sample.bytes>=768*MiB))return false;
-    } else if(os.freemem()<768*MiB)return false;
-    const sessions=this.store.all(liveSessions),rooms=this.recorder.rooms.filter(room=>room.recording);
-    // A writer with no matching session has just started or is reconnecting.
-    if(!rooms.length||sessions.length!==rooms.length)return false;
-    const writers=rooms.map(room=>{
-      const session=sessions.find(candidate=>this.matches(candidate,room));
-      return session&&this.writer(session,room,at);
-    });
-    return writers.every(health=>health?.recordingHealthy&&health.recordingWriteHealthy&&health.ingestLagMs<=5000);
+      if (!sample||at-sample.at>35000||!finite(sample.bytes))return {state:'observing',reason:'等待系统资源观测'};
+      if (sample.bytes<768*MiB)return {state:'pressure',reason:'可用内存偏低'};
+    } else if(os.freemem()<768*MiB)return {state:'pressure',reason:'可用内存偏低'};
+    if (os.availableParallelism()<4) return {state:'observing',reason:'录制期间保守上传'};
+    return {state:'healthy'};
   }
+  samplePublicationMemory(at) {
+    if (this.automaticMemoryPending || this.automaticMemory && at - this.automaticMemory.at < 5000) return;
+    this.automaticMemoryPending = Promise.resolve().then(()=>this.media.idlePolicy?.resources())
+      .then(value=>{ this.automaticMemory={at:this.now(),bytes:value?.available}; },
+        ()=>{ this.automaticMemory={at:this.now(),bytes:undefined}; })
+      .finally(()=>{ this.automaticMemoryPending=null; });
+  }
+
   async context() {
     const at=this.now(),base={recordingCount:0,recordingState:'observing',recordingHealthy:false,
       recordingWriteHealthy:false,hardwareAvailable:this.hardwareAvailable===true,sourceReady:false,foreground:this.closed||!!this.blocked()};

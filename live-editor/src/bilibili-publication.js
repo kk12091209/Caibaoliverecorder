@@ -28,6 +28,17 @@ export function publicationValidation({ title, tags, copyright, source }, requir
   return '';
 }
 
+export function publicationTransferLabel(transfer) {
+  const rate = bytes => (bytes / 1048576).toFixed(2) + ' MiB/s';
+  if (!transfer) return '';
+  const part = transfer.part ? `P${transfer.part}/${transfer.parts}` : '';
+  if (transfer.state === 'paused') return [part, '上传已让位', transfer.reason].filter(Boolean).join(' · ');
+  const state = { idle: '全速上传', healthy: '录制中，自适应上传', observing: '观察录制写入',
+    pressure: '正在保护录制' }[transfer.state];
+  return [part, state, transfer.reason, rate(transfer.bytesPerSecond || 0),
+    transfer.limitBytesPerSecond ? '上限 ' + rate(transfer.limitBytesPerSecond) : ''].filter(Boolean).join(' · ');
+}
+
 export function publicationStatus(status) {
   return ({
     queued: copy.等待导出,

@@ -16,7 +16,12 @@ import {GiftIcons,giftIconKey} from '../server/gift-icons.js';
 
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-gifts-')),store=new Store(root),session=store.createSession({status:'finished'}),source=store.addSource(session.id,path.join(root,'one.flv'),20);t.after(async()=>{store.close();await fs.rm(root,{recursive:true,force:true});});return {root,store,session,source};}
 test('gift controls default off; both platform thresholds use yuan and invalid values fail',()=>{
- assert.deepEqual(DEFAULT_GIFT_STYLE,{preview:false,export:false,minBilibili:0,minDouyin:0,currency:'CNY'});
+ const {preview,export:exportEnabled,scPreview,scExport,minBilibili,minDouyin,currency}=DEFAULT_GIFT_STYLE;
+ assert.deepEqual({preview,exportEnabled,scPreview,scExport,minBilibili,minDouyin,currency},
+   {preview:false,exportEnabled:false,scPreview:false,scExport:false,minBilibili:0,minDouyin:0,currency:'CNY'});
+ const migrated=validateGiftStyle({preview:true,export:false,minBilibili:30,minDouyin:60});
+ assert.equal(migrated.scPreview,true);assert.equal(migrated.minSuperChat,30);assert.equal(migrated.minDouyin,6);
+ assert.equal(migrated.giftCorner,'top-right');assert.equal(migrated.scHeight,100);
  for(const value of [{},null,{...DEFAULT_GIFT_STYLE,preview:'true'},{...DEFAULT_GIFT_STYLE,minBilibili:-1},{...DEFAULT_GIFT_STYLE,minDouyin:Infinity},{...DEFAULT_GIFT_STYLE,room:1}])assert.throws(()=>validateGiftStyle(value));
  assert.equal(giftPrice({platform:'bilibili',totalPrice:null}),'金额未知');
 });

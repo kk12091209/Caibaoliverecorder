@@ -1,7 +1,8 @@
 import {jobSummaries} from './workbench-snapshot.js';
 import { json, body } from './http-response.js';
 import {messageFeed} from './message-feed.js';
-import {giftMessages} from './gifts.js';
+import {giftHistoryStart,giftMessages} from './gifts.js';
+import {prepareSuperChats} from './super-chat-history.js';
 import {savedGiftStyle} from '../shared/gifts.js';
 import { OVERLAY_MESSAGE_LIMIT, PANEL_MESSAGE_LIMIT } from '../shared/message-limits.js';
 import {validateSenderFilter} from '../shared/sender-filter.js';
@@ -93,8 +94,13 @@ export async function handleMaterialRoutes({req,res,url,p},{store,media,preparat
     const id=match[1];if(!store.session(id))return json(res,{error:'素材不存在或已删除。'},404);
     const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||Number.MAX_SAFE_INTEGER),at=url.searchParams.has('at')?Number(url.searchParams.get('at')):undefined;
     if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<from||at!==undefined&&(!Number.isFinite(at)||at<from||at>to))throw new Error('礼物时间范围无效。');
-    const includeSuperChat = url.searchParams.get('includeSuperChat') === '1';
-    const events=giftMessages(store,id,{from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style:savedGiftStyle(store),includeSuperChat});
+    const style=savedGiftStyle(store);
+    const overlay=url.searchParams.get('overlay')==='1';
+    const includeSuperChat=overlay?style.scPreview:url.searchParams.get('includeSuperChat')==='1';
+    if (overlay&&includeSuperChat) await prepareSuperChats(store,id);
+    const events=giftMessages(store,id,overlay?{from:giftHistoryStart(store,id,from),to,overlay,style,
+      includeSuperChat,includeGifts:style.preview,limit:-1}:{
+      from,to,at,search:(url.searchParams.get('q')||'').slice(0,200),limit:500,style,includeSuperChat});
     void store.giftIcons.enrich(events).catch(()=>{});
     return json(res,events);
   }

@@ -4,6 +4,7 @@ import { Agent } from 'node:https';
 import path from 'node:path';
 import { checkedFile, fingerprint, inside, pathKey } from './storage-files.js';
 import { normalizePublicationTags } from '../shared/publication-tags.js';
+import { MiB, PublicationBandwidth } from './publication-bandwidth.js';
 
 function uploadConfig(input) {
   const title = typeof input?.title === 'string' ? input.title.trim() : '';
@@ -141,8 +142,8 @@ export class BilibiliPublisher {
   #categoryCatalog;
   #closed = false;
 
-  constructor(store, credentials, { loadSdk = loadBundledSdk } = {}) {
-    Object.assign(this, { store, credentials, loadSdk });
+  constructor(store, credentials, { loadSdk = loadBundledSdk, bandwidth = new PublicationBandwidth() } = {}) {
+    Object.assign(this, { store, credentials, loadSdk, bandwidth });
   }
 
   async initialize() {
@@ -279,9 +280,10 @@ export class BilibiliPublisher {
     const row = this.store.get('SELECT status,error,aid,bvid,can_retry FROM bilibili_publisher_jobs WHERE id=?', taskId);
     if (!row) throw this.taskMissing();
     const active = this.#active?.id === taskId ? this.#active : null;
+    const transfer = this.transferStatus(taskId);
     return {
       status: row.status === 'staged' ? 'queued' : row.status,
-      progress: row.status === 'submitted' ? 1 : active?.progress ?? 0,
+      progress: row.status === 'submitted' ? 1 : active?.progress ?? 0, ...(transfer ? {transfer} : {}),
       ...(row.error ? { error: row.error } : {}), ...(row.aid ? { aid: row.aid } : {}),
       ...(row.bvid ? { bvid: row.bvid } : {}), canRetry: row.can_retry === 1,
     };
@@ -296,21 +298,36 @@ export class BilibiliPublisher {
       "SELECT 1 FROM bilibili_publisher_jobs WHERE status IN ('queued','uploading','submitting') LIMIT 1"));
   }
 
-  yieldAutomaticUpload(){
-    const active=this.#active;
-    if(active?.automatic&&!active.committing&&!active.controller.signal.aborted){
+  transferStatus(taskId) {
+    const active = this.#active;
+    if (!taskId || active?.id !== taskId || !active.transfer) return undefined;
+    const { bytesPerSecond } = active.transfer.metrics();
+    return { ...this.bandwidth.snapshot(), bytesPerSecond, part: active.part, parts: active.parts, progress: active.progress };
+  }
+
+  updateRecording(evidence) {
+    const active = this.#active;
+    if (active && !active.committing && active.authorized?.() !== true && !active.controller.signal.aborted) {
+      active.cancelled = true;
       active.controller.abort();
       active.cancelUpload?.();
+    }
+    if (this.bandwidth.update(evidence, active?.transfer?.metrics().bytesPerSecond) && active) {
+      const { state, limitBytesPerSecond, reason, room } = this.bandwidth.snapshot();
+      const rate = limitBytesPerSecond === null ? '全速' : (limitBytesPerSecond / MiB).toFixed(2) + ' MiB/s';
+      this.log(active.row, ['上传调速 '+state, rate, reason, room&&'房间 '+room].filter(Boolean).join('；'), '信息', true);
     }
   }
 
   tick(authorize, { automaticAllowed = true } = {}) {
     if (this.#closed) return;
     if (this.#active) return this.#active.done;
+    if (this.bandwidth.rate === 0) return;
     const row = this.store.get("SELECT * FROM bilibili_publisher_jobs WHERE status='queued' AND (? OR owner_kind<>'auto') ORDER BY rowid LIMIT 1", +automaticAllowed);
     if (!row) return;
     const controller = new AbortController();
-    const active = { id: row.id, controller, progress: 0, cancelUpload: null, committing: false, automatic: row.owner_kind === 'auto' };
+    const active = { id: row.id, row, controller, progress: 0, cancelUpload: null, committing: false, automatic: row.owner_kind === 'auto',
+      authorized: () => authorize?.({ kind: row.owner_kind, id: row.owner_id }, row.uid, row.id) === true };
     this.#active = active;
     active.done = this.run(row, active, authorize).finally(() => { this.#active = null; });
     return active.done;
@@ -407,22 +424,30 @@ export class BilibiliPublisher {
         }
         const partStart = Date.now();
         this.log(row, `P${index+1} 开始上传；${part.bytes} 字节`);
+        const transfer = this.bandwidth.transfer();
+        Object.assign(active, { transfer, part: index + 1, parts: parts.length });
         const upload = new this.#sdk.WebVideoUploader({ path: part.path, title: part.title }, verified.client.auth, {
-          // The SDK applies this limit per chunk in KiB/s. One chunk means
-          // the upload's aggregate rate is also bounded.
-          concurrency: active.automatic ? 1 : 2, limitRate: active.automatic ? 1024 : 0,
+          concurrency: active.automatic ? 1 : 2, bandwidth: {
+            ...transfer,
+            confirm: (chunk, bytes) => {
+              transfer.confirm(chunk, bytes);
+              active.progress = (uploadedBytes + transfer.metrics().confirmed) / total * .99;
+            },
+          },
           retryTimes: 2, retryDelay: 750,
         });
         requestOptions(upload.request, signal, active.automatic ? 90000 : 12000);
         active.cancelUpload = () => upload.cancel();
         upload.on('error', () => {});
-        upload.on('progress', event => {
-          if (event?.event === 'uploading' && Number.isFinite(event.progress)) {
-            const bytes = part.bytes * Math.max(0, Math.min(1, event.progress));
-            active.progress = Math.max(active.progress, (uploadedBytes + bytes) / total * 0.99);
-          }
-        });
-        const result = await untilAbort(signal, () => upload.upload());
+        let result;
+        try {
+          result = await untilAbort(signal, () => upload.upload());
+        } finally {
+          const elapsed = Date.now() - partStart;
+          const { emitted, repeated, pausedMs } = transfer.metrics();
+          this.log(row, `P${index+1} 发送 ${emitted} 字节；均速 ${(emitted*1000/Math.max(1,elapsed)/MiB).toFixed(2)} MiB/s；重传 ${repeated} 字节；保护等待 ${pausedMs} ms`);
+          active.transfer = null;
+        }
         active.cancelUpload = null;
         guard();
         if (!validPartReceipt(result)) {
@@ -431,6 +456,7 @@ export class BilibiliPublisher {
         const receipt = {cid:Number(result.cid), filename:result.filename, at:Date.now()};
         receipts[index] = receipt;
         persistReceipts();
+        active.progress = (uploadedBytes + part.bytes) / total * .99;
         this.log(row, `P${index+1} 上传完成；${part.bytes} 字节；耗时 ${Date.now()-partStart} ms`);
         completed.push({cid:receipt.cid,filename:receipt.filename,title:part.title});
         uploadedBytes += part.bytes;
@@ -472,7 +498,8 @@ export class BilibiliPublisher {
         const rejected = definiteRejection(error, this.#sdk);
         if (rejected) this.save(row.id, 'failed', rejected, true);
         else this.save(row.id, 'uncertain', unknownSubmission);
-      } else if (signal.aborted) this.save(row.id, 'queued');
+      } else if (active.cancelled) this.save(row.id, 'cancelled', denied.message);
+      else if (signal.aborted) this.save(row.id, 'queued');
       else if (error === denied) this.save(row.id, 'cancelled', error.message);
       else this.save(row.id, 'failed', `${detail}：${error instanceof PublicationError ? error.message :
         definiteRejection(error, this.#sdk) || 'B站视频上传失败，成片已保留，可重试。'}`, true);

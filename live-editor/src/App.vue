@@ -9,7 +9,7 @@ import GiftIcon from './components/GiftIcon.vue';
 import MessageMatch from './components/MessageMatch.vue';
 import VirtualMessageList from './components/VirtualMessageList.vue';
 import MessageTimeNavigator from './components/MessageTimeNavigator.vue';
-import {giftCards,giftPrice,normalizedGiftStyle,SUPER_CHAT_SECONDS} from '../shared/gifts.js';
+import {giftPrice,normalizedGiftStyle} from '../shared/gifts.js';
 import {normalizedDanmakuStyle} from '../shared/danmaku-style.js';
 import {cacheWarningInGB,MAX_CACHE_WARNING_GB} from '../shared/cache-warning-units.js';
 import {senderFilterFor} from '../shared/sender-filter.js';
@@ -55,7 +55,7 @@ import { toRecordingInput } from './recording-time.js';
 import { overlayWindow as makeOverlayWindow, containsOverlay } from './message-window.js';
 import { isDesktop, isMacDesktop, openAuthorPage, openStudioPage, pickExportFolder } from './desktop.js';
 import { api } from './api.js';
-import { publicationStatus } from './bilibili-publication.js';
+import { publicationStatus, publicationTransferLabel } from './bilibili-publication.js';
 import { roomAvailable } from './room-status.js';
 import { stateSync } from './state-sync.js';
 import { createBackdropClickGuard } from './backdrop-click.js';
@@ -129,18 +129,20 @@ const recoveryNoticeKey=computed(()=>{const r=state.value.recovery||{};return JS
 const roomChoice=shallowRef(null),roomChoicePlatform=ref(''),roomChoiceError=ref('');
 const giftFeed=shallowRef([]);
 const previewGifts=computed(()=>state.value.giftStyle?.preview===true);
+const previewSC=computed(()=>state.value.giftStyle?.scPreview===true);
+const giftPreviewEnabled=computed(()=>previewGifts.value||previewSC.value);
 const savingPreviewGifts=ref(false);
-async function setPreviewGifts(event){
+async function setPreviewGifts(event,key='preview'){
   if(savingPreviewGifts.value)return;
   const checkbox=event.target;
   savingPreviewGifts.value=true;
   try{
-    const result=await api('settings',{giftStyle:{...normalizedGiftStyle(state.value.giftStyle),preview:checkbox.checked}});
+    const result=await api('settings',{giftStyle:{...normalizedGiftStyle(state.value.giftStyle),[key]:checkbox.checked}});
     state.value.giftStyle=result.giftStyle;
   }catch(error){tell(error.message);}
-  finally{checkbox.checked=previewGifts.value;savingPreviewGifts.value=false;}
+  finally{checkbox.checked=(key==='preview'?previewGifts:previewSC).value;savingPreviewGifts.value=false;}
 }
-watch(previewGifts,enabled=>{if(enabled)void loadGiftOverlay();else giftFeed.value=[];});
+watch(()=>JSON.stringify(state.value.giftStyle),()=>{giftWindow=null;giftFeed.value=[];if(giftPreviewEnabled.value)void loadGiftOverlay();});
 const showOverlay=ref(true);
 watch(showOverlay,enabled=>{if(enabled)void loadOverlay();});
 const roomBusyIds=ref([]);
@@ -231,15 +233,11 @@ const excluded=computed(()=>new Set(edit.value.excluded));
 const highlighted=computed(()=>new Set(edit.value.highlighted||[]));
 const visibleDanmaku=shallowRef(new Set());
 const previewGiftEvents = computed(() => giftFeed.value.filter(gift => !excluded.value.has(gift.id)));
-const previewGiftCards = computed(() => {
-  if (!previewGifts.value || !previewUrl.value || loading.value) return [];
-  return giftCards(previewGiftEvents.value, position.value);
-});
-const visibleGiftIds = computed(() => new Set(previewGiftCards.value.map(gift => gift.id)));
+const visibleGiftIds = shallowRef(new Set());
 function isCurrentMessage(message) {
   if (message.type === 'd') return visibleDanmaku.value.has(message.id);
   if (message.type === 'lottery') return Math.abs(message.time - position.value) < 1;
-  return visibleGiftIds.value.has(message.id);
+  return giftPreviewEnabled.value&&visibleGiftIds.value.has(message.id);
 }
 const mergedMessages=computed(()=>[
   ...(!showGiftList.value||searching.value?messages.value.map(m=>applyMessageEdit(m,edit.value.messageEdits)):[]),
@@ -345,7 +343,7 @@ const {
   refreshLotteryDetail, tell, visibleMessages
 });
 const {
-  exportMode, exportGifts, exportDirectory, savedExportDirectory, exportScope, exportTarget,
+  exportMode, exportGifts, exportSC, exportDirectory, savedExportDirectory, exportScope, exportTarget,
   exportRanges, exportExcluded, versionDescription, exportCategory, exportDuration, exportBlock,
   fullExportBlock, openExport, openFullExport, browseFolder, commitExportDirectory, openFolder, exportClip
 }=useExportDialog({
@@ -827,18 +825,22 @@ function finishPlaybackScrub(){
   finishMessageScrub();
 }
 function sameMessages(a,b){return a.length===b.length&&a.every((m,i)=>m.id===b[i].id&&m.time===b[i].time&&m.text===b[i].text&&m.color===b[i].color&&m.user===b[i].user&&m.senderId===b[i].senderId&&m.senderPlatform===b[i].senderPlatform&&m.edited===b[i].edited&&m.originalUser===b[i].originalUser&&m.originalText===b[i].originalText);}
-let giftFeedBusy=false;
+let giftFeedBusy=false, giftWindow=null;
 async function loadGiftOverlay(){
-  if(!previewGifts.value||!selectionReady.value||giftFeedBusy){if(!previewGifts.value)giftFeed.value=[];return;}
-  const id = selected.value, version = selectionGeneration, at = position.value;
-  const from = Math.max(0, at - SUPER_CHAT_SECONDS);
-  giftFeedBusy = true;
-  try {
-    const events = await api(`sessions/${id}/gifts?from=${from}&to=${from+60}&at=${at}&includeSuperChat=1`);
-    if (version === selectionGeneration && id === selected.value && previewGifts.value) giftFeed.value = events;
-  } catch {} finally {
-    giftFeedBusy = false;
-  }
+  if(!giftPreviewEnabled.value||!selectionReady.value||giftFeedBusy)return;
+  const id=selected.value,version=selectionGeneration,at=position.value;
+  const style=JSON.stringify(state.value.giftStyle),live=activeSession.value?.status!=='finished';
+  if(giftWindow?.id===id&&giftWindow.version===version&&giftWindow.style===style&&at>=giftWindow.from&&at<giftWindow.to&&
+      Date.now()-giftWindow.loaded<(live?2000:45000))return;
+  const from=Math.floor(at/30)*30,to=from+60;
+  giftFeedBusy=true;
+  try{
+    const events=await api(`sessions/${id}/gifts?from=${from}&to=${to}&overlay=1`);
+    if(version===selectionGeneration&&id===selected.value&&style===JSON.stringify(state.value.giftStyle)){
+      giftFeed.value=events;
+      giftWindow={id,version,style,from,to,loaded:Date.now()};
+    }
+  }catch{}finally{giftFeedBusy=false;}
 }
 async function loadOverlay(){
   if(document.hidden)return;
@@ -914,13 +916,16 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
           <RecordingLayout v-if="previewUrl" :video="video" :events="recordingCameraEvents" :style="state.recordingStyle" :base="previewBase" :loading="loading"/>
           <DanmakuOverlay v-if="previewUrl" @font-error="tell(ui.workbench.字体未能加载请在设置中重新导入)" @visible-danmaku="visibleDanmaku=$event" :font="state.danmakuFont" :style="state.danmakuStyle" :video="video" :base="previewBase" :messages="overlayFeed" :highlighted="highlighted" :highlight-style="state.highlightStyle" :message-edits="edit.messageEdits" :excluded="excluded" :enabled="showOverlay" :loading="loading"/>
           <LinkmicOverlay v-if="previewUrl" @cameras="recordingCameraEvents=$event" :session="selected" :video="video" :base="previewBase" :loading="loading"/>
-          <GiftOverlay :cards="previewGiftCards" :video="video" :loading="loading"/>
+          <GiftOverlay v-if="giftPreviewEnabled&&previewUrl" :events="previewGiftEvents" :video="video" :base="previewBase"
+            :style="state.giftStyle" :loading="loading" :camera-events="recordingCameraEvents" :recording-style="state.recordingStyle"
+            :sources="detail?.sources" @visible="visibleGiftIds=$event"/>
           <RecordingTimestamp v-if="previewUrl&&state.previewTimestamp===true&&selectionReady" :video="video" :base="previewBase" :session="activeSession" :sources="detail?.sources" :loading="loading" :timestamp-style="state.previewTimestampStyle" :timestamp-position="state.previewTimestampPosition"/>
         </div>
         <div v-if="selected" class="playback-toolbar"><div class="playback-left"><button class="icon-button" :aria-label="ui.workbench.上一帧" :title="ui.workbench.上一帧左方向键" :disabled="!canPreview" @click="step(-1)"><StepBack :size="21"/></button><button class="icon-button play" :disabled="!canPreview" :aria-label="isPlaying?ui.workbench.暂停:ui.workbench.播放" @click="togglePlay"><Pause v-if="isPlaying" :size="25"/><Play v-else :size="25"/></button><button class="icon-button" :aria-label="ui.workbench.下一帧" :title="ui.workbench.下一帧右方向键" :disabled="!canPreview" @click="step(1)"><StepForward :size="21"/></button><div class="preview-volume" :class="{open:previewVolumeOpen}" @pointerenter="openPreviewVolume" @pointerleave="leavePreviewVolume" @pointerdown="previewVolumeDown"><button type="button" class="icon-button" :disabled="!canPreview" :aria-pressed="previewMuted||previewVolume===0" :aria-label="previewMuted||previewVolume===0?ui.workbench.恢复预览声音:ui.workbench.静音预览" :title="(previewMuted||previewVolume===0?ui.workbench.预览已静音点击恢复声音:ui.workbench.点击静音预览)+ui.workbench.只改变这里的播放导出视频的声音不变" @click="togglePreviewMute"><VolumeX v-if="previewMuted||previewVolume===0" :size="18"/><Volume1 v-else-if="previewVolume<0.5" :size="18"/><Volume2 v-else :size="18"/></button><div class="preview-volume-pop"><div class="preview-volume-rotator"><input type="range" min="0" max="100" step="1" :value="Math.round(previewSlider*100)" :disabled="!canPreview" :aria-label="ui.workbench.预览音量" :title="ui.workbench.预览音量预览音量+Math.round(previewSlider*100)+'%'" @input="setPreviewVolume"/></div></div></div><span class="playback-time">{{ formatPosition(position) }} <span>/ {{ formatPosition(duration) }}</span></span></div><div class="playback-right"><button v-if="activeSession?.status==='recording'" class="button subtle" :disabled="!canPreview" @click="returnToLatest"><RotateCcw :size="16"/>{{ ui.workbench.回到最新 }}</button>
           <div class="preview-display-options" role="group" :aria-label="ui.workbench.画面显示">
             <label class="checkbox"><input v-model="showOverlay" type="checkbox"/>{{ ui.workbench.弹幕 }}</label>
             <label class="checkbox"><input type="checkbox" :checked="previewGifts" :disabled="savingPreviewGifts" @change="setPreviewGifts"/>{{ ui.gifts.礼物 }}</label>
+            <label class="checkbox"><input type="checkbox" :checked="previewSC" :disabled="savingPreviewGifts" @change="setPreviewGifts($event,'scPreview')"/>醒目留言</label>
           </div>
         </div></div>
         </div>
@@ -986,7 +991,7 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
               <div v-if="job.hasRetainedFiles&&['failed','interrupted','save_failed'].includes(job.status)" class="job-save-actions" @keydown.stop><button class="text-button" @click="openFolder({recoveryJobId:job.id})"><FolderOpen :size="14"/>{{ ui.workbench.查看暂存文件 }}</button></div>
               <div v-if="job.status==='done'" class="download-links" @keydown.stop><button class="text-button" @click="openFolder({jobId:job.id})"><FolderOpen :size="14"/>{{ ui.workbench.打开文件夹 }}</button></div>
               <p v-if="quickPublications.has(job.id)" class="job-save-hint" :data-quick-publish-status="quickPublications.get(job.id).status" role="status">
-                {{ ui.autoPost.快速投稿 }} · {{ publicationStatus(quickPublications.get(job.id).status) }}
+                {{ ui.autoPost.快速投稿 }} · {{ quickPublications.get(job.id).transfer ? publicationTransferLabel(quickPublications.get(job.id).transfer) : publicationStatus(quickPublications.get(job.id).status) }}
               </p>
             </div>
           <button v-if="jobHistoryCursor" type="button" class="button subtle small" :disabled="loadingJobHistory" @click="loadJobHistory">{{ ui.workbench.加载更早导出记录 }}</button></section></div>
@@ -995,7 +1000,7 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
           <div v-for="posting in autoPostJobs" :key="posting.id" class="job-row" :data-auto-post-status="posting.status">
             <div>
               <strong>{{ posting.title }}</strong>
-              <small role="status">{{ publicationStatus(posting.stage || posting.status) }}</small>
+              <small role="status">{{ posting.transfer ? publicationTransferLabel(posting.transfer) : publicationStatus(posting.stage || posting.status) }}</small>
             </div>
             <p v-if="posting.mode==='dual'" class="job-save-hint">
               {{ posting.parts?.length ? posting.parts.map((part,index)=>ui.autoPost.分P标题(index+1,part.title)).join(' · ') : ui.autoPost.分P预览 }}
@@ -1245,7 +1250,7 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
           <label class="export-mode" :class="{chosen:exportMode==='clean'}"><input v-model="exportMode" type="radio" name="export-mode" value="clean"/><span><strong>{{ ui.workbench.纯净版本 }}</strong><small>{{ ui.workbench.无弹幕的MP4 }}</small></span></label>
           <label class="export-mode" :class="{chosen:exportMode==='danmaku'}"><input v-model="exportMode" type="radio" name="export-mode" value="danmaku"/><span><strong>{{ ui.workbench.弹幕版本 }}</strong><small>{{ ui.workbench.叠加弹幕的MP4 }}</small></span></label>
           <label class="export-mode" :class="{chosen:exportMode==='dual'}"><input v-model="exportMode" type="radio" name="export-mode" value="dual"/><span><strong>{{ ui.workbench.纯净弹幕双文件版本 }}</strong><small>{{ ui.workbench.分别生成两份MP4 }}</small></span></label>
-        </fieldset><label class="checkbox"><input v-model="exportGifts" type="checkbox" :disabled="exportMode==='clean'"/>{{ ui.workbench.本次弹幕版展示礼物 }}</label><p class="muted">{{ ui.workbench.导出礼物筛选说明 }}</p><p v-if="exportMode!=='clean'&&(exportScope==='full'||exportExcluded>0)" class="muted"><template v-if="exportScope==='full'">{{ ui.workbench.弹幕版沿用这份素材的弹幕排除设置 }}</template><template v-else>{{ ui.workbench.已排除的 }} {{ exportExcluded }} {{ ui.workbench.条弹幕不会进入弹幕版 }}</template></p><p v-if="exportBlock" class="inline-warning">{{ exportBlock }}</p><button class="button primary wide" :disabled="modalBusy||saving||!!exportBlock" @click="exportClip"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>{{ ui.workbench.开始导出 }}</button></template>
+        </fieldset><label class="checkbox"><input v-model="exportGifts" type="checkbox" :disabled="exportMode==='clean'"/>{{ ui.workbench.本次弹幕版展示礼物 }}</label><label class="checkbox"><input v-model="exportSC" type="checkbox" :disabled="exportMode==='clean'"/>本次弹幕版展示醒目留言</label><p class="muted">{{ ui.workbench.导出礼物筛选说明 }}</p><p v-if="exportMode!=='clean'&&(exportScope==='full'||exportExcluded>0)" class="muted"><template v-if="exportScope==='full'">{{ ui.workbench.弹幕版沿用这份素材的弹幕排除设置 }}</template><template v-else>{{ ui.workbench.已排除的 }} {{ exportExcluded }} {{ ui.workbench.条弹幕不会进入弹幕版 }}</template></p><p v-if="exportBlock" class="inline-warning">{{ exportBlock }}</p><button class="button primary wide" :disabled="modalBusy||saving||!!exportBlock" @click="exportClip"><LoaderCircle v-if="modalBusy" class="spin" :size="16"/>{{ ui.workbench.开始导出 }}</button></template>
     </section></div>
   </div>
 </template>

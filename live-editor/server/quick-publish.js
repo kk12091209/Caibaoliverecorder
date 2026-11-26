@@ -27,12 +27,13 @@ function normalize(input) {
     source: copyright === 2 ? source : '', mode: input.mode };
 }
 
-function publicJob(row) {
+function publicJob(row, publisher) {
   if (!row) return null;
+  const transfer = row.status === 'uploading' ? publisher?.transferStatus?.(row.remote_task) : undefined;
   return {
     id: row.export_job, exportJobId: row.export_job, session: row.session,
     status: row.status, title: row.title, error: row.error,
-    progress: row.progress, aid: row.aid || undefined, bvid: row.bvid || undefined,
+    progress: transfer?.progress ?? row.progress, transfer, aid: row.aid || undefined, bvid: row.bvid || undefined,
     canRetry: row.status === 'failed' && !row.remote_task,
   };
 }
@@ -62,7 +63,7 @@ export class QuickPublish {
   }
 
   snapshot() {
-    return this.store.all('SELECT * FROM quick_publish_jobs ORDER BY updated DESC LIMIT 200').map(publicJob);
+    return this.store.all('SELECT * FROM quick_publish_jobs ORDER BY updated DESC LIMIT 200').map(row=>publicJob(row,this.publisher));
   }
 
   isBusy(id) {
@@ -108,7 +109,7 @@ export class QuickPublish {
     const defaults = { title, description: '', tags: [], categoryId: '', copyright: '', source: '' };
     const { accountUid, accountError } = this.publisher.snapshot();
     return { ...defaults, ...draft, availableModes, account: accountUid ? { uid: accountUid } : null, accountError,
-      mode: availableModes.includes(draft?.mode) ? draft.mode : defaultMode, publication: publicJob(previous) };
+      mode: availableModes.includes(draft?.mode) ? draft.mode : defaultMode, publication: publicJob(previous,this.publisher) };
   }
 
   async submit(id, input) {

@@ -6,8 +6,13 @@ export class GiftIntake{
   add(key,gift){
     const room=this.rooms.get(key);if(!room||room.closed||!gift||gift.id.length>160)return false;
     const previous=room.seen.get(gift.id);if(previous&&gift.count<=previous.count)return true;
-    const firstTime=previous?.time??gift.time,item={...gift,time:firstTime};
-    const size=Buffer.byteLength(JSON.stringify(item))+128,old=room.pending.get(gift.id);
+    const firstTime=previous?.time??gift.time,old=room.pending.get(gift.id);
+    const item={...gift,time:firstTime};
+    if (gift.id.startsWith('combo:')) {
+      const updates = old?.item.updates || [];
+      item.updates=[...updates.slice(0,31),{time:Math.max(firstTime,gift.time),count:gift.count,totalPrice:gift.totalPrice}];
+    }
+    const size=Buffer.byteLength(JSON.stringify(item))+128;
     if(size>8192||!old&&room.count>=this.perRoom||this.bytes+size-(old?.size||0)>this.maxBytes)return false;
     room.pending.set(gift.id,{item,size});this.bytes+=size-(old?.size||0);if(!old)room.count++;
     room.seen.set(gift.id,{count:gift.count,time:firstTime});

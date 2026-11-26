@@ -6,7 +6,7 @@ import { acquireReader, checkedFile, fingerprint, originalTags, isMedia, isCodec
 import { chatRate, isLongChat } from './chat-rules.js';
 import {mediaDigest,keyframesDigest,codecHeaderSignature,readSealedChunk,verifyDirectKeyframes,metadataOnlyChange,verifiedDirectChunks} from './source-range-identity.js';
 import {timestamp, RecordingClock} from './flv-clock.js';
-import {giftFromXml,saveGift} from './gifts.js';
+import {giftFromXml,retractSuperChat,saveGift} from './gifts.js';
 import {senderFromXml,saveSender} from './senders.js';
 export {timestamp} from './flv-clock.js';
 
@@ -175,7 +175,7 @@ export class Ingestor {
       const { bytesRead } = await file.read(buffer, 0, buffer.length, current.xmlpos);
       const text = buffer.subarray(0, bytesRead).toString('utf8');
       const regex = chatEventPattern();
-      let match, consumed = 0; const messages = [], lotteryMessages = [], density = [],gifts=[],senders=[];
+      let match, consumed = 0; const messages = [], lotteryMessages = [], density = [],gifts=[],senders=[],retractions=[];
       while ((match = regex.exec(text))) {
         // Keep paid messages out of the ordinary chat quota and index.
         consumed = regex.lastIndex;
@@ -184,6 +184,7 @@ export class Ingestor {
           const offset=current.xmlpos+Buffer.byteLength(text.slice(0,match.index)),gift=giftFromXml(match[1],attributes,source,offset,match[1]==='sc'?decodeXML(match[3]||''):'');
           if(gift)gifts.push(gift);continue;
         }
+        if(match[1]==='sc_retract') {retractions.push(attributes.scid);continue;}
         if(match[1]==='density') {
           const local=Number(attributes.ts), count=Number(attributes.count), kept=Number(attributes.kept);
           if(Number.isSafeInteger(local)&&local>=0&&local<=366*86400&&Number.isSafeInteger(count)&&count>=0&&count<=1000000000&&Number.isSafeInteger(kept)&&kept>=0&&kept<=count&&kept<=2000) {
@@ -215,6 +216,7 @@ export class Ingestor {
         for(const [id,sender] of senders)saveSender(this.store,id,sender);
         for(const values of density)this.store.run('INSERT OR IGNORE INTO danmaku_density VALUES(?,?,?,?)',...values);
         for(const gift of gifts)saveGift(this.store,gift);
+        for(const id of retractions)retractSuperChat(this.store,source.session,id);
         let changed=false;
         for (const id of lotteryMessages) if(this.store.run("INSERT OR IGNORE INTO danmaku_filters(message,reason) VALUES(?,'lottery')",id).changes&&!inserted.has(id))changed=true;
         // New rows and their flags become visible atomically to the rowid

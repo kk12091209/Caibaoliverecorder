@@ -46,11 +46,50 @@ const secureUploadTransport = {
       let contents = bytes.toString('utf8');
       contents = replaceExpected(contents, 'rejectUnauthorized: false', 'rejectUnauthorized: true', 2);
       contents = replaceExpected(contents, '                    Cookie: this?.auth?.cookie,\n', '');
+      contents = replaceExpected(contents, 'import fs from "node:fs";', 'import fs from "node:fs";\nimport { Readable } from "node:stream";');
       contents = replaceExpected(contents, 'timeout: 1000000', 'timeout: 30000');
+      contents = replaceExpected(contents, '        while (retryCount >= 0) {\n            try {', `        while (retryCount >= 0) {
+            try {
+                await this.options.bandwidth?.awaitOpen(options.controller.signal);
+                if (options.controller.signal.aborted) return;`);
+      contents = replaceExpected(contents, '                await this.uploadChunkApi(options, stream, streamSize);',
+        '                await this.uploadChunkApi(options, stream, streamSize);\n                this.options.bandwidth?.confirm(partNumber, streamSize);');
+      contents = replaceExpected(contents, '                if (e.code == "ERR_CANCELED") {', `                if (options.controller.signal.aborted) return;
+                if (e.code === "CAIBO_UPLOAD_YIELDED") {
+                    this.progress[partNumber] = 0;
+                    continue;
+                }
+                if (e.code == "ERR_CANCELED") {`);
+      contents = replaceExpected(contents, '            let uploaded = 0;', `            let uploaded = 0;
+            const bandwidth = this.options.bandwidth;
+            const socketClosed = new AbortController();
+            const streamSignal = AbortSignal.any([abortSignal, socketClosed.signal]);
+            const source = fileStream;
+            if (bandwidth && !Buffer.isBuffer(source)) {
+                fileStream = Readable.from((async function* () {
+                    for await (const data of source) {
+                        await bandwidth.take(data.length, streamSignal);
+                        yield data;
+                    }
+                })(), { objectMode: false, highWaterMark: 1 });
+            }`);
+      contents = replaceExpected(contents, '                    uploaded += chunk.length;',
+        '                    bandwidth?.sent(Number(params.partNumber), uploaded, chunk.length);\n                    uploaded += chunk.length;');
+      contents = replaceExpected(contents, '                    reject(new Error(`File stream error: ${error.message}`));',
+        '                    reject(error);\n                    req.destroy();');
       contents = replaceExpected(contents, '            req.on("error", error => {',
-        '            req.on("timeout", () => req.destroy(new Error("Upload request timed out")));\n' +
-        '            req.once("close", () => { if (!Buffer.isBuffer(fileStream)) fileStream.destroy(); });\n' +
-        '            req.on("error", error => {');
+        `            req.on("timeout", () => {
+                const error = new Error("Upload request timed out");
+                if (bandwidth?.paused() && uploaded < streamSize) error.code = "CAIBO_UPLOAD_YIELDED";
+                reject(error);
+                req.destroy();
+            });
+            req.once("close", () => {
+                socketClosed.abort();
+                if (!Buffer.isBuffer(fileStream)) fileStream.destroy();
+                if (!Buffer.isBuffer(source)) source.destroy();
+            });
+            req.on("error", error => {`);
       contents = replaceExpected(contents, 'this.request.post(url, "", {',
         'this.request.post(url, "", {\n            maxRedirects: 0,');
       contents = replaceExpected(contents, 'this.request.post(url, {}, {',
@@ -88,7 +127,7 @@ async function notices(inputs) {
     .map(file => file.replaceAll('\\', '/').match(packageRoot)?.[0]).filter(Boolean));
   if (!included.has('node_modules/@renmu/bili-api')) throw new Error('Missing npm provenance for the Bilibili upload SDK');
   const sections = [`Bilibili upload library source (@renmu/bili-api 2.15.2): ${source}`,
-    'Caibo changes the upload transport in scripts/build-bilibili-upload-sdk.mjs to verify TLS, keep account cookies off the upload CDN, prevent redirects and time out idle streaming requests.',
+    'Caibo changes the upload transport in scripts/build-bilibili-upload-sdk.mjs to verify TLS, keep account cookies off the upload CDN, prevent redirects, time out idle requests, and share a recording-aware budget across uploads.',
     'The release source contains these changes and the dependency lockfile.'];
   for (const key of [...included].sort()) {
     const locked = packages[key];
