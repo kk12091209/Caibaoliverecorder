@@ -32,16 +32,16 @@ export class DailyDiagnostics{
   static async open(root,options={}){
     const log=new DailyDiagnostics(root,options);await log.initialize();return log;
   }
-  constructor(root,{now=Date.now,io=fs,version='unknown',maxBytes=LOG_MAX_BYTES,retentionDays=LOG_RETENTION_DAYS}={}){
-    Object.assign(this,{now,io,version,maxBytes,retentionDays});
+  constructor(root,{now=Date.now,io=fs,version='unknown',buildId='',maxBytes=LOG_MAX_BYTES,retentionDays=LOG_RETENTION_DAYS}={}){
+    Object.assign(this,{now,io,version,buildId,maxBytes,retentionDays});
     this.directory=path.join(root,'logs');this.stateFile=path.join(this.directory,'.daily-state.json');
     this.pending=Promise.resolve();this.queued=0;this.dropped=0;this.repeat=new Map();this.observed=new Map();this.desktops=new Map();this.roomStates=new Map();this.offlineChat=new Map();
     this.secrets=new Set();this.lastError='';this.closed=false;this.day=logDay(now());this.started=now();this.counts={events:0,warnings:0,errors:0};
   }
   protectSecret(value){if(typeof value==='string'&&value.length>=8&&this.secrets.size<16)this.secrets.add(value);}
   redact(value){return safeLog(value,0,this.secrets);}
-  enqueue(task){
-    if(this.queued>=128){this.dropped++;return this.pending;}
+  enqueue(task,important=false){
+    if(this.queued>=(important?144:128)){this.dropped++;return this.pending;}
     this.queued++;
     this.pending=this.pending.then(task).catch(error=>{this.lastError=this.redact(error);}).finally(()=>this.queued--);
     return this.pending;
@@ -92,7 +92,8 @@ export class DailyDiagnostics{
     await this.flushRepeats();await this.summary('跨日汇总');
     this.day=day;this.counts={events:0,warnings:0,errors:0};this.repeat.clear();
     await this.prune();await this.writeState(false);
-    await this.append(day,`[${stamp(this.now())}] [信息] 应用持续运行，已切换到当天日志。\n`,true);
+    const build = this.buildId ? ` 版本 ${this.redact(this.version)}，构建 ${this.redact(this.buildId)}。` : '';
+    await this.append(day,`[${stamp(this.now())}] [信息] 应用持续运行，已切换到当天日志。${build}\n`,true);
   }
   record(component,message,{level='信息',important=false}={}){
     if(this.closed)return this.pending;
@@ -105,7 +106,7 @@ export class DailyDiagnostics{
       if(this.repeat.size>=256&&!this.repeat.has(key)){await this.flushRepeats();this.repeat.clear();}
       this.repeat.set(key,{at,count:0,source,level,text});
       await this.append(day,`[${stamp(at)}] [${level}] ${source}：${text}\n`,important);
-    });
+    },important);
   }
   async flushRepeats(){
     for(const item of this.repeat.values())if(item.count){await this.append(this.day,`[${stamp(this.now())}] [${item.level}] ${item.source}：${item.text}（相同记录又出现 ${item.count} 次，已合并）。\n`);item.count=0;}

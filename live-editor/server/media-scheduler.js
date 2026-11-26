@@ -29,7 +29,11 @@ export class MediaScheduler {
         // Only explicitly admitted live work gets this slot. Interactive and
         // foreground arrivals still win; ordinary background stays blocked.
         if(kind==='live-background'&&(liveBackgrounds||renders||interactive))continue;
-        if(kind==='automatic'&&(renders||!this.automaticAllowed()))continue;
+        if (kind === 'automatic') {
+          const automaticLimit = recording ? 1 : Math.min(2, Math.max(1, this.backgroundLimit()));
+          if (!this.automaticAllowed() || renders >= automaticLimit ||
+              (renders && [...this.active].some(item => !['interactive','automatic'].includes(item.kind)))) continue;
+        }
         if(kind==='background'&&(recording||renders>backgrounds||backgrounds>=Math.min(2,Math.max(1,this.backgroundLimit()))))continue;
         next=this.queue.findIndex(item=>item.kind===kind);if(next>=0)break;
       }

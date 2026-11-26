@@ -426,7 +426,7 @@ export class RenderPipeline {
       const report=()=>({preparedSeconds:state.preparedSeconds,totalSeconds,bytes:state.bytes});
       onProgress?.(report());
       if(state.missing.length) {
-        const media=this.media,policy=media.idlePolicy,decision=live||automatic?{concurrency:1,reason:live?'live-recording':'automatic-publication'}:policy?await policy.choose(id,signature,plan,state.missing,cache):{concurrency:1};
+        const media=this.media,policy=media.idlePolicy,decision=live||(automatic&&media.isRecording?.())?{concurrency:1,reason:'live-recording'}:policy?await policy.choose(id,signature,plan,state.missing,cache):{concurrency:1};
         const timing=media.preparationContext?.getStore();if(timing)timing.policy={...decision};
         let batch=state.missing.slice(0,decision.concurrency);
         const adjacent=state.missing.slice(0,2).map(b=>({...b,from:b.startMs/1000,to:b.endMs/1000}));

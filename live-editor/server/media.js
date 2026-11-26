@@ -323,10 +323,36 @@ export class Media {
       child.once('close', code => { clearTimeout(timeout);this.children.delete(child);this.backgroundChildren.delete(child);signal?.removeEventListener('abort',abort);if(signal?.aborted)return reject(Object.assign(new Error('处理已取消。'),{name:'AbortError'}));if(oversized)return reject(new Error('媒体索引超过安全读取范围。'));if(timedOut)return reject(new Error('读取视频信息超时，请检查素材文件是否可正常访问。'));if(spawnError)return reject(new Error(`无法启动视频信息读取工具：${spawnError.message}`));if(code)return reject(new Error(`读取视频信息失败：${log.trim()||'工具退出码 '+code}`));try {const data=JSON.parse(output);if(kind==='packets')resolve(data.packets);else if(kind==='audio'){const audio=data.streams?.filter(s=>s.codec_type==='audio');if(audio?.length!==1)throw new Error('需要一条完整音轨。');resolve(audio[0]);}else resolve(videoMetadata(data.streams));}catch(e){reject(e);} });
     });
   }
+  requestSourceMetadata(source) {
+    this.passiveProbes ??= new Map();
+    if (this.closed || !source || this.preparation?.active?.id === source.session) return;
+    const preparation = this.preparation?.row(source.session);
+    if (['queued','preparing'].includes(preparation?.status)) return;
+    const version = JSON.stringify([source.path, source.start, source.closed, source.header]);
+    const previous = this.passiveProbes.get(source.id);
+    if (previous?.pending || (previous?.version === version && previous.retryAt > Date.now())) return;
+    if (this.passiveProbes.size >= 128 && !previous) {
+      const oldest = [...this.passiveProbes].find(([, probe]) => !probe.pending);
+      if (!oldest) return;
+      this.passiveProbes.delete(oldest[0]);
+    }
+    // A preview/export may be probing the same source already.
+    if ([...this.probes].some(probe => probe.sourceId === source.id)) return;
+    const probe = { version, pending: true, retryAt: 0 };
+    this.passiveProbes.set(source.id, probe);
+    void this.probeSource(source, source.start, { background: true }).then(() => {
+      this.passiveProbes.delete(source.id);
+    }, error => {
+      probe.pending = false;
+      probe.retryAt = Date.now() + 30000;
+      if (error?.name !== 'AbortError') this.store.diagnostics?.record('素材信息',
+        `录像 ${source.session}；来源 ${source.id}；探测未完成，30 秒后可重查`, {level:'警告'});
+    });
+  }
   async probeSource(source,time=source.start,options={}) {
     const controller=new AbortController();
     options={...options,signal:options.signal?AbortSignal.any([options.signal,controller.signal]):controller.signal};
-    const operation={sessionId:source.session,controller,background:options.background,done:this.probeSourceInternal(source,time,options)};this.probes.add(operation);
+    const operation={sessionId:source.session,sourceId:source.id,controller,background:options.background,done:this.probeSourceInternal(source,time,options)};this.probes.add(operation);
     try{return await operation.done;}finally{this.probes.delete(operation);}
   }
   async probeSourceInternal(source,time,options={}) {

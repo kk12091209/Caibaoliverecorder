@@ -137,7 +137,10 @@ export class AutoPost {
     if (!this.store.session(session) || !row || !JSON.parse(row.config).live || (row.result && JSON.parse(row.result).taskId)) {
       throw new Error('这项投稿现在无法重试，请在 B站创作中心核对。');
     }
-    this.status(session, 'queued');
+    this.store.diagnostics?.record('自动投稿',
+      `${sourceAnchor(row.room)}；录像 ${session}；导出 ${row.export_job || '未分配'}；手动重试已接受；上次 ${row.error || '失败'}`,
+      {important:true});
+    this.store.run("UPDATE auto_post_jobs SET status='queued' WHERE session=?", session);
     return { ok: true };
   }
 
@@ -178,7 +181,8 @@ export class AutoPost {
         } else stage = 'waiting-media';
       } else if (row.status === 'exporting' && row.export_status === 'queued') stage = 'waiting-media';
       else if (row.status === 'uploading' && result?.waitingUpload) stage = 'waiting-upload';
-      return { id: row.session, session: row.session, title, mode, status: row.status, stage, error: row.error,
+      return { id: row.session, session: row.session, room: sourceAnchor(row.room), exportJob: row.export_job,
+        title, mode, status: row.status, stage, error: row.error,
         parts: result?.parts?.map(part => ({ title: part.title })), progress: result?.progress,
         aid: result?.aid, bvid: result?.bvid, canRetry: live === true && row.status === 'failed' && !result?.taskId };
     });
@@ -227,14 +231,14 @@ export class AutoPost {
           const existing = this.store.get("SELECT * FROM jobs WHERE session=? AND json_valid(data) AND json_extract(data,'$.autoPost')=? ORDER BY rowid DESC LIMIT 1", row.session, row.session);
           if (!existing) {
             if (this.media.canStartAutomaticMedia?.() === false || this.media.hasForegroundWork?.({includeInteractive:false})) continue;
-            if (preparation?.prioritizeAutomaticExport(row.session)) {
+            if (config.mode !== 'clean' && preparation?.prioritizeAutomaticExport(row.session)) {
               this.status(row.session, 'queued');
               return;
             }
             const job = await this.media.enqueue(row.session, { scope: 'full', mode: config.mode }, { autoPost: row.session });
             this.store.run('UPDATE auto_post_jobs SET export_job=? WHERE session=?', job?.id ?? null, row.session);
             this.status(row.session, 'exporting');
-            this.store.diagnostics?.record('自动投稿', `${key}：已加入导出队列。`);
+            this.store.diagnostics?.record('自动投稿', `${key}；录像 ${row.session}；导出 ${job?.id || '未分配'}：已加入导出队列。`);
             return;
           }
           if (existing.status === 'done') {
@@ -245,7 +249,7 @@ export class AutoPost {
             await this.submit(row, config, existing, [...files.values()]);
             return;
           } else if (['queued', 'running', 'saving', 'finalizing', 'cancelling'].includes(existing.status)) {
-            this.status(row.session, 'exporting');
+            if (row.status !== 'exporting') this.status(row.session, 'exporting');
           } else {
             this.store.run(`UPDATE auto_post_jobs SET export_job=? WHERE session=?`, existing.id, row.session);
             this.status(row.session, 'blocked', '请在导出任务中继续处理。');
@@ -292,7 +296,7 @@ export class AutoPost {
         },
       });
       this.saveResult(row.session, 'uploading', { ...result, taskId, waitingUpload: true });
-      this.store.diagnostics?.record('自动投稿', `${sourceAnchor(row.room)}：已加入投稿队列，共 ${parts.length} P。`);
+      this.store.diagnostics?.record('自动投稿', `${sourceAnchor(row.room)}；录像 ${row.session}；导出 ${exportJob.id}；尝试 ${taskId}：已加入投稿队列，共 ${parts.length} P。`);
     } catch (error) {
       if (error === pausedBeforeSubmission) {
         this.saveResult(row.session, 'exporting', result);

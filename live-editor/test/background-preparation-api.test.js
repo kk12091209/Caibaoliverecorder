@@ -324,3 +324,38 @@ test.after(async () => {
   if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('bili-preparation-api-')) throw new Error('Unexpected preparation test cleanup directory');
   await fs.rm(root, { recursive: true, force: true });
 });
+
+test('缺少视频参数时，连续查看详情共享低优先级探测且失败后退避', async t => {
+  let source;
+  await seedDatabase('passive-metadata', async store => {
+    ({source} = await seedSource(store,'metadata-missing'));
+    store.run('DELETE FROM settings WHERE key=?','metadata:'+source.id);
+  });
+  const held = heldProducer(), slow = deferred();
+  t.after(() => { held.release.resolve(); slow.resolve(); });
+  const app = await appFor(t, 'passive-metadata', held.prepare);
+  const flags = [];
+  t.mock.method(app.media,'probeSourceInternal',async (current,time,options) => {
+    flags.push(options.background);
+    await slow.promise;
+    throw new Error('模拟旧素材探测失败');
+  });
+  try {
+    await app.request('sessions/metadata-missing');
+    await app.request('sessions/metadata-missing');
+    assert.deepEqual(flags,[true]);
+    assert.equal(app.media.hasForegroundWork({includeInteractive:false}),false);
+    await action(app,'metadata-missing','start');
+    await waitFor(held.entered.promise,'低优先级探测阻止预处理');
+    await app.request('sessions/metadata-missing');
+    assert.equal(held.wasAborted,false);
+    assert.deepEqual(flags,[true]);
+  } finally {
+    slow.resolve();
+    held.release.resolve();
+  }
+  await ready(app,'metadata-missing');
+  await eventually(() => app.media.probes.size===0,'探测没有释放');
+  await app.request('sessions/metadata-missing');
+  assert.deepEqual(flags,[true]);
+});

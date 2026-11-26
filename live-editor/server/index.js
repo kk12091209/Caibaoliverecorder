@@ -54,7 +54,8 @@ export async function createApp(options={}) {
   runtime.onStartup=options.onStartup;
   try{
     const packageInfo=JSON.parse(await fs.readFile(path.join(appRoot,'package.json'),'utf8'));
-    runtime.diagnostics=await DailyDiagnostics.open(root,{version:packageInfo.version,...options.diagnosticOptions});
+    runtime.diagnostics=await DailyDiagnostics.open(root,{version:packageInfo.version,
+      buildId:buildIdentity({version:packageInfo.version,revision:packageInfo.buildRevision??1}),...options.diagnosticOptions});
     runtime.diagnostics.protectSecret(runtime.token);
     if(runtime.leaseRecovered)runtime.diagnostics.record('数据恢复','异常后台锁已隔离并重新建立；原素材保留',{level:'警告',important:true});
     await runtime.startup('初始化运行日志');
@@ -158,7 +159,14 @@ async function createManagedApp(options,runtime) {
       const url=new URL(req.url,`http://${host}`),p=url.pathname;
       const request={req,res,url,p};
       // Record only the operation name, never query strings or request bodies.
-      if(req.method==='POST'&&p.startsWith('/api/'))res.once('finish',()=>{const parts=p.split('/');diagnostics.record('操作结果',`${parts[2]} / ${parts.length>4?parts.at(-1):''}；HTTP ${res.statusCode}`,{level:res.statusCode>=400?'警告':'信息'});});
+      if (req.method === 'POST' && p.startsWith('/api/')) res.once('finish', () => {
+        const [, , group, target, action] = p.split('/');
+        const materialAction = ['anchors','rooms','sessions','jobs','auto-post'].includes(group);
+        const identifier = materialAction && /^[-\w:%]{1,128}$/.test(target || '') ? target.replace(/%3A/gi, ':') : '';
+        const operation = /^[-\w]{1,40}$/.test(action || '') ? action : '';
+        diagnostics.record('操作结果', `${group} / ${operation}；HTTP ${res.statusCode}${identifier ? '；对象 '+identifier : ''}`,
+          {level:res.statusCode>=400?'警告':'信息',important:materialAction});
+      });
       if(req.headers.origin && req.headers.origin!==`http://${host}`){json(res,{error:'不允许跨站请求。'},403);return;}
       if(p==='/internal/recorder-hls'){
         return await serveBilibiliHls(req,res,{
@@ -274,8 +282,8 @@ async function createManagedApp(options,runtime) {
       }
       if(p==='/api/interaction'&&req.method==='POST'){
         // Short-lived priority only; an open but idle editor does not block preparation.
-        preparation.notBefore=Math.max(preparation.notBefore,Date.now()+3000);
-        void preparation.yieldForForeground();return json(res,{ok:true});
+        if (preparation.active && !preparation.foregroundHolds) void preparation.yieldForForeground();
+        return json(res,{ok:true});
       }
       if((match=/^\/api\/sessions\/([\w-]+)\/preparation$/.exec(p))&&req.method==='POST'){
         const input=await body(req),id=match[1];if(!store.session(id))throw new Error('素材不存在或已删除。');

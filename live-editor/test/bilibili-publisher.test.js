@@ -361,3 +361,29 @@ test('automatic upload caps aggregate throughput and yields without committing t
   assert.equal(commits.length, 1);
   assert.deepEqual(commits[0][1].map(part => part.title), ['弹幕版', '纯净版']);
 });
+
+test('P2 网络失败后跨重启重试沿用同一成片的 P1 回执，只提交一次', async t => {
+  const { publisher, restart, requests, files, state } = await fixture(t);
+  state.onPart = (_upload, index) => {
+    if (index === 1) throw Object.assign(new Error('模拟网络断开'), {code:'ECONNRESET'});
+  };
+  const first = await publisher.submit(request(files));
+  await publisher.task(first.taskId);
+  await publisher.tick(allow);
+  const failed = await publisher.task(first.taskId);
+  assert.equal(failed.canRetry,true);
+  assert.match(failed.error,/P2.*ECONNRESET/);
+  assert.equal(requests.filter(entry => entry[0]==='commit').length,0);
+
+  const next = await restart();
+  state.onPart = undefined;
+  requests.length = 0;
+  const retry = await next.submit(request(files));
+  await next.task(retry.taskId);
+  await next.tick(allow);
+  assert.deepEqual(requests.filter(entry => entry[0]==='uploader').map(entry => entry[1]),[files[1]]);
+  const commits = requests.filter(entry => entry[0]==='commit');
+  assert.equal(commits.length,1);
+  assert.deepEqual(commits[0][1].map(part => part.title),files.map(file => file.title));
+  assert.equal((await next.task(retry.taskId)).status,'submitted');
+});

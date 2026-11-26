@@ -27,7 +27,11 @@ export async function handleMaterialRoutes({req,res,url,p},{store,media,preparat
   if((match=/^\/api\/sessions\/([\w-]+)$/.exec(p))&&req.method==='GET'){
     const session=store.session(match[1]);if(!session)return json(res,{error:'录像不存在。'},404);
     const sources=store.sources(session.id).map(s=>({id:s.id,start:s.start,wall:s.wall,duration:s.duration,closed:s.closed,error:s.error,path:s.path,metadata:store.setting('metadata:'+s.id)}));
-    for(const source of sources)if(!source.metadata&&source.duration>0){void media.probeSource(store.get('SELECT * FROM sources WHERE id=?',source.id)).catch(()=>{});}
+    for (const source of sources) {
+      if (!source.metadata && source.duration > 0 && !source.error) {
+        media.requestSourceMetadata(store.get('SELECT * FROM sources WHERE id=?', source.id));
+      }
+    }
     return json(res,{...session,sources,edit:store.edit(session.id),chunks:store.get('SELECT COUNT(*) AS count FROM chunks WHERE source IN (SELECT id FROM sources WHERE session=?)',session.id).count});
   }
   if((match=/^\/api\/sessions\/([\w-]+)\/linkmic-avatars\/([\w-]+)\/([a-f0-9]{64})\.png$/.exec(p))&&req.method==='GET'){

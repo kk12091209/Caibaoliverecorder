@@ -54,6 +54,21 @@ const rejectedDraft = new Set([123008, 123009, 123010, 123012, 123013, 123014, 1
 const validId = value => typeof value === 'string' && /^[a-z0-9-]{1,128}$/i.test(value);
 const numericId = value => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));
 const categoryLifetime = 15 * 60 * 1000;
+const receiptMaxAge = 15 * 60 * 1000;
+function validPartReceipt(value) {
+  return numericId(value?.cid) && typeof value.filename === 'string' && /^[\w-]{1,256}$/.test(value.filename);
+}
+const networkCodes = new Set(['ECONNABORTED','ECONNRESET','ETIMEDOUT','EPIPE','EAI_AGAIN','ENETUNREACH','ECONNREFUSED','ENOTFOUND']);
+function uploadFailure(error, sdk) {
+  const networkCode = error?.cause?.code ?? error?.code;
+  const isPlatform = typeof sdk?.BiliResponseError === 'function' && error instanceof sdk.BiliResponseError;
+  const status = Number(error?.statusCode ?? error?.response?.status);
+  const http = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+  const platformCode = isPlatform && Number.isSafeInteger(error.code) ? error.code : null;
+  const network = networkCodes.has(networkCode) ? networkCode : null;
+  return {code:network || (platformCode !== null ? 'B站 '+platformCode : http !== null ? 'HTTP '+http : ''),
+    transient:!!network || http === 408 || http === 429 || http >= 500};
+}
 const categoryUnavailable = '暂时无法读取 B站投稿分区，请检查网络后重试。';
 
 function categoryOption(value) {
@@ -138,6 +153,10 @@ export class BilibiliPublisher {
     );
     CREATE INDEX IF NOT EXISTS bilibili_publisher_pending ON bilibili_publisher_jobs(status);
     UPDATE bilibili_publisher_jobs SET status='queued' WHERE status='uploading';`);
+    const columns = this.store.db.prepare('PRAGMA table_info(bilibili_publisher_jobs)').all();
+    if (!columns.some(column => column.name === 'checkpoint')) {
+      this.store.db.exec("ALTER TABLE bilibili_publisher_jobs ADD COLUMN checkpoint TEXT NOT NULL DEFAULT '{}'");
+    }
     this.store.run("UPDATE bilibili_publisher_jobs SET status='uncertain',error=? WHERE status='submitting'", unknownSubmission);
     return this;
   }
@@ -241,8 +260,16 @@ export class BilibiliPublisher {
     const taskId = randomUUID();
     // A task is armed only after its caller has saved the receipt. An orphan
     // left by a crash between those writes can never submit a Bilibili draft.
-    this.store.run(`INSERT INTO bilibili_publisher_jobs(id,owner_kind,owner_id,uid,config,parts,status)
-      VALUES(?,?,?,?,?,?,'staged')`, taskId, owner.kind, owner.id, account.uid, JSON.stringify(metadata), JSON.stringify(videos));
+    const previous = this.store.get(`SELECT id,uid,parts,status,checkpoint FROM bilibili_publisher_jobs
+      WHERE owner_kind=? AND owner_id=? ORDER BY rowid DESC LIMIT 1`, owner.kind, owner.id);
+    const partsJson = JSON.stringify(videos);
+    const checkpoint = previous?.status === 'failed' && previous.uid === account.uid && previous.parts === partsJson
+      ? JSON.parse(previous.checkpoint) : {};
+    this.store.run(`INSERT INTO bilibili_publisher_jobs(id,owner_kind,owner_id,uid,config,parts,status,checkpoint)
+      VALUES(?,?,?,?,?,?,'staged',?)`, taskId, owner.kind, owner.id, account.uid, JSON.stringify(metadata), partsJson,
+    JSON.stringify({parts:checkpoint.parts, previous:previous?.id}));
+    this.log({id:taskId,owner_kind:owner.kind,owner_id:owner.id},
+      `已获得本地任务编号${previous ? '；上次 '+previous.id : ''}`);
     return { taskId, target: embeddedTarget };
   }
 
@@ -324,29 +351,62 @@ export class BilibiliPublisher {
     }
   }
 
+  log(row, message, level = '信息', important = false) {
+    const diagnostics = this.store.diagnostics;
+    if (!diagnostics) return;
+    const source = row.owner_kind === 'auto'
+      ? this.store.get('SELECT room,export_job FROM auto_post_jobs WHERE session=?', row.owner_id)
+      : this.store.get('SELECT session,id AS export_job FROM jobs WHERE id=?', row.owner_id);
+    const context = [source?.room && '房间 '+source.room, source?.session && '录像 '+source.session,
+      source?.export_job && '导出 '+source.export_job].filter(Boolean);
+    diagnostics.record('B站投稿',
+      `${row.owner_kind === 'quick' ? '快速发布' : '自动投稿录像'} ${row.owner_id}；${[...context,'尝试 '+row.id,message].join('；')}`,
+      {level, important});
+  }
+
   async run(row, active, authorize) {
     const signal = active.controller.signal;
     const guard = () => {
       signal.throwIfAborted();
       if (authorize?.({ kind: row.owner_kind, id: row.owner_id }, row.uid, row.id) !== true) throw denied;
     };
+    const checkpoint = JSON.parse(row.checkpoint || '{}');
+    const receipts = checkpoint.parts || [];
+    const persistReceipts = () => this.store.run('UPDATE bilibili_publisher_jobs SET checkpoint=? WHERE id=?',
+      JSON.stringify({...checkpoint, parts:receipts}), row.id);
+    let stage = '检查成片';
+    const start = Date.now();
     try {
       guard();
       this.save(row.id, 'uploading');
+      this.log(row, '开始处理');
       const parts = JSON.parse(row.parts);
       const config = JSON.parse(row.config);
       await this.checkFiles(parts);
+      stage = '核对投稿账号';
       let verified = await this.verifyAccount(row, signal);
       const completed = [];
       let uploadedBytes = 0;
       const total = parts.reduce((sum, part) => sum + part.bytes, 0);
-      for (const part of parts) {
+      for (const [index, part] of parts.entries()) {
+        stage = `上传 P${index+1}`;
         await this.checkFiles([part]);
         if (verified.raw !== this.credentials.get('bilibili')) verified = await this.verifyAccount(row, signal);
         guard();
         if (verified.raw !== this.credentials.get('bilibili') || !this.snapshot().configured) {
           throw new PublicationError('B站 Cookie 或投稿账号已改变，请在设置中检查。');
         }
+        const cached = receipts[index];
+        if (validPartReceipt(cached) && Number.isSafeInteger(cached.at) && Date.now() >= cached.at &&
+            Date.now()-cached.at < receiptMaxAge) {
+          completed.push({cid:cached.cid,filename:cached.filename,title:part.title});
+          uploadedBytes += part.bytes;
+          active.progress = uploadedBytes / total * 0.99;
+          this.log(row, `P${index+1} 复用已上传分 P；${part.bytes} 字节`, '信息', true);
+          continue;
+        }
+        const partStart = Date.now();
+        this.log(row, `P${index+1} 开始上传；${part.bytes} 字节`);
         const upload = new this.#sdk.WebVideoUploader({ path: part.path, title: part.title }, verified.client.auth, {
           // The SDK applies this limit per chunk in KiB/s. One chunk means
           // the upload's aggregate rate is also bounded.
@@ -365,16 +425,21 @@ export class BilibiliPublisher {
         const result = await untilAbort(signal, () => upload.upload());
         active.cancelUpload = null;
         guard();
-        if (!numericId(result?.cid) || typeof result.filename !== 'string' || !/^[\w-]{1,256}$/.test(result.filename)) {
+        if (!validPartReceipt(result)) {
           throw new PublicationError('B站未返回有效的分 P 上传结果，请重试。');
         }
-        completed.push({ cid: Number(result.cid), filename: result.filename, title: part.title });
+        const receipt = {cid:Number(result.cid), filename:result.filename, at:Date.now()};
+        receipts[index] = receipt;
+        persistReceipts();
+        this.log(row, `P${index+1} 上传完成；${part.bytes} 字节；耗时 ${Date.now()-partStart} ms`);
+        completed.push({cid:receipt.cid,filename:receipt.filename,title:part.title});
         uploadedBytes += part.bytes;
         active.progress = uploadedBytes / total * 0.99;
       }
       await this.checkFiles(parts);
       // Renew the account check after a potentially long transfer. Re-select
       // the current saved credentials and never finalize under a changed UID.
+      stage = '提交前核对账号';
       const final = await this.verifyAccount(row, signal);
       guard();
       if (final.raw !== this.credentials.get('bilibili') || !this.snapshot().configured) {
@@ -382,22 +447,38 @@ export class BilibiliPublisher {
       }
       const platform = final.client.platform;
       requestOptions(platform.request, signal, 20000);
+      stage = '提交稿件';
       this.save(row.id, 'submitting');
+      this.log(row, stage, '信息', true);
       active.committing = true;
       const result = await untilAbort(signal, () => platform.addMediaWebApiV3(completed, config));
       const aid = numericId(result?.aid) ? String(result.aid) : '';
       const bvid = typeof result?.bvid === 'string' && /^BV[\da-zA-Z]{10}$/.test(result.bvid) ? result.bvid : '';
-      if (!aid && !bvid) this.save(row.id, 'uncertain', unknownSubmission);
-      else this.save(row.id, 'submitted', '', false, aid, bvid);
+      if (!aid && !bvid) {
+        this.save(row.id, 'uncertain', unknownSubmission);
+        this.log(row, unknownSubmission, '警告', true);
+      } else {
+        this.save(row.id, 'submitted', '', false, aid, bvid);
+        this.log(row, `已收到稿件回执 ${bvid||aid}；耗时 ${Date.now()-start} ms`, '信息', true);
+      }
     } catch (error) {
+      const failure = uploadFailure(error, this.#sdk);
+      const detail = `${stage}${failure.code ? '（'+failure.code+'）' : ''}`;
+      if (active.committing || (!signal.aborted && !failure.transient && !stage.startsWith('核对'))) {
+        receipts.length = 0;
+        persistReceipts();
+      }
       if (active.committing) {
         const rejected = definiteRejection(error, this.#sdk);
         if (rejected) this.save(row.id, 'failed', rejected, true);
         else this.save(row.id, 'uncertain', unknownSubmission);
       } else if (signal.aborted) this.save(row.id, 'queued');
       else if (error === denied) this.save(row.id, 'cancelled', error.message);
-      else this.save(row.id, 'failed', error instanceof PublicationError ? error.message :
-        definiteRejection(error, this.#sdk) || 'B站视频上传失败，成片已保留，可重试。', true);
+      else this.save(row.id, 'failed', `${detail}：${error instanceof PublicationError ? error.message :
+        definiteRejection(error, this.#sdk) || 'B站视频上传失败，成片已保留，可重试。'}`, true);
+      const outcome = this.store.get('SELECT status,error FROM bilibili_publisher_jobs WHERE id=?', row.id);
+      this.log(row, `${detail}；${outcome.status}${outcome.error ? '；'+outcome.error : '；已让位'}；耗时 ${Date.now()-start} ms`,
+        outcome.status === 'queued' ? '信息' : '警告', true);
     } finally {
       active.cancelUpload = null;
     }

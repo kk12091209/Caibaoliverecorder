@@ -270,6 +270,22 @@ async function openQuickPublish(job){
   await nextTick();
   document.querySelector('.modal .close-modal')?.focus({preventScroll:true});
 }
+async function copyPublicationDiagnostic(job) {
+  const summary = [
+    `房间 ${job.room || '未知'}`,
+    `录像 ${job.session}`,
+    job.exportJob && `导出 ${job.exportJob}`,
+    publicationStatus(job.stage || job.status),
+    job.error,
+    job.bvid || job.aid,
+  ].filter(Boolean).join('\n');
+  try {
+    await navigator.clipboard.writeText(summary);
+    tell('已复制投稿诊断', 'success');
+  } catch {
+    tell('暂时无法写入剪贴板，请在运行日志中查看投稿诊断。');
+  }
+}
 async function retryAutoPost(job){
   if(retryAutoPostIds.value.includes(job.session))return;
   retryAutoPostIds.value.push(job.session);
@@ -849,12 +865,10 @@ watch([selectionReady,selected],()=>{invalidateSignals(true);void loadSignals(tr
 watch(()=>[selected.value,previewUrl.value],()=>{recordingCameraEvents.value=[];});
 watch(timelineWindow,()=>{signalsError.value='';queueWindowSignals(false);},{flush:'sync'});
 watch(position,value=>{if(timelineAutoFollow.value&&!timelineDragging.value&&!scrubbing.value&&timelineWindow.value)setTimelineWindow(followWindow(duration.value,timelineWindow.value,value));});
-let lastInteraction=0;
-function interactivePriority(){if(Date.now()-lastInteraction<1000||!state.value.preparation?.items?.some(item=>item.status==='preparing'))return;lastInteraction=Date.now();void api('interaction',{}).catch(()=>{});}
-onMounted(()=>{window.addEventListener('pointerdown',interactivePriority,{passive:true});window.addEventListener('wheel',interactivePriority,{passive:true});stateTransport.start();messageTimer=setInterval(()=>{void loadMessages(false);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);window.addEventListener('blur',modalBackdropClick.reset);});
+onMounted(()=>{stateTransport.start();messageTimer=setInterval(()=>{void loadMessages(false);void loadOverlay();},1500);signalsTimer=setInterval(()=>void loadSignals(),3000);document.addEventListener('visibilitychange',signalsVisibility);window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',closeContext);window.addEventListener('pointerup',previewVolumeUp);window.addEventListener('pointercancel',previewVolumeUp);window.addEventListener('blur',closeContext);window.addEventListener('blur',modalBackdropClick.reset);});
 onMounted(()=>window.addEventListener('pagehide',releasePagePreview));
 onBeforeUnmount(()=>window.removeEventListener('pagehide',releasePagePreview));
-onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriority);window.removeEventListener('wheel',interactivePriority);disposePreview();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();stateTransport.close();clearInterval(messageTimer);clearInterval(signalsTimer);closeMessageBrowser();clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);window.removeEventListener('blur',modalBackdropClick.reset);modalBackdropClick.reset();});
+onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTimer);invalidateSignals();invalidateMessages();stateTransport.close();clearInterval(messageTimer);clearInterval(signalsTimer);closeMessageBrowser();clearTimeout(noticeTimer);document.removeEventListener('visibilitychange',signalsVisibility);window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',closeContext);window.removeEventListener('pointerup',previewVolumeUp);window.removeEventListener('pointercancel',previewVolumeUp);window.removeEventListener('blur',closeContext);window.removeEventListener('blur',modalBackdropClick.reset);modalBackdropClick.reset();});
 </script>
 
 <template>
@@ -990,7 +1004,8 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',interactivePriorit
             <p v-if="posting.error" class="job-error">{{ posting.error }}</p>
             <p v-if="posting.bvid || posting.aid" class="job-save-hint">{{ ui.autoPost.稿件编号(posting.bvid || posting.aid) }}</p>
             <p v-if="posting.status==='uncertain'" class="job-save-hint">{{ ui.autoPost.请到创作中心确认 }}</p>
-            <button v-if="posting.status==='failed'" type="button" class="text-button" :disabled="retryAutoPostIds.includes(posting.session)" @click="retryAutoPost(posting)">
+            <button v-if="posting.error || posting.bvid || posting.aid" type="button" class="text-button" @click="copyPublicationDiagnostic(posting)">复制投稿诊断</button>
+            <button v-if="posting.canRetry" type="button" class="text-button" :disabled="retryAutoPostIds.includes(posting.session)" @click="retryAutoPost(posting)">
               <LoaderCircle v-if="retryAutoPostIds.includes(posting.session)" :size="14" class="spin" aria-hidden="true"/>
               <RotateCcw v-else :size="14" aria-hidden="true"/>{{ ui.autoPost.重试 }}
             </button>

@@ -15,6 +15,7 @@ export class BackgroundPreparation {
     this.closed = false; this.started = false; this.timer = null; this.wakeTimer = null; this.active = null;
     this.blocked = new Map(); this.changing = new Map(); this.foregroundHolds = 0; this.idleSince = null; this.notBefore = 0;
     this.lastError = ''; this.closing = null;
+    this.continuing = null; this.interruption = null;
     this.liveContext = liveOptions.context || (() => ({}));
     this.livePolicy = liveOptions.policy || new LivePreparationPolicy({now});
     const liveSaved = store.setting('livePreparationEnabled');
@@ -56,7 +57,11 @@ export class BackgroundPreparation {
   status(id) {
     const columns = 'p.session,p.status,p.prepared_seconds AS preparedSeconds,p.total_seconds AS totalSeconds,p.bytes,p.reason,p.error';
     if (id !== undefined) return this.store.get(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE p.session=? AND s.deleted_at=''`, id) || null;
-    return { cache:cacheWarningSnapshot(this.store,this.media.renderCache?.snapshot()), enabled: this.enabled, liveEnabled:this.liveEnabled, live:{...this.liveState,active:!!this.active?.live}, items: this.store.all(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' ORDER BY s.created DESC,p.session`) };
+    const items = this.store.all(`SELECT ${columns} FROM preparation_jobs p JOIN sessions s ON s.id=p.session WHERE s.deleted_at='' ORDER BY s.created DESC,p.session`);
+    const item = items.find(row => row.session === this.continuing?.id && row.status === 'queued');
+    if (item && this.now() < this.continuing.until) item.status = 'preparing';
+    return {cache:cacheWarningSnapshot(this.store,this.media.renderCache?.snapshot()), enabled:this.enabled,
+      liveEnabled:this.liveEnabled, live:{...this.liveState,active:!!this.active?.live}, items};
   }
   discover(first = false) {
     if (this.closed) return;
@@ -117,8 +122,13 @@ export class BackgroundPreparation {
   interrupt(reason, id) {
     const active = this.active;
     if (active && (id === undefined || active.id === id)) {
-      active.reason = reason;
-      active.controller.abort();
+      if (!active.controller.signal.aborted) {
+        active.reason = reason;
+        this.continuing = null;
+        this.interruption = {id:active.id, reason, at:this.now()};
+        this.store.diagnostics?.record('预处理', `录像 ${active.id}；让位 ${reason}`, {important:true});
+        active.controller.abort();
+      }
       return active.done;
     }
     return Promise.resolve();
@@ -134,7 +144,14 @@ export class BackgroundPreparation {
     const automatic = ['recording', 'indexing'].includes(reason) && this.automaticExportPriority &&
       this.media.canStartAutomaticMedia?.() ? this.automaticExportPriority : null;
     if (reason === 'recording' && this.liveEnabled && !automatic) return this.tickLive();
-    if (automatic && this.active && this.active.id !== automatic) return this.interrupt('recording');
+    if (automatic && this.active && (this.active.id !== automatic || this.active.parallelWhileIdle)) {
+      return this.interrupt('recording');
+    }
+    if (reason === 'compaction' && this.active && !this.active.live) {
+      // Storage work already holding its source can settle while this batch finishes.
+      this.waitRows(reason, true);
+      return this.active.done;
+    }
     if (reason && !automatic) {
       this.liveState = {active:false,sessionId:this.active?.live ? this.active.id : null,reason};
       // An explicit export consumer owns only this currently running batch.
@@ -175,6 +192,15 @@ export class BackgroundPreparation {
         ['recording','indexing'].includes(currentGate)&&this.media.canStartAutomaticMedia?.()))return this.active?.done;
       if(!this.available(row.session)||!['queued','waiting'].includes(this.row(row.session)?.status))continue;
       const active = { id: row.session, automatic: row.session===this.automaticExportPriority, generation: row.generation, controller: new AbortController(), reason: '', done: null };
+      if (this.interruption?.id === active.id) {
+        const {reason,at} = this.interruption;
+        this.store.diagnostics?.record('预处理', `录像 ${active.id}；从 ${reason} 恢复；等待 ${Math.max(0,this.now()-at)} ms`, {important:true});
+        this.interruption = null;
+      } else if (this.continuing?.id !== active.id) {
+        this.store.diagnostics?.record('预处理', `录像 ${active.id}；开始处理；已经缓存 ${Math.round(row.prepared_seconds)} 秒`);
+      }
+      this.continuing = null;
+      active.parallelWhileIdle = active.automatic && !this.media.isRecording?.() && !!this.media.idlePolicy;
       this.active = active;
       this.store.run("UPDATE preparation_jobs SET status='preparing',reason='',error='',live_next_source_seconds=NULL,updated=? WHERE session=?", this.stamp(), row.session);
       active.done = Promise.resolve().then(() => this.perform(active)).finally(() => {
@@ -262,6 +288,11 @@ export class BackgroundPreparation {
       if (!result || typeof result.done !== 'boolean') throw new Error('后台预处理没有返回有效状态。');
       this.progress(active, result);
       outcome='success';
+      if (!active.live) {
+        if (result.done) {
+          this.store.diagnostics?.record('预处理', `录像 ${active.id}；已完成；缓存 ${Math.round(result.preparedSeconds || 0)} 秒`, {important:true});
+        } else this.continuing = {id:active.id, until:this.now()+Math.max(1000,this.pollMs)};
+      }
       // Live completion is only a stable-prefix checkpoint, never a finished
       // material. The idle path still verifies and prepares the final tail.
       const waiting=active.live && result.waiting;
@@ -288,6 +319,8 @@ export class BackgroundPreparation {
         else this.store.run("UPDATE preparation_jobs SET status='error',reason='',error=?,updated=? WHERE session=? AND generation=?", error.message || '后台预处理失败。', this.stamp(), active.id, active.generation);
       }
     } finally {
+      if (outcome === 'failure') this.store.diagnostics?.record('预处理',
+        `录像 ${active.id}；未完成；原因 ${this.row(active.id)?.reason || 'encoding'}`, {level:'警告',important:true});
       if(active.live)this.livePolicy.finish(active.token,{outcome,elapsedMs:Math.max(0,this.now()-active.startedAt)});
     }
   }
