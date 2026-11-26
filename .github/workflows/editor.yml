@@ -32,7 +32,7 @@ jobs:
           $mediaRoot = Join-Path (Split-Path $PWD -Parent) '.tools/ci-media'
           New-Item -ItemType Directory -Force -Path $mediaRoot | Out-Null
           $archive = Join-Path $mediaRoot 'ffmpeg-8.1.2-essentials_build.7z'
-          node ./scripts/fetch-tool.mjs 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.7z' $archive 'e25b682664025d49034c981afb4bae36238a40f29a3cc1c713ad9a8b5b3528f6'
+          node ./scripts/fetch-tool.mjs 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-essentials_build.7z' $archive 'e25b682664025d49034c981afb4bae36238a40f29a3cc1c713ad9a8b5b3528f6'
           if ($LASTEXITCODE -ne 0) { throw 'Test FFmpeg download failed.' }
           & (Join-Path $toolRoot '7zip/7z.exe') x $archive ("-o$mediaRoot") -y -bsp0
           if ($LASTEXITCODE -ne 0) { throw 'Test FFmpeg extraction failed.' }
