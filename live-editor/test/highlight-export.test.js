@@ -10,6 +10,7 @@ import {Media} from '../server/media.js';
 import {HIGHLIGHT_SETTING} from '../shared/highlight-style.js';
 import {DanmakuStylePreview} from '../server/danmaku-style-preview.js';
 import {saveGift,giftFromXml} from '../server/gifts.js';
+import {GiftIcons,giftIconKey} from '../server/gift-icons.js';
 import {DEFAULT_DANMAKU_STYLE} from '../shared/danmaku-style.js';
 const ffmpeg=process.env.FFMPEG_PATH,ffprobe=process.env.FFPROBE_PATH;
 test('real dual export freezes highlighted message and style; enlarged green text appears only in the baked file',async t=>{
@@ -46,7 +47,7 @@ test('real style preview paints selected highlight samples with custom color and
  if(process.env.CAIBO_HIGHLIGHT_EVIDENCE)await fs.writeFile(path.join(process.env.CAIBO_HIGHLIGHT_EVIDENCE,'highlight-style-preview.png'),large.bytes);
 });
 
-test('export preserves preview-scale glyph height with and without a real gift card', async t => {
+test('export preserves preview-scale glyph height with and without a real gift icon', async t => {
   if (!ffmpeg || !ffprobe) { t.skip('FFmpeg runtime is unavailable'); return; }
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'highlight-size-'));
   const width = 640, height = 360, file = path.join(root, 'source.flv');
@@ -63,7 +64,11 @@ test('export preserves preview-scale glyph height with and without a real gift c
   await ingest.tick();
   store.saveEdit(session.id, { ...store.edit(session.id), highlighted:[store.messages(session.id)[0].id] });
   store.setting(HIGHLIGHT_SETTING, { scale:2.5, showSender:true, color:'#00FF00' });
-  saveGift(store,giftFromXml('gift',{ts:'2',user:'TEST',giftname:'SAMPLE',giftcount:'1',total_price:'198'},source,1));
+  const icon='https://i0.hdslb.com/bfs/live/highlight-test-gift.png';
+  saveGift(store,giftFromXml('gift',{ts:'2',user:'TEST',giftname:'SAMPLE',giftcount:'1',total_price:'198',icon},source,1));
+  const artwork=execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=red:size=96x96','-frames:v','1','-c:v','png','-f','image2pipe','pipe:1']);
+  store.run('INSERT INTO gift_icons VALUES(?,?,?)',giftIconKey(icon),artwork,Date.now());
+  store.giftIcons=new GiftIcons(store,{ffmpeg,request:()=>assert.fail('cached artwork needs no network')});
 
   const bounds = [];
   const work = media.work.bind(media);
@@ -82,7 +87,7 @@ test('export preserves preview-scale glyph height with and without a real gift c
       if (g > 110 && g > 1.8*r && g > 1.8*b) { minY = Math.min(minY,y); maxY = Math.max(maxY,y); }
       if (x > width*.74 && y > height*.80 && r > g*1.3 && r > 95) giftPixels++;
     }
-    assert.equal(giftPixels > 12, giftsEnabled, 'the small gift icon is present in the lower-right region');
+    assert.equal(giftPixels > 12, giftsEnabled, `the lower-right region has ${giftPixels} red icon pixels`);
     bounds.push(maxY-minY+1);
   }
   // WKWebView measured 32px with the same 640x360 frame and selected scale.
