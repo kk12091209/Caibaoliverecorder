@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DEFAULT_GIFT_STYLE} from '../shared/gifts.js';
 import {giftFrame,giftMetrics,giftRegions,giftTimeline} from '../shared/gift-layout.js';
+import {giftSubtitles} from '../server/gift-render.js';
 
 const gift=(id,time,extra={})=>({id,type:'gift',platform:'bilibili',time,user:'松果',name:'粉丝团灯牌',count:1,...extra});
 const chat=(id,time,extra={})=>({id,type:'sc',platform:'bilibili',time,user:'山海听风',text:'这把空格键听起来真舒服。',totalPrice:30,...extra});
@@ -46,6 +47,31 @@ test('opposite anchors meet inside a column and additional gift lines yield',()=
   const m=giftMetrics(1080,1920,DEFAULT_GIFT_STYLE);
   const slots=giftRegions(m,DEFAULT_GIFT_STYLE);
   assert.ok(slots.gift.x>=1080*.5&&slots.gift.width<=1080*.35);
+});
+
+test('SC uses white outlined body text at every tier and keeps the existing header contrast',()=>{
+  for (const totalPrice of [0,30,50,100,500,1000,2000]) {
+    const [item]=render([chat('tier',1,{totalPrice})]);
+    assert.equal(item.ink,'#ffffff');
+    assert.equal(item.headerInk,'#141015');
+    assert.equal(item.bodyOutline,1.3);
+  }
+  const event=chat('gold',1,{totalPrice:100,bodyColor:'#ffdc70',headColor:'#223455'});
+  const track=giftTimeline([event],1920,1080,DEFAULT_GIFT_STYLE);
+  const [current]=giftFrame(track,2);
+  assert.equal(current.headerInk,'#ffffff');
+  assert.equal(current.background,event.bodyColor);
+  const subtitles=giftSubtitles(track,1920,1080,DEFAULT_GIFT_STYLE);
+  const title=subtitles.split('\n').find(line=>line.endsWith(event.user));
+  const price=subtitles.split('\n').find(line=>line.endsWith('¥100'));
+  const body=subtitles.split('\n').find(line=>line.endsWith(event.text));
+  assert.ok(title?.includes('\\bord0\\q2')&&price?.includes('\\bord0\\q2'));
+  assert.ok(body?.includes('\\1c&Hffffff&\\3c&H141014&')&&body?.includes('\\bord1.3\\q2'));
+  const legacy=giftTimeline([event],1920,1080,DEFAULT_GIFT_STYLE,{outlineSuperChats:false});
+  const [old]=giftFrame(legacy,2);
+  assert.equal(old.headerInk,current.headerInk);
+  assert.equal(old.ink,'#141015');
+  assert.equal(old.bodyOutline,0);
 });
 
 test('SC colors and effective duration, top guard, combo updates and seek are deterministic',()=>{

@@ -446,6 +446,8 @@ export class Media {
         const excluded=new Set(job.excluded);
         job.gifts=giftMessages(this.store,id,{from,to,limit:-1,style:giftStyle,overlay:true,
           includeGifts:giftsEnabled,includeSuperChat:superChatEnabled}).filter(g=>!excluded.has(g.id));
+        // Keep the submitted text style and render checkpoints for older jobs.
+        if(job.gifts.some(gift=>gift.type==='sc'))job.giftStyle.outlineSuperChats=true;
         job.giftCameras=cameraEvents.filter(event=>event.time<to&&event.end>from);
         const artwork=job.gifts.filter(g=>g.type!=='sc'&&g.time<to).sort((a,b)=>Number(a.time<job.ranges[0].start)-Number(b.time<job.ranges[0].start));
         job.giftIcons=await this.store.giftIcons?.snapshot(artwork)||{};
@@ -881,7 +883,8 @@ export class Media {
     const chatLayout=dual||bakedOnly?await this.renderer.layout(job.session,undefined,job.danmakuPerSecond??chatRate(this.store),{width,height,style:job.danmakuStyle,font:layoutFont,highlightStyle:job.highlightStyle,highlighted:job.highlighted||[],messageEdits:job.messageEdits||{}}):null;
     const giftTrack=job.giftLayoutVersion===GIFT_LAYOUT_VERSION&&job.gifts?.length
       ? giftTimeline(job.gifts,width,height,job.giftStyle,{cameraEvents:job.giftCameras,recordingStyle:job.recordingStyle,
-        cameraSizeAt:event=>sources.find(source=>source.id===event.source)?.metadata}) : null;
+        cameraSizeAt:event=>sources.find(source=>source.id===event.source)?.metadata,
+        outlineSuperChats:job.giftStyle.outlineSuperChats===true}) : null;
     const checkpoint=await this.exportWorkspace(job,{route:'regular-v1',encoder,profile:[width,height,!!prepared.disableStreamCopy,...(bakedOnly||dual?[danmakuAssSize(1,layoutFont)]:[])],comments:commentSignature(chatLayout||[]),segments});
     const workDir=checkpoint.directory;
     try {

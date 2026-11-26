@@ -38,6 +38,7 @@ const box=item=>({
   left:item.x+'px',top:item.y+'px',width:item.w+'px',height:item.h+'px',
   opacity:giftOpacity(item,clock.value),
   '--card-bg':item.background,'--card-head':item.header,'--card-ink':item.ink,'--head-ink':item.headerInk,
+  '--sc-body-stroke':item.bodyOutline ? item.bodyOutline * 2+'px' : undefined,
 });
 let observer, frame, player;
 const videoEvents=['timeupdate','loadedmetadata','resize','seeking','seeked','play','pause','ended','emptied'];
@@ -98,5 +99,6 @@ onBeforeUnmount(()=>{observer?.disconnect();bind(null);});
 .gift-sc-head{display:flex;justify-content:space-between;align-items:center;box-sizing:border-box;gap:var(--gift-gap);
   padding:0 var(--gift-pad);height:var(--gift-head);background:var(--card-head);color:var(--head-ink);font-size:.88em}
 .gift-sc-head span:first-child{overflow:hidden;text-overflow:ellipsis}
-.gift-sc-body{padding:var(--gift-pad);line-height:var(--gift-line)}
+.gift-sc-body{padding:var(--gift-pad);line-height:var(--gift-line);
+  -webkit-text-stroke:var(--sc-body-stroke) #141014;paint-order:stroke fill}
 </style>

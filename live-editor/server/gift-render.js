@@ -52,7 +52,7 @@ export function giftSubtitles(track,width,height,style,{base=0,from=0,to=Infinit
         add(6,x+w-m.pad,titleY,item.headerInk,'\\bord0\\q2\\fs'+headerSize,word(item.price),6);
         for (const [line,text] of item.lines.entries()) {
           add(6,x+m.pad,y+m.head+m.pad+line*m.line+Math.floor(m.line/2),
-            item.ink,'\\bord0\\q2\\fs'+m.size,word(text),4);
+            item.ink,'\\bord'+item.bodyOutline+'\\q2\\fs'+m.size,word(text),4);
         }
       } else {
         const ix=x+m.pad;

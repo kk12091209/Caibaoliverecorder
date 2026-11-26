@@ -86,11 +86,11 @@ export function giftRegions(metrics, style, obstacle) {
   return { gift, sc };
 }
 
-function card(entry, m) {
+function card(entry, m, outlineSuperChats) {
   if (entry.type === 'sc') {
     const lines = wrap(entry.text, (m.column - 2 * m.pad) / m.size);
     const amount = giftYuan(entry);
-    const [head, color, text, short, long] = PALETTES[amount === null ? 0 : CUTS.filter(value=>amount>=value).length];
+    const [head, color, legacyInk, short, long] = PALETTES[amount === null ? 0 : CUTS.filter(value=>amount>=value).length];
     const background = HEX.test(entry.bodyColor || '') ? entry.bodyColor : color;
     const header = HEX.test(entry.headColor || '') ? entry.headColor : head;
     const price = giftPrice(entry);
@@ -98,7 +98,8 @@ function card(entry, m) {
     const title = shorten(entry.user, (m.column-3*m.pad-priceWidth)/m.size);
     const duration = Math.min(lines.length >= 3 ? long : short, entry.platformSeconds > 0 ? entry.platformSeconds : Infinity);
     return { entry, title, price, lines, header, background, headerInk:contrastingText(header),
-      ink:background===color ? text : contrastingText(background), duration };
+      ink:outlineSuperChats ? '#ffffff' : background===color ? legacyInk : contrastingText(background),
+      bodyOutline:outlineSuperChats ? Math.round(m.size * .55) / 10 : 0, duration };
   }
   const guard = entry.type === 'guard';
   const suffix = guard ? ' 开通了'+entry.name : ' 送出 '+entry.name+' ×'+entry.count;
@@ -237,7 +238,7 @@ export function giftOpacity(item,time) {
   return Math.max(0,Math.min(1,(time-item.start)/.12,(item.end-time)/GIFT_FADE_SECONDS));
 }
 
-export function giftTimeline(events, width, height, style, { cameraEvents = [], recordingStyle, cameraSizeAt } = {}) {
+export function giftTimeline(events, width, height, style, { cameraEvents = [], recordingStyle, cameraSizeAt, outlineSuperChats = true } = {}) {
   const metrics = giftMetrics(width,height,style);
   const changes = new Map();
   const add = (time, item) => {
@@ -246,7 +247,7 @@ export function giftTimeline(events, width, height, style, { cameraEvents = [], 
   };
   for (const event of events) {
     if (!['gift','sc','guard'].includes(event.type) || !Number.isFinite(event.time)) continue;
-    const normalized = card(event, metrics);
+    const normalized = card(event, metrics, outlineSuperChats);
     const middle = event.type === 'guard' && event.platform === 'bilibili' && style.guardPosition === 'top-center';
     const key = middle ? 'guard' : event.type === 'sc' ? 'sc' : 'gift';
     const start = event.time, end = start + (middle ? 6 : normalized.duration);
@@ -255,7 +256,7 @@ export function giftTimeline(events, width, height, style, { cameraEvents = [], 
       for (let time=start+PAGE_SECONDS;time<end;time+=PAGE_SECONDS) add(time);
     }
     for (const update of event.updates || []) if (update.time > start && Number.isFinite(update.time)) {
-      add(update.time,{...card({...event,count:update.count},metrics),key,start:update.time,end:update.time+GIFT_SECONDS,update:true});
+      add(update.time,{...card({...event,count:update.count},metrics,outlineSuperChats),key,start:update.time,end:update.time+GIFT_SECONDS,update:true});
       add(update.time+GIFT_SECONDS-GIFT_FADE_SECONDS);add(update.time+GIFT_SECONDS);
     }
   }
