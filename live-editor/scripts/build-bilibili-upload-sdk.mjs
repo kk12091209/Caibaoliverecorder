@@ -79,8 +79,8 @@ const secureUploadTransport = {
         '                    reject(error);\n                    req.destroy();');
       contents = replaceExpected(contents, '            req.on("error", error => {',
         `            req.on("timeout", () => {
-                const error = new Error("Upload request timed out");
-                if (bandwidth?.paused() && uploaded < streamSize) error.code = "CAIBO_UPLOAD_YIELDED";
+                const code = bandwidth?.paused() && uploaded < streamSize ? "CAIBO_UPLOAD_YIELDED" : "ETIMEDOUT";
+                const error = Object.assign(new Error("Upload request timed out"), { code });
                 reject(error);
                 req.destroy();
             });
@@ -90,6 +90,12 @@ const secureUploadTransport = {
                 if (!Buffer.isBuffer(source)) source.destroy();
             });
             req.on("error", error => {`);
+      contents = replaceExpected(contents, '                let responseData = "";\n                res.on("data", chunk => {\n                    responseData += chunk;\n                });',
+        '                res.on("data", () => {});');
+      contents = replaceExpected(contents, 'reject(new Error(`Upload failed with status: ${res.statusCode}, response: ${responseData}`));',
+        'reject(Object.assign(new Error("Upload response was unsuccessful"), { statusCode: res.statusCode }));');
+      contents = replaceExpected(contents, 'reject(new Error(`Upload request failed: ${error.message}`));',
+        'reject(new Error("Upload request failed", { cause: error }));');
       contents = replaceExpected(contents, 'this.request.post(url, "", {',
         'this.request.post(url, "", {\n            maxRedirects: 0,');
       contents = replaceExpected(contents, 'this.request.post(url, {}, {',

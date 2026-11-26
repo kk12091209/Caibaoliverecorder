@@ -280,7 +280,7 @@ export class BilibiliPublisher {
     const row = this.store.get('SELECT status,error,aid,bvid,can_retry FROM bilibili_publisher_jobs WHERE id=?', taskId);
     if (!row) throw this.taskMissing();
     const active = this.#active?.id === taskId ? this.#active : null;
-    const transfer = this.transferStatus(taskId);
+    const transfer = ['queued','uploading'].includes(row.status) ? this.transferStatus(taskId) : undefined;
     return {
       status: row.status === 'staged' ? 'queued' : row.status,
       progress: row.status === 'submitted' ? 1 : active?.progress ?? 0, ...(transfer ? {transfer} : {}),
@@ -300,17 +300,21 @@ export class BilibiliPublisher {
 
   transferStatus(taskId) {
     const active = this.#active;
-    if (!taskId || active?.id !== taskId || !active.transfer) return undefined;
+    if (!taskId) return undefined;
+    if (active?.id !== taskId || !active.transfer) return this.bandwidth.rate===0 ? this.bandwidth.snapshot() : undefined;
     const { bytesPerSecond } = active.transfer.metrics();
     return { ...this.bandwidth.snapshot(), bytesPerSecond, part: active.part, parts: active.parts, progress: active.progress };
   }
 
   updateRecording(evidence) {
     const active = this.#active;
-    if (active && !active.committing && active.authorized?.() !== true && !active.controller.signal.aborted) {
-      active.cancelled = true;
-      active.controller.abort();
-      active.cancelUpload?.();
+    if (active && !active.committing && !active.controller.signal.aborted) {
+      const account=this.snapshot(),authorized=active.authorized();
+      if (!authorized || !account.configured || account.accountUid !== active.row.uid) {
+        active.cancelReason = !authorized ? denied : new PublicationError('B站 Cookie 或投稿账号已改变，请在设置中检查。');
+        active.controller.abort();
+        active.cancelUpload?.();
+      }
     }
     if (this.bandwidth.update(evidence, active?.transfer?.metrics().bytesPerSecond) && active) {
       const { state, limitBytesPerSecond, reason, room } = this.bandwidth.snapshot();
@@ -498,7 +502,8 @@ export class BilibiliPublisher {
         const rejected = definiteRejection(error, this.#sdk);
         if (rejected) this.save(row.id, 'failed', rejected, true);
         else this.save(row.id, 'uncertain', unknownSubmission);
-      } else if (active.cancelled) this.save(row.id, 'cancelled', denied.message);
+      } else if (active.cancelReason === denied) this.save(row.id, 'cancelled', denied.message);
+      else if (active.cancelReason) this.save(row.id, 'failed', active.cancelReason.message, true);
       else if (signal.aborted) this.save(row.id, 'queued');
       else if (error === denied) this.save(row.id, 'cancelled', error.message);
       else this.save(row.id, 'failed', `${detail}：${error instanceof PublicationError ? error.message :

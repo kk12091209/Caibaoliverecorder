@@ -26,6 +26,7 @@ test('bundled uploader resumes the same open part, retaining acknowledged chunks
     if(now>22_000 && governor.rate===0)governor.update({state:'idle'});
   }});
   const transfer=governor.transfer(),requests=[];
+  let responseStatus=200;
   t.mock.method(https,'request',(options,respond)=>{
     const query=new URL(options.path,'https://127.0.0.1').searchParams;
     const record={number:Number(query.get('partNumber')),session:query.get('uploadId'),bytes:0,accepted:false};
@@ -39,8 +40,8 @@ test('bundled uploader resumes the same open part, retaining acknowledged chunks
       },
       final(finished) {
         assert.equal(record.bytes,Number(options.headers['Content-Length']));
-        record.accepted=true;
-        const reply=new EventEmitter();reply.statusCode=200;
+        record.accepted=responseStatus===200;
+        const reply=new EventEmitter();reply.statusCode=responseStatus;
         respond(reply);
         reply.emit('end');
         finished();
@@ -58,4 +59,9 @@ test('bundled uploader resumes the same open part, retaining acknowledged chunks
   const metrics=transfer.metrics();
   assert.equal(metrics.confirmed,MiB/2);
   assert.ok(metrics.repeated>0 && metrics.repeated===requests[1].bytes);
+
+  responseStatus=503;
+  const retry=new WebVideoUploader({path:file,title:'测试'},undefined,{concurrency:1,retryTimes:0,bandwidth:governor.transfer()});
+  retry.preupload=uploader.preupload;retry.getUploadInfo=uploader.getUploadInfo;retry.mergeVideoApi=uploader.mergeVideoApi;
+  await assert.rejects(retry.upload(),{statusCode:503});
 });
