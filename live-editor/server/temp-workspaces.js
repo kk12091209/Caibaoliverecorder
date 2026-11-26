@@ -155,7 +155,11 @@ export class TemporaryWorkspaces {
   alive(pid) {
     try { return this.processAlive(pid) !== false; } catch { return true; }
   }
-  async remove(directory, expected, ownActive = false, { control, preserveUnknown = false, keepRetained = false } = {}) {
+  async remove(directory, expected, ownActive = false, { control } = {}) {
+    const outcome = await this.removeOutcome(directory, expected, ownActive, { control });
+    return !!outcome?.removed;
+  }
+  async removeOutcome(directory, expected, ownActive, { control, preserveUnknown = false, keepRetained = false } = {}) {
     const directoryKey = key(directory);
     if (this.removing.has(directoryKey)) return null;
     this.removing.add(directoryKey);
@@ -245,7 +249,7 @@ export class TemporaryWorkspaces {
       try{this.write(state,{...state.data,retained:{...state.data.retained,ownerReleased:true}});}catch{ /* Uncertain markers stay protected. */ }
     if (state.finishing) return state.finishing;
     state.finishing = (async () => {
-      try { const outcome = await this.remove(directory, state.data, true); if (outcome?.removed) this.active.delete(key(directory)); return !!outcome?.removed; }
+      try { const removed = await this.remove(directory, state.data, true); if (removed) this.active.delete(key(directory)); return removed; }
       catch { return false; }
       finally { state.finishing = null; }
     })();
@@ -276,7 +280,7 @@ export class TemporaryWorkspaces {
       const state=this.active.get(key(directory));
       if(state?.finishing){if(control)await control.wait(state.finishing);else await state.finishing;if(!this.active.has(key(directory)))continue;}
       if(marker.retained||marker.pendingSpawns||marker.childPids.some(pid=>this.alive(pid))||(!marker.cleanupKept&&(state?!state.completed:this.alive(marker.ownerPid))))throw new Error('这份素材的临时工作区仍在处理或等待保存，请稍后重试删除。');
-      const outcome=await this.remove(directory,marker,!!state,{control,preserveUnknown:true,keepRetained});
+      const outcome=await this.removeOutcome(directory,marker,!!state,{control,preserveUnknown:true,keepRetained});
       if(!outcome)throw new Error('素材临时工作区仍被占用或所有权发生变化，请稍后重试删除。');
       if(outcome.removed||outcome.kept)this.active.delete(key(directory));
       result.freedBytes+=outcome.freedBytes;result.deletedFiles+=outcome.deletedFiles;
@@ -300,7 +304,7 @@ export class TemporaryWorkspaces {
         // Recheck all process identities immediately before removal. Reused PIDs
         // count as alive; access-denied and other unknown states also preserve.
         if (this.alive(marker.ownerPid) || marker.childPids.some(pid => this.alive(pid))) { result.skipped++; continue; }
-        if ((await this.remove(directory, marker))?.removed) result.removed++; else result.skipped++;
+        if (await this.remove(directory, marker)) result.removed++; else result.skipped++;
       } catch { result.skipped++; }
     }
     return result;
