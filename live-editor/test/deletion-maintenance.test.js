@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Store } from '../server/store.js';
 import { RenderCache } from '../server/render-cache.js';
 import { DeletionMaintenance } from '../server/deletion-maintenance.js';
+import { SessionDeletion } from '../server/session-deletion.js';
+import { TemporaryWorkspaces } from '../server/temp-workspaces.js';
 import { minimalMp4 } from './helpers/mp4-fixture.js';
 
 async function setup(t) {
@@ -174,6 +176,63 @@ test('可保留的残留允许结束任务，但不删除未知文件', async t 
   assert.equal(f.store.pendingCleanup().length,0);
   assert.equal(f.store.retainedCleanup()[0].retained[0].path,path.dirname(unknown));
   assert.equal(await fs.readFile(unknown,'utf8'),'keep');
+});
+
+test('旧版卡在临时工作区的任务可原地重试，也可保留不明文件后收尾', async t => {
+  const f = await setup(t);
+  const neighbor = await recording(f);
+  const known = await recording(f);
+  const mixed = await recording(f);
+  const work = new TemporaryWorkspaces(path.join(f.root, 'temp'), { processAlive: () => false });
+  const generatedNames = [
+    'gift-default-gift.png', 'gift-default-guard.png', 'gift-' + 'a'.repeat(64) + '.png',
+    'part-0-block-2-0-1-danmaku.mp4', 'part-0-block-2-0-1.ass', 'names-part-0-block-2-0-1.ass',
+    'split-0-danmaku.txt', 'filter-e87c84a6-1f0a-4aef-bee9-7b47d92eba15.txt'
+  ];
+
+  // Produce the durable deletion plan and the exact failure left by r6,
+  // after originals have already been removed and before temporary cleanup.
+  f.store.temporaryWorkspaces = {
+    async removeSession() {
+      throw new Error('素材临时工作区中有无法确认的文件，已保留，请检查后重试删除。');
+    }
+  };
+  const directories = [];
+  for (const { s, file } of [known, mixed]) {
+    const directory = await work.create('bili-export-', s.id);
+    directories.push(directory);
+    for (const name of generatedNames) await write(path.join(directory, name));
+    await assert.rejects(f.store.deleteSession(s.id, true), /素材临时工作区中有无法确认的文件/);
+    await missing(file);
+  }
+  const unknown = await write(path.join(directories[1], 'user-note.txt'), 'user file');
+  work.active.clear();
+  f.store.close();
+  f.store = new Store(f.root);
+  f.store.temporaryWorkspaces = work;
+  const deletion = new SessionDeletion({ store: f.store, density: { drop() {} } });
+  try {
+    assert.equal(f.store.pendingCleanup().length, 2);
+    const knownRetry = deletion.start(known.s.id, { retry: true });
+    assert.equal(knownRetry.accepted.pending, true);
+    assert.equal((await knownRetry.done).ok, true);
+    await missing(directories[0]);
+
+    assert.equal((await deletion.start(mixed.s.id, { retry: true }).done).pending, true);
+    const [remaining] = f.store.pendingCleanup();
+    assert.equal(remaining.id, mixed.s.id);
+    assert.equal(remaining.canKeep, true);
+    assert.deepEqual(remaining.retained.map(entry => entry.path), [unknown]);
+    for (const name of generatedNames) await missing(path.join(directories[1], name));
+
+    assert.equal((await deletion.start(mixed.s.id, { retry: true, keepRetained: true }).done).ok, true);
+    assert.deepEqual(f.store.pendingCleanup(), []);
+    assert.equal(f.store.retainedCleanup()[0].retained[0].path, unknown);
+    assert.equal(await fs.readFile(unknown, 'utf8'), 'user file');
+    await fs.stat(neighbor.file);
+  } finally {
+    await deletion.close();
+  }
 });
 
 test('刷新时数据目录不可达不会把缺失误报为清理完成', async t => {

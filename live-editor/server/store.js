@@ -186,8 +186,9 @@ export class Store {
       }
       if(this.temporaryWorkspaces){
         control?.stage('temporary', '正在清理临时文件');
-        const temporary=await this.temporaryWorkspaces.removeSession(id,{control});
+        const temporary=await this.temporaryWorkspaces.removeSession(id,{control,keepRetained:keepRetained&&!retryable.length});
         result.freedBytes+=temporary.freedBytes;result.deletedFiles+=temporary.deletedFiles;
+        result.retained.push(...temporary.retained);
       }
       const remaining=[...new Map(result.retained.map(entry=>[entry.path,entry])).values()];
       if (retryable.length || (remaining.length && !keepRetained)) {
