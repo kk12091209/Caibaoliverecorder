@@ -242,11 +242,17 @@ export class AutoPost {
             return;
           }
           if (existing.status === 'done') {
-            const files = await publicationFiles(this.store, existing, this.store.jobDetails(existing));
-            if (existing.mode !== config.mode || files.size !== (config.mode === 'dual' ? 2 : 1)) {
+            // Export records their final timings after marking the files saved.
+            // Validate the settled row so that bookkeeping cannot invalidate it mid-check.
+            await this.media.exportOperations?.get(existing.id)?.done;
+            await this.media.saves?.get(existing.id);
+            const saved = this.store.get("SELECT * FROM jobs WHERE id=? AND status='done'", existing.id);
+            if (!saved || !this.canSubmit(row, config, saved)) continue;
+            const files = await publicationFiles(this.store, saved, this.store.jobDetails(saved));
+            if (saved.mode !== config.mode || files.size !== (config.mode === 'dual' ? 2 : 1)) {
               throw new Error('自动导出的成片已移动、修改或删除。');
             }
-            await this.submit(row, config, existing, [...files.values()]);
+            await this.submit(row, config, saved, [...files.values()]);
             return;
           } else if (['queued', 'running', 'saving', 'finalizing', 'cancelling'].includes(existing.status)) {
             if (row.status !== 'exporting') this.status(row.session, 'exporting');
