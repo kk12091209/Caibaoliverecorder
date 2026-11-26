@@ -113,7 +113,8 @@ test('three recordings hand off independently, reusing an export after recording
   await waitFor(() => ['done', 'failed'].includes(job(a.id)?.status));
   assert.equal(job(a.id).status, 'done', job(a.id).error);
   await auto.tick();
-  assert.equal(uploads.get(a.id).status, 'uploading');
+  assert.equal(uploads.get(a.id)?.status, 'uploading',
+    JSON.stringify(store.get('SELECT status,error,result FROM auto_post_jobs WHERE session=?', a.id)));
   assert.equal(store.session(b.id).status, 'recording');
 
   await finish(b);
@@ -151,7 +152,8 @@ test('three recordings hand off independently, reusing an export after recording
   assert.equal(job(b.id).status, 'done', job(b.id).error);
   assert.equal(job(b.id).id, originalJob.id);
   await auto.tick();
-  assert.equal(uploads.get(a.id).status, 'uploading');
+  assert.equal(uploads.get(a.id)?.status, 'uploading',
+    JSON.stringify(store.get('SELECT status,error,result FROM auto_post_jobs WHERE session=?', a.id)));
   assert.equal(uploads.get(b.id).status, 'queued');
   await auto.tick();
   assert.equal(stage(b.id), 'waiting-upload');

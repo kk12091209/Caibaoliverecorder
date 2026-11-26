@@ -1,153 +1,41 @@
-name: Windows release package
+name: Isolated Windows publication regression
 on:
   workflow_dispatch:
     inputs:
       release_channel:
-        description: Publish this build as a test candidate or a stable release
         type: choice
-        options: [stable, beta]
-        default: stable
+        options: [beta]
+        default: beta
       publish_draft:
-        description: Upload verified files to a new draft GitHub Release
         type: boolean
         default: false
 permissions:
   contents: read
-concurrency:
-  group: windows-release-${{ github.ref }}
-  cancel-in-progress: false
 jobs:
-  package:
+  publication:
     runs-on: windows-2022
-    timeout-minutes: 90
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-    env:
-      DOTNET_NOLOGO: 1
-      DOTNET_CLI_TELEMETRY_OPTOUT: 1
-      DOTNET_ROLL_FORWARD: Major
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 24.12.0
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.425
-      - name: Read application version
-        id: version
-        shell: pwsh
-        env:
-          RELEASE_CHANNEL: ${{ inputs.release_channel }}
-        run: |
-          $package = Get-Content live-editor/package.json -Raw | ConvertFrom-Json
-          $version = $package.version
-          $tag = "v$version"
-          if ($env:RELEASE_CHANNEL -eq 'beta' -and $version -notmatch '-beta\.') {
-            $tag += "-beta.$($package.buildRevision)"
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "CAIBO_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-      - name: Verify partial chat writes roll back on Windows
-        shell: pwsh
-        run: node --test --test-name-pattern 'a partial XML batch' live-editor/test/xiaohongshu-web.test.js
-      - name: Verify monitor routes on Windows
-        shell: pwsh
-        run: node --test --test-name-pattern 'a registered provider|authenticated anchor API' live-editor/test/numeric-room-api.test.js live-editor/test/xiaohongshu.test.js
-      - name: Prepare native desktop regression probes
+      - name: Reproduce using the verified previous release FFmpeg
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          npm install --prefix .tools/ui-probe --no-audit --no-fund playwright-core@1.64.1
-          if ($LASTEXITCODE -ne 0) { throw 'Renderer probe restore failed' }
-          "CAIBO_PLAYWRIGHT_MODULE=$((Resolve-Path .tools/ui-probe/node_modules/playwright-core/index.mjs).Path)" >> $env:GITHUB_ENV
+          if ('${{ inputs.publish_draft }}' -eq 'true') { throw 'Diagnostic workflow does not publish.' }
           $release=Invoke-RestMethod -Uri 'https://api.github.com/repos/kk12091209/Caibaoliverecorder/releases/latest' -Headers @{Authorization="Bearer $env:GH_TOKEN"}
           $asset=@($release.assets | Where-Object {$_.name -match '^BiliLiveEditor-[0-9.]+-win-x64.zip$'})
           if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Previous package is not verified' }
           node live-editor/scripts/fetch-tool.mjs $asset[0].browser_download_url .tools/ui-previous.zip $Matches[1]
           if ($LASTEXITCODE -ne 0) { throw 'Previous package download failed' }
           Expand-Archive .tools/ui-previous.zip .tools/ui-previous
-          $desktop=Get-ChildItem .tools/ui-previous -Recurse -Filter '录播机.exe' | Select-Object -First 1
-          "CAIBO_PREVIOUS_DESKTOP=$($desktop.FullName)" >> $env:GITHUB_ENV
-      - name: Build, test and package Windows application
-        shell: pwsh
-        run: ./live-editor/scripts/build-windows-ci.ps1
-      - name: Upload verified release files
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-${{ steps.version.outputs.version }}
-          path: |
-            .tools/windows-release/*.zip
-            .tools/windows-release/*.7z
-            .tools/windows-release/*-setup.exe
-            .tools/windows-release/*.json
-            .tools/windows-release/SHA256SUMS.txt
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-      - name: Upload validation reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-${{ steps.version.outputs.version }}-validation
-          path: |
-            .tools/windows-release-qa/**/verification.json
-            .tools/release-qa/**/verification.json
-            .tools/release-qa/**/*.log
-            .tools/windows-release-qa/ui/**
-            .tools/release-qa/**/ui/**
-          if-no-files-found: ignore
-          retention-days: 14
-  publish-draft:
-    if: ${{ inputs.publish_draft }}
-    needs: package
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-${{ needs.package.outputs.version }}
-          path: release-files
-      - name: Verify artifacts and upload a draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.package.outputs.version }}
-          RELEASE_TAG: ${{ needs.package.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PYVERIFY'
-          from pathlib import Path
-          import hashlib, json, os, re
-          root = Path('release-files')
-          data = json.loads((root/'windows-build.json').read_text(encoding='utf-8-sig'))
-          assert data['sourceRevision'] == os.environ['GITHUB_SHA']
-          assert data['version'] == os.environ['RELEASE_VERSION']
-          for name in ('nodeTests', 'coreTests', 'coreLifecycle', 'portableZip', 'portable7z', 'installerUpgradeUninstall', 'nativeDesktopUI'):
-              assert data[name] == 'passed', name
-          listed = set()
-          for line in (root/'SHA256SUMS.txt').read_text().splitlines():
-              digest, name = line.split('  ', 1)
-              assert re.fullmatch(r'[A-Za-z0-9._-]+', name) and name not in listed
-              listed.add(name)
-              with (root/name).open('rb') as stream:
-                  assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest, name
-          assert listed == {p.name for p in root.iterdir()} - {'SHA256SUMS.txt'}
-          print('Verified source revision, successful checks and all release hashes.')
-          PYVERIFY
-          channel_flags=()
-          if [[ "$RELEASE_TAG" =~ -beta\.[1-9][0-9]*$ ]]; then channel_flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" --draft --latest=false "${channel_flags[@]}" --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes-file "live-editor/docs/RELEASE-${RELEASE_TAG#v}.md"
-          gh release upload "$RELEASE_TAG" release-files/*
+          $env:FFMPEG_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
+          $env:FFPROBE_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
+          Set-Location live-editor
+          for ($index=1; $index -le 8; $index++) {
+            node --test --test-concurrency=2 test/automatic-publication-pipeline.test.js test/bilibili-publisher.test.js
+            if ($LASTEXITCODE -ne 0) { throw "Publication regression failed in iteration $index" }
+          }
