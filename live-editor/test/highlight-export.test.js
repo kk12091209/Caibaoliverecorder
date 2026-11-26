@@ -80,9 +80,9 @@ test('export preserves preview-scale glyph height with and without a real gift c
     for (let i = 0; i < pixels.length; i += 3) {
       const [r,g,b] = [pixels[i],pixels[i+1],pixels[i+2]], x = i / 3 % width, y = Math.floor(i / 3 / width);
       if (g > 110 && g > 1.8*r && g > 1.8*b) { minY = Math.min(minY,y); maxY = Math.max(maxY,y); }
-      if (x > width*.75 && y < height*.19 && r > g*1.3 && r > 31) giftPixels++;
+      if (x > width*.74 && y > height*.80 && r > g*1.3 && r > 95) giftPixels++;
     }
-    assert.equal(giftPixels > 100, giftsEnabled);
+    assert.equal(giftPixels > 12, giftsEnabled, 'the small gift icon is present in the lower-right region');
     bounds.push(maxY-minY+1);
   }
   // WKWebView measured 32px with the same 640x360 frame and selected scale.

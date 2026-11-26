@@ -180,6 +180,37 @@ function allocate(queue, metrics, style, time, obstacle) {
   return output;
 }
 
+function overlaps(a,b) {
+  return a.x<b.x+b.w && b.x<a.x+a.w && a.y<b.y+b.h && b.y<a.y+a.h;
+}
+
+function appendFrames(track, previous, items, start, end) {
+  if (!items.length) return;
+  const last = new Map(previous.map(item=>[item.entry.id,item]));
+  const stay = items.filter(item=>last.has(item.entry.id));
+  const slide = stay.some(item=>last.get(item.entry.id).y!==item.y);
+  const steady = {start,end,items};
+  if (!slide || end-start<.04) {track.push(steady);return;}
+  const movingFor = Math.min(.12,end-start);
+  const frames=[];
+  for(let step=0;step<3;step++){
+    const fraction=step/3;
+    const moved=stay.map(item=>{
+      const before=last.get(item.entry.id);
+      if (item.w!==before.w||item.h!==before.h||item.x!==before.x) return item;
+      return {...item,y:Math.round(before.y+(item.y-before.y)*fraction)};
+    });
+    if(moved.some((item,index)=>moved.slice(0,index).some(other=>overlaps(item,other)))) {
+      track.push(steady);
+      return;
+    }
+    const visible=items.filter(item=>!last.has(item.entry.id)&&!moved.some(other=>overlaps(item,other)));
+    frames.push({start:start+movingFor*fraction,end:start+movingFor*(step+1)/3,items:[...moved,...visible]});
+  }
+  track.push(...frames);
+  if(start+movingFor<end)track.push({...steady,start:start+movingFor});
+}
+
 function lowerBound(segments,time) {
   let left = 0, right = segments.length;
   while (left < right) {
@@ -233,7 +264,7 @@ export function giftTimeline(events, width, height, style, { cameraEvents = [], 
     const size = cameraSizeAt?.(event) || {width,height};
     return {...event, geometry:cameraGeometry(event.layout,recordingStyle,size.width,size.height,width,height)?.cameraTarget};
   }).sort((a,b)=>a.time-b.time);
-  let cameraIndex = -1;
+  let cameraIndex = -1, previous = [], previousObstacle;
   const queue = {gift:[],sc:[],guard:[]}, track = [];
   const cuts = [...changes.keys()].sort((a,b)=>a-b);
   for (let index=0;index+1<cuts.length;index++) {
@@ -253,8 +284,11 @@ export function giftTimeline(events, width, height, style, { cameraEvents = [], 
     }
     while (cameras[cameraIndex+1]?.time <= start) cameraIndex++;
     const camera = cameras[cameraIndex];
-    const items = allocate(queue,metrics,style,start,camera?.end>start ? camera.geometry : undefined);
-    if (items.length) track.push({start,end,items});
+    const obstacle=camera?.end>start?camera.geometry:undefined;
+    const items=allocate(queue,metrics,style,start,obstacle);
+    appendFrames(track,previousObstacle===obstacle?previous:[],items,start,end);
+    previous=items;
+    previousObstacle=obstacle;
   }
   return track;
 }

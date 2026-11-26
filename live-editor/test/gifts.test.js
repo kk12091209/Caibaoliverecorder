@@ -9,12 +9,28 @@ import {messageFeed} from '../server/message-feed.js';
 import {createApp,fetch} from './helpers/authenticated-app.js';
 import {giftFromXml,saveGift,giftMessages,giftSegments,giftAss,safeGiftIcon} from '../server/gifts.js';
 import {DEFAULT_GIFT_STYLE,validateGiftStyle,giftCards,giftPrice} from '../shared/gifts.js';
+import {prepareSuperChats} from '../server/super-chat-history.js';
 import {GiftIntake} from '../server/gift-intake.js';
 import {decodeGift,decodePushFrame} from '../server/douyin-protocol.js';
 import {chatXml} from '../server/douyin-recorder.js';
 import {GiftIcons,giftIconKey} from '../server/gift-icons.js';
 
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'caibao-gifts-')),store=new Store(root),session=store.createSession({status:'finished'}),source=store.addSource(session.id,path.join(root,'one.flv'),20);t.after(async()=>{store.close();await fs.rm(root,{recursive:true,force:true});});return {root,store,session,source};}
+test('legacy SC colors and duration are recovered by byte offset while retractions leave the detail searchable',async t=>{
+ const {store,source,session}=await fixture(t);
+ const xml='<i><sc ts="5" user="往期观众" price="50" scid="18" time="7" headcolor="#ffeeb0">原有记录</sc><sc_retract scid="19"/></i>';
+ await fs.writeFile(source.xml,xml);
+ const ingest=new Ingestor(store);
+ await ingest.readDanmaku(source);
+ store.run("UPDATE gift_events SET presentation='' WHERE type='sc'");
+ await prepareSuperChats(store,session.id);
+ const options={overlay:true,includeSuperChat:true,includeGifts:false};
+ const [shown]=giftMessages(store,session.id,options);
+ assert.equal(shown.platformSeconds,7); assert.equal(shown.headColor,'#ffeeb0');
+ store.run('INSERT INTO super_chat_retractions VALUES (?,?)',session.id,'18');
+ assert.equal(giftMessages(store,session.id,options).length,0);
+ assert.equal(giftMessages(store,session.id,{includeSuperChat:true,search:'原有记录'}).length,1);
+});
 test('gift controls default off; both platform thresholds use yuan and invalid values fail',()=>{
  const {preview,export:exportEnabled,scPreview,scExport,minBilibili,minDouyin,currency}=DEFAULT_GIFT_STYLE;
  assert.deepEqual({preview,exportEnabled,scPreview,scExport,minBilibili,minDouyin,currency},

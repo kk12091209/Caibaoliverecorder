@@ -23,7 +23,9 @@ const temporary=async()=>fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'hi
 test('yuan display and thresholds retain raw platform amounts and migrate older coin thresholds',async t=>{
  const root=await temporary(),store=new Store(root),session=store.createSession(),source=store.addSource(session.id,path.join(root,'one.flv'));t.after(async()=>{store.close();await fs.rm(root,{recursive:true,force:true});});
  assert.equal(giftPrice({platform:'douyin',totalPrice:15}),'¥1.5');assert.equal(giftYuan({platform:'bilibili',totalPrice:1.5}),1.5);
- assert.deepEqual(validateGiftStyle({preview:true,export:false,minBilibili:2,minDouyin:20}),{preview:true,export:false,minBilibili:2,minDouyin:2,currency:'CNY'});
+ const migrated=validateGiftStyle({preview:true,export:false,minBilibili:2,minDouyin:20});
+ assert.deepEqual(migrated,{...DEFAULT_GIFT_STYLE,preview:true,minBilibili:2,minDouyin:2,minSuperChat:2,
+   scPreview:true,giftCorner:'top-right',scCorner:'top-right'});
  for(const [i,price] of [10,50,null].entries())saveGift(store,giftFromXml('gift',{platform:'douyin',ts:i,...(price===null?{}:{total_price:price})},source,i));
  const rows=giftMessages(store,session.id,{style:{...DEFAULT_GIFT_STYLE,minDouyin:2}});assert.equal(rows.length,1);assert.equal(rows[0].totalPrice,50);assert.match(rows[0].text,/¥5/);
 });

@@ -916,7 +916,7 @@ export class Media {
           const messages=visibleComments(chatLayout,{excluded,filterLottery:job.filterLottery!==false},start,end);
           // ASS uses the input clock, which starts at the preceding keyframe.
           const window={base,from:start,to:end};
-          const gifts=giftTrack ? giftSubtitles(giftTrack,job.giftIcons,width,height,job.giftStyle,window)
+          const gifts=giftTrack ? giftSubtitles(giftTrack,width,height,job.giftStyle,window)
             : giftAss(job.gifts||[],width,height,window);
           await fs.writeFile(path.join(workDir,subFile),assText(messages.map(m=>({...m,time:m.time-base,end:m.end-base})),width,height,layoutFont,job.danmakuStyle)+gifts);
         }
