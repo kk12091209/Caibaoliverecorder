@@ -34,6 +34,7 @@ jobs:
           Expand-Archive .tools/ui-previous.zip .tools/ui-previous
           $env:FFMPEG_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
           $env:FFPROBE_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
+          . ./live-editor/scripts/dev-env.ps1 -ProjectRoot $PWD.Path
           Set-Location live-editor
           for ($index=1; $index -le 12; $index++) {
             node --test --test-concurrency=2 test/automatic-publication-pipeline.test.js test/auto-post.test.js test/bilibili-publisher.test.js

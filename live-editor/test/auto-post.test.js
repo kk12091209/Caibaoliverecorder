@@ -123,6 +123,7 @@ test('封口后只建一个导出任务，恢复后继续同一任务并按指�
     exportFinalizer.resolve();
     await submission;
   }
+  assert.equal(recovered.snapshot().jobs[0].status, 'uploading', recovered.snapshot().jobs[0].error);
   assert.deepEqual(recovered.snapshot().jobs[0].parts, [{ title: '弹幕版' }, { title: '纯净版' }]);
   assert.equal(recovered.snapshot().jobs[0].status, 'uploading');
   assert.equal(recovered.isUploadingExport('job:' + session.id), true);
