@@ -35,7 +35,7 @@ jobs:
           $env:FFMPEG_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
           $env:FFPROBE_PATH=(Get-ChildItem .tools/ui-previous -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
           Set-Location live-editor
-          for ($index=1; $index -le 8; $index++) {
-            node --test --test-concurrency=2 test/automatic-publication-pipeline.test.js test/bilibili-publisher.test.js
+          for ($index=1; $index -le 12; $index++) {
+            node --test --test-concurrency=2 test/automatic-publication-pipeline.test.js test/auto-post.test.js test/bilibili-publisher.test.js
             if ($LASTEXITCODE -ne 0) { throw "Publication regression failed in iteration $index" }
           }

@@ -77,7 +77,7 @@ test('投稿到 B站需要其 Cookie，并且只为已有监控主播登记新�
 });
 
 test('封口后只建一个导出任务，恢复后继续同一任务并按指定顺序提交双版本投稿', async t => {
-  const { root, store, credentials, service, history, submitted } = await setup(t);
+  const { root, store, credentials, service, history, submitted, media } = await setup(t);
   credentials.configured = true;
   credentials.cookie = 'SESSDATA=synthetic; DedeUserID=123; bili_jct=mock-csrf';
   const autoPost = service();
@@ -107,7 +107,22 @@ test('封口后只建一个导出任务，恢复后继续同一任务并按指�
   await recovered.tick();
   assert.equal(recovered.snapshot().jobs[0].status, 'blocked');
   credentials.cookie = 'SESSDATA=synthetic; DedeUserID=123; bili_jct=mock-csrf';
-  await recovered.tick();
+  const jobId = 'job:' + session.id;
+  const exportFinalizer = Promise.withResolvers(), finalizerWaited = Promise.withResolvers();
+  media.exportOperations = new Map([[jobId, {done:{then(resolve, reject) {
+    finalizerWaited.resolve();
+    return exportFinalizer.promise.then(resolve, reject);
+  }}}]]);
+  const submission = recovered.tick();
+  try {
+    assert.equal(await Promise.race([finalizerWaited.promise.then(() => true), submission.then(() => false)]), true);
+    assert.equal(submitted.length, 0);
+    store.run("UPDATE jobs SET data=json_set(data,'$.performance',json(?)) WHERE id=?", '{"elapsedMs":15}', jobId);
+  } finally {
+    media.exportOperations.delete(jobId);
+    exportFinalizer.resolve();
+    await submission;
+  }
   assert.deepEqual(recovered.snapshot().jobs[0].parts, [{ title: '弹幕版' }, { title: '纯净版' }]);
   assert.equal(recovered.snapshot().jobs[0].status, 'uploading');
   assert.equal(recovered.isUploadingExport('job:' + session.id), true);
