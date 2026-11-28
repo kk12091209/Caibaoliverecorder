@@ -25,6 +25,7 @@ export function closeAppWith({
       await recorderClosed;
       while(ingestor.busy||media.processing||recorder.pollBusy)await new Promise(resolve=>setTimeout(resolve,30));
       await credentials.close();
+      await media.temporaryWorkspaces?.cleaning?.catch(() => {});
       await diagnostics.close();
       store.close();
       await runtime.release();

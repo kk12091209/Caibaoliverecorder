@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       release_channel:
-        description: Build a stable, beta, or manual patch package
+        description: Publish this build as a test candidate or a stable release
         type: choice
-        options: [stable, beta, manual]
+        options: [stable, beta]
         default: stable
       publish_draft:
         description: Upload verified files to a new draft GitHub Release
@@ -53,10 +53,6 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "CAIBO_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-          if ($env:RELEASE_CHANNEL -eq 'manual') {
-            if ($version -match '-beta\.') { throw 'Manual patches require a stable product version.' }
-            "CAIBO_WINDOWS_MANUAL_PATCH=1" >> $env:GITHUB_ENV
-          }
       - name: Verify partial chat writes roll back on Windows
         shell: pwsh
         run: node --test --test-name-pattern 'a partial XML batch' live-editor/test/xiaohongshu-web.test.js
@@ -109,7 +105,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
   publish-draft:
-    if: ${{ inputs.publish_draft && inputs.release_channel != 'manual' }}
+    if: ${{ inputs.publish_draft }}
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 15

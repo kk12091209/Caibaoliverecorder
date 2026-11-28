@@ -335,7 +335,7 @@ async function createManagedApp(options,runtime) {
     if(publisher.hasWork())void publisher.tick(authorizePublication)?.catch(error=>diagnostics.record('B站投稿',error,{level:'警告'}));
     void deletionMaintenance.tick().catch(error=>{deletionMaintenance.lastError=error.message;diagnostics.record('自动清理',error,{level:'警告'});});
     if(options.compact!==false)void storage.tick().catch(error=>{storage.lastError=error.message;diagnostics.record('素材整理',error,{level:'警告'});});
-    if(Date.now()>=nextTemporarySweep){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;diagnostics.record('缓存清理',error,{level:'警告'});});}
+    if(Date.now()>=nextTemporarySweep&&!hasRecording(store,recorder)&&!media.hasForegroundWork()){nextTemporarySweep=Date.now()+60000;void media.cleanupStaleTemporary().catch(error=>{media.temporaryCleanupError=error.message;diagnostics.record('缓存清理',error,{level:'警告'});});}
   };
   const maintenanceTimer=setInterval(maintain,5000);
   const runtimeTimer=setInterval(()=>{

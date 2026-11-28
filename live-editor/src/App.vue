@@ -21,6 +21,7 @@ import LinkmicOverlay from './components/LinkmicOverlay.vue';
 import RecordingTimestamp from './components/RecordingTimestamp.vue';
 import RecordingSettings from './components/RecordingSettings.vue';
 import SettingsGroup from './components/SettingsGroup.vue';
+import StorageCleanupPanel from './components/StorageCleanupPanel.vue';
 import RecorderStatus from './components/RecorderStatus.vue';
 import WorkbenchThemePicker from './components/WorkbenchThemePicker.vue';
 import { DEFAULT_WORKBENCH_THEME, isWorkbenchTheme } from '../shared/workbench-theme.js';
@@ -1211,6 +1212,7 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
             <div v-if="state.recovery?.safeMode" class="setting-info"><span>{{ ui.workbench.安全启动前的旧录像已保留 }}</span><code>{{ state.paths?.retained }}</code><button class="button" @click="openFolder({kind:'retained'})"><FolderOpen :size="16"/>{{ ui.workbench.查看旧录像 }}</button><p class="muted">{{ ui.workbench.旧素材索引异常 }}</p></div>
             <div class="setting-info"><span>{{ ui.workbench.完整原始录像与弹幕 }}</span><code>{{ state.paths?.originals }}</code><button class="text-button" @click="openFolder({kind:'originals'})">{{ ui.workbench.打开原始素材文件夹 }}</button></div>
             <section v-if="pendingCleanup.length" class="cleanup-settings" :aria-label="ui.workbench.素材清理进度"><strong>{{ ui.workbench.素材清理进度素材清理进度 }}{{ pendingCleanup.length }}）</strong><p class="muted">{{ ui.workbench.文件占用释放后自动重试 }}</p><div v-for="item in pendingCleanup" :key="item.id" class="cleanup-row"><div><strong>{{ item.title }}</strong><small>{{ date(item.created) }} · {{ format(item.duration) }}</small><p role="status">{{ cleanupLabel(item) }}</p><small v-if="item.task?.detail">{{ item.task.detail }}</small><p v-if="item.purge_error&&!item.task" class="cleanup-error">{{ item.purge_error }}</p></div><button class="button small danger" :disabled="!!item.task||cleanupRequests.has(item.id)" @click="retryCleanup(item)">{{ item.task?ui.workbench.清理中:ui.workbench.重试清理 }}</button><div v-if="item.canKeep&&!item.task"><details><summary>{{ ui.workbench.查看保留位置 }}</summary><p v-for="entry in item.retained" :key="entry.path"><code>{{ entry.path }}</code></p></details><button type="button" class="button small" :disabled="cleanupRequests.has(item.id)" @click="retryCleanup(item,true)">{{ ui.workbench.保留文件并结束清理 }}</button></div></div></section>
+            <StorageCleanupPanel v-if="expandedSettings.storage" :format-bytes="formatBytes" @changed="refresh"/>
             <details v-if="state.retainedCleanup?.length" class="cleanup-settings"><summary>{{ ui.workbench.已保留的清理文件 }}</summary><div v-for="item in state.retainedCleanup" :key="item.session"><strong>{{ item.title }}</strong><p v-for="entry in item.retained" :key="entry.path"><code>{{ entry.path }}</code></p></div></details>
           </SettingsGroup>
           <SettingsGroup name="advanced" :title="ui.workbench.设置高级" v-model:open="expandedSettings.advanced">

@@ -203,13 +203,15 @@ test('publication manifest 和 UUID 临时清单仅在 export 放行，其他 .t
     const probe = await fixture('manifest-probe-' + randomUUID(), 'bili-probe-');
     await fs.writeFile(path.join(probe.directory, name), 'not a probe-owned file');
     assert.equal(await probe.manager.finish(probe.directory), false);
-    await fs.access(probe.file);
+    await missing(probe.file);
+    await fs.access(path.join(probe.directory, name));
   }
   for (const name of ['.bili-export-publication-nope.tmp', '.bili-export-publication.json.tmp', 'arbitrary.tmp']) {
     const f = await fixture('manifest-unknown-' + randomUUID());
     await fs.writeFile(path.join(f.directory, name), 'unrecognized file');
     assert.equal(await f.manager.finish(f.directory), false);
-    await fs.access(f.file);
+    await missing(f.file);
+    await fs.access(path.join(f.directory, name));
   }
 });
 
@@ -257,12 +259,14 @@ test('缓存拼接音视频工作文件只在 export 精确放行，近似后缀
     const f = await fixture('unknown-mux-' + randomUUID());
     await fs.writeFile(path.join(f.directory, name), 'not owned');
     assert.equal(await f.manager.finish(f.directory), false);
-    await fs.access(f.file);
+    await missing(f.file);
+    await fs.access(path.join(f.directory, name));
   }
   const probe = await fixture('probe-mux-files', 'bili-probe-');
   for (const name of names) await fs.writeFile(path.join(probe.directory, name), 'not probe-owned');
   assert.equal(await probe.manager.finish(probe.directory), false);
-  await fs.access(probe.file);
+  await missing(probe.file);
+  for (const name of names) await fs.access(path.join(probe.directory, name));
 });
 test.after(async () => {
   if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('bili-retained-test-')) throw new Error('Unexpected retained-workspace test root');

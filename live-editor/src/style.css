@@ -993,6 +993,11 @@ svg { flex-shrink: 0; }
 .button.danger:hover:not(:disabled) { background: var(--danger-hover); }
 .confirm-meta { font-variant-numeric: tabular-nums; color: var(--faint); }
 .cleanup-settings { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius-card); padding: 12px 14px; }
+.cleanup-storage-usage { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; margin: 12px 0; }
+.cleanup-storage-usage dd { margin: 0; }
+.cleanup-storage-item { border-top: 1px solid var(--line); padding: 8px 0; }
+.cleanup-storage-item :is(summary, code) { overflow-wrap: anywhere; }
+.cleanup-storage .cleanup-error { color: var(--accent-dark); overflow-wrap: anywhere; }
 .cleanup-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .cleanup-row>div { min-width: 0; flex: 1; }.cleanup-row strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
 .cleanup-row small { display: block; color: var(--faint); font-size: 11px; margin-top: 4px; }

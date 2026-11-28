@@ -15,6 +15,7 @@ import { directories, writableDirectory, exportScopeDirectory } from './director
 import { outputSpan, reserveClip, reserveFull, clipFile } from './output-names.js';
 import { detectExportEncoder, encoderArguments, softwareEncoder, videoMetadata, videoGeometryFilter, canCopyFullSource } from './export-encoding.js';
 import { TemporaryWorkspaces } from './temp-workspaces.js';
+import { temporaryCleanupOptions } from './storage-cleanup.js';
 import { ExportPublication } from './export-publication.js';
 import { RenderCache } from './render-cache.js';
 import { RenderPipeline, visibleComments, CPU_EXPORT_ROUTE, CPU_CHECKPOINT_SECONDS } from './render-plan.js';
@@ -157,7 +158,7 @@ export class Media {
       });
     return operation.done;
   }
-  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions, idleRenderOptions } = {}) { this.store = store; store.exportCheckpoints=this.checkpoints; this.fonts = new DanmakuFonts(store); this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.idlePolicy=new IdleRenderPolicy(idleRenderOptions);this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
+  constructor(store, { ffmpeg = 'ffmpeg', ffprobe = 'ffprobe', exportAcceleration = process.env.EXPORT_ACCELERATION || 'auto', renderBlockSeconds = 60, renderCacheOptions, idleRenderOptions } = {}) { this.store = store; store.exportCheckpoints=this.checkpoints; this.fonts = new DanmakuFonts(store); this.temporaryRoot = path.join(store.root,'temp'); this.temporaryWorkspaces = new TemporaryWorkspaces(this.temporaryRoot, temporaryCleanupOptions(store)); this.publication = new ExportPublication(this.temporaryWorkspaces); this.ffmpeg = ffmpeg; this.ffprobe = ffprobe; this.previews = new Map(); this.enqueues = new Set(); this.probes = new Set(); this.saves = new Map(); this.savePreparations = new Set(); this.retrying = new Set(); this.blockedSessions = new Map(); this.processing = false; this.children = new Set(); this.backgroundChildren = new Set(); this.exportAcceleration = exportAcceleration; this.exportEncoder = null; this.closed = false; this.idlePolicy=new IdleRenderPolicy(idleRenderOptions);this.renderCache=new RenderCache(store.root,renderCacheOptions);this.renderer=new RenderPipeline(this,assText,{blockSeconds:renderBlockSeconds}); }
   prepareNext(id,options={}){
     if(this.closed)return Promise.reject(Object.assign(new Error('后台预处理已停止。'),{name:'AbortError'}));
     if(this.preparationCalls.has(id))return this.preparationCalls.get(id);

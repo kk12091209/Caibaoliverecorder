@@ -17,7 +17,11 @@ export class SessionDeletion {
   }
   start(id, { retry = false, keepRetained = false } = {}) {
     if (this.closed) throw new Error('后台正在退出，请稍后重试。');
-    if (this.has(id)) return this.tasks.get(id);
+    const running = this.tasks.get(id);
+    if (running) {
+      if (keepRetained) running.keepRetained = true;
+      return running;
+    }
     if (retry && !this.store.get("SELECT id FROM sessions WHERE id=? AND deleted_at<>'' AND purge_started_at<>''",id)) {
       return {accepted:{accepted:true,pending:false,id},done:Promise.resolve({ok:true,pending:false,id})};
     }
@@ -41,7 +45,12 @@ export class SessionDeletion {
   }
   async run(id, task) {
     for (;;) {
-      try { return await this.remove(id, task.control, task.keepRetained); }
+      try {
+        const keepRetained = task.keepRetained;
+        const result = await this.remove(id, task.control, keepRetained);
+        if (result.pending && task.keepRetained && !keepRetained) continue;
+        return result;
+      }
       catch (error) {
         const phase = task.control.phase || 'resources';
         this.store.run('UPDATE sessions SET purge_error=? WHERE id=?', `${error.message}（${task.control.detail || phase}）`, id);

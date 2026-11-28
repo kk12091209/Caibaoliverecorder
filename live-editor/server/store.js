@@ -189,6 +189,7 @@ export class Store {
         const temporary=await this.temporaryWorkspaces.removeSession(id,{control,keepRetained:keepRetained&&!retryable.length});
         result.freedBytes+=temporary.freedBytes;result.deletedFiles+=temporary.deletedFiles;
         result.retained.push(...temporary.retained);
+        retryable.push(...temporary.waiting);
       }
       const remaining=[...new Map(result.retained.map(entry=>[entry.path,entry])).values()];
       if (retryable.length || (remaining.length && !keepRetained)) {

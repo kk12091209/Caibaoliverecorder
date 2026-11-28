@@ -68,7 +68,7 @@ test('按素材清理只处理自己的已退出工作区，活跃、待保存�
   assert.equal(await manager.finish(unknown), false);
   const first = await manager.removeSession('unknown-session');
   assert.deepEqual(first.retained.map(entry => entry.path).sort(), [untouched,generatedNameButDirectory].sort());
-  assert.equal(first.deletedFiles, 1);
+  assert.equal(first.deletedFiles, 0); // finish already removed the known file
   await missing(generated);
 
   const finished = await manager.removeSession('unknown-session', { keepRetained: true });

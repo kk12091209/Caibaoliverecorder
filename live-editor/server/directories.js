@@ -44,6 +44,9 @@ export async function openDirectory(store, input) {
   const directory=directoryToOpen(store,input);
   if(input.recoveryJobId){const stat=await fs.lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink()||path.resolve(await fs.realpath(directory))!==path.resolve(directory))throw new Error('暂存目录路径发生变化，已停止打开。');}
   else await fs.mkdir(directory, { recursive: true });
+  return openExistingDirectory(directory);
+}
+export async function openExistingDirectory(directory) {
   if (!['win32','darwin'].includes(process.platform)) throw new Error('请在文件管理器中打开显示的保存路径。');
   await new Promise((resolve, reject) => {
     const child = spawn(process.platform==='darwin'?'/usr/bin/open':'explorer.exe', process.platform==='darwin'?['-a','Finder',directory]:[directory], { windowsHide: false, detached: true, stdio: 'ignore' });

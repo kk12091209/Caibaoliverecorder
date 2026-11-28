@@ -1,6 +1,7 @@
 import { isWorkbenchTheme, WORKBENCH_THEME_SETTING } from '../shared/workbench-theme.js';
 import { json, body } from './http-response.js';
-import { writableDirectory, openDirectory } from './directories.js';
+import { writableDirectory, openDirectory, openExistingDirectory } from './directories.js';
+import { reviewStorageCleanup, reconcileTemporaryReceipts } from './storage-cleanup.js';
 import { chatRate, validateChatRate, CHAT_RATE_SETTING } from './chat-rules.js';
 import { GIFT_SETTING, validateGiftStyle } from '../shared/gifts.js';
 import { savedDanmakuStyle, validateDanmakuStyle, DANMAKU_STYLE_SETTING } from '../shared/danmaku-style.js';
@@ -64,6 +65,25 @@ export async function handleSettingsRoutes({req,res,p},{store,media,stylePreview
       if(changed)for(const {session} of store.all('SELECT session FROM preparation_jobs'))await preparation.invalidate(session);
       return json(res,{ok:true,...settingsSnapshot()});
     }finally{media.fonts.changing=false;}
+  }
+  if(p==='/api/storage/cleanup'&&req.method==='GET')return json(res,await reviewStorageCleanup(store,media.temporaryWorkspaces));
+  if(p==='/api/storage/cleanup/review'&&req.method==='POST'){
+    await reconcileTemporaryReceipts(store,media.temporaryWorkspaces);
+    return json(res,await reviewStorageCleanup(store,media.temporaryWorkspaces));
+  }
+  if(p==='/api/storage/cleanup/retry'&&req.method==='POST'){
+    await media.cleanupStaleTemporary();
+    await reconcileTemporaryReceipts(store,media.temporaryWorkspaces);
+    return json(res,await reviewStorageCleanup(store,media.temporaryWorkspaces));
+  }
+  if(p==='/api/storage/cleanup/remove'&&req.method==='POST'){
+    const temporary=media.temporaryWorkspaces,result=await temporary.removeReviewed(await body(req,4096));
+    await reconcileTemporaryReceipts(store,temporary);
+    return json(res,result);
+  }
+  if(p==='/api/storage/cleanup/open'&&req.method==='POST'){
+    const {directory}=await body(req,4096);
+    return json(res,{path:await openExistingDirectory(media.temporaryWorkspaces.directoryForReview(directory))});
   }
   if(p==='/api/folders/open'&&req.method==='POST')return json(res,{path:await openDirectory(store,await body(req))});
   return false;
