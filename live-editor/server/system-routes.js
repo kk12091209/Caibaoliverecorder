@@ -19,10 +19,10 @@ export async function handleSystemRoutes({req,res,url,p},{updates,credentials,re
     const input=await body(req), result=await updates.setBetaEnabled(input?.betaEnabled);
     void recorder.policy?.check({force:true});return json(res,result);
   }
+  if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
   if(p==='/api/recording-policy/check'&&req.method==='POST'){
     await body(req);return json(res,await recorder.policy?.check({force:true})??{});
   }
-  if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
   if(p==='/api/platform-credentials'&&req.method==='GET')return json(res,credentialSnapshot());
   if((match=/^\/api\/platform-credentials\/(bilibili|douyin|xiaohongshu)\/(save|delete|verify|unlock|acknowledge)$/.exec(p))&&req.method==='POST'){
     const [,platform,action]=match,input=await body(req,65536);

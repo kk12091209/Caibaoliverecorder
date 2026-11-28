@@ -20,8 +20,8 @@ const json=value=>Response.json(value);
 
 test('升级保留监控和 Cookie，命中后只移除空闲或已结束场次，解除后可重新添加', async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'recorder-policy-test-'));
-  let store=new Store(root),credentials;
-  t.after(async()=>{await credentials?.close();store.close();await fs.rm(root,{recursive:true,force:true});});
+  let store=new Store(root),credentials,policy;
+  t.after(async()=>{await policy?.close();await credentials?.close();store.close();await fs.rm(root,{recursive:true,force:true});});
   const settings=[{roomId:42,name:'空闲',enabled:true,autoRecord:true},{roomId:43,name:'在录',enabled:true,autoRecord:true},{roomId:44,name:'原配置',enabled:false,autoRecord:false}];
   store.setting('bilibili-rooms',settings);
   const options={protection:testProtection()};
@@ -33,12 +33,15 @@ test('升级保留监控和 Cookie，命中后只移除空闲或已结束场次�
   credentials=await new PlatformCredentials(root,{...options,store}).initialize();
   const original=path.join(root,'original-fixture.flv'), exported=path.join(root,'export-fixture.mp4');
   await Promise.all([fs.writeFile(original,'test original'),fs.writeFile(exported,'test export')]);
-  let manifest=envelope(1,[]), now=Date.parse('2026-11-28T00:00:00Z');
+  const fourHours=4*3600*1000;
+  let manifest=envelope(1,[]), now=new Date(2026,10,28,9).getTime();
   const requests=[];
-  const policy=new RecordingPolicy(store,{channel:()=> 'beta',publicKey,now:()=>now,
+  policy=new RecordingPolicy(store,{channel:()=> 'beta',publicKey,now:()=>now,
     fetcher:async(url,{headers})=>{requests.push({url,headers});return Response.json(manifest,{headers:{etag:'"policy"'}});}});
   await policy.restore();
+  policy.start();
   await policy.check();
+  assert.equal(requests.length,1);
   assert.equal(credentials.get('bilibili'),cookie);
   assert.deepEqual(store.setting('bilibili-rooms'),settings);
   let rooms=settings.map((room,index)=>({...room,uid:900+index,recording:room.roomId===43,streaming:room.roomId===43,autoRecordForThisSession:room.enabled}));
@@ -57,7 +60,7 @@ test('升级保留监控和 Cookie，命中后只移除空闲或已结束场次�
   recorder.online=true;
   await recorder.poll();
   assert.equal(calls.some(([,method])=>method==='DELETE'),false);
-  manifest=envelope(2,[ban('900'),ban('901')]);now+=4*3600*1000;
+  manifest=envelope(2,[ban('900'),ban('901')]);now+=fourHours;
   await policy.check();await recorder.poll();
   assert.equal(requests.at(-1).headers['If-None-Match'],'"policy"');
   assert.deepEqual(recorder.rooms.map(room=>room.roomId),[43,44]);
@@ -74,7 +77,13 @@ test('升级保留监控和 Cookie，命中后只移除空闲或已结束场次�
   assert.equal(await fs.readFile(exported,'utf8'),'test export');
   assert.equal(credentials.get('bilibili'),cookie);
   manifest=envelope(3,[]);
-  await policy.check({force:true});await recorder.addRoom({url:'https://live.bilibili.com/42'});
+  now+=fourHours-1;
+  await policy.check();
+  assert.equal(requests.length,2);
+  assert.equal(policy.blocked('bilibili','900'),true);
+  now++;
+  await policy.check();await recorder.addRoom({url:'https://live.bilibili.com/42'});
+  assert.equal(requests.length,3);
   assert.equal(recorder.rooms.find(room=>room.roomId===42)?.uid,900);
 });
 

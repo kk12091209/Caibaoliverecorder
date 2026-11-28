@@ -749,13 +749,14 @@ async function refreshDetail(force=false){
 }
 async function refresh(){await stateTransport.refresh();await refreshDetail(true);}
 const syncingRecordingPolicy=ref(false);
+const recordingPolicyFeedback=ref(null);
 async function syncRecordingPolicy(){
   syncingRecordingPolicy.value=true;
+  recordingPolicyFeedback.value=null;
   try{
     const result=await api('recording-policy/check',{});
-    tell(result.error||ui.workbench.已同步录制规则,result.error?'error':'success');
-    await stateTransport.refresh();
-  }catch(error){tell(error.message);}
+    recordingPolicyFeedback.value={text:result.error||ui.workbench.已同步录制规则,error:!!result.error};
+  }catch(error){recordingPolicyFeedback.value={text:error.message,error:true};}
   finally{syncingRecordingPolicy.value=false;}
 }
 async function choose(id){
@@ -900,7 +901,6 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
         <section class="room-section" :aria-label="ui.workbench.监控主播"><h2><Radio :size="17"/>{{ ui.workbench.监控主播 }}</h2>
           <form class="room-form" @submit.prevent="addRoom"><input v-model="roomUrl" :aria-label="ui.workbench.主播直播间或抖音名片分享内容" :placeholder="ui.workbench.链接或分享内容" :disabled="addingRoom"/><button class="button primary small" type="submit" :disabled="addingRoom||!state.recorder.online||!roomUrl.trim()"><LoaderCircle v-if="addingRoom" class="spin" :size="15"/><span v-else>{{ ui.workbench.添加 }}</span></button></form>
           <p v-if="!state.recorder.online||!state.recorder.biliOnline&&state.recorder.error" class="room-offline" role="status">{{ state.recorder.error || ui.workbench.正在连接录制服务 }}</p>
-          <button v-if="state.recorder.policy?.channel==='beta'" class="button small subtle" type="button" :disabled="syncingRecordingPolicy" @click="syncRecordingPolicy">{{ ui.workbench.同步录制规则 }}</button>
           <p v-if="state.recorder.policy?.notice" class="room-offline" role="status">{{ state.recorder.policy.notice }}</p>
           <MonitoredAnchors
             :anchors="state.anchors||[]"
@@ -1217,6 +1217,8 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
           </SettingsGroup>
           <SettingsGroup name="general" :title="ui.workbench.设置常规" v-model:open="expandedSettings.general">
             <fieldset v-if="isDesktop" class="export-versions" :aria-label="ui.workbench.关闭窗口时"><legend>{{ ui.workbench.关闭窗口时 }}</legend><label v-for="choice in [{value:'ask',label:ui.workbench.每次询问},{value:'exit',label:ui.workbench.退出},{value:'background',label:ui.workbench.后台运行}]" :key="choice.value" class="checkbox"><input type="radio" name="close-action" :value="choice.value" :checked="(closeActionDraft??state.closeAction??'ask')===choice.value" :disabled="closeActionBusy||modalBusy" @change="setCloseAction(choice.value)"/>{{ choice.label }}</label><p v-if="closeActionError" class="inline-warning" role="alert">{{ closeActionError }}</p></fieldset>
+            <button v-if="state.recorder.policy" class="button" type="button" :disabled="syncingRecordingPolicy||modalBusy" @click="syncRecordingPolicy">{{ ui.workbench.同步录制规则 }}</button>
+            <p v-if="recordingPolicyFeedback" :class="recordingPolicyFeedback.error?'inline-warning':'muted'" :role="recordingPolicyFeedback.error?'alert':'status'">{{ recordingPolicyFeedback.text }}</p>
             <PowerSettings v-if="isMacDesktop"/>
           </SettingsGroup>
           <SettingsGroup name="storage" :title="ui.workbench.设置导出与存储" v-model:open="expandedSettings.storage">
