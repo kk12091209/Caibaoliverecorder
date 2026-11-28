@@ -62,6 +62,7 @@ async function act(id,action){
       <details class="cookie-guide"><summary>{{ ui.credentials.如何获取 }} {{ platform.name }} Cookie</summary>
         <ol>
           <li>{{ ui.credentials.登录浏览器步骤 }}{{ platform.name }}。</li>
+          <li>{{ ui.credentials.登录Safari步骤(platform.name) }}</li>
           <li>{{ platform.id==='bilibili'?ui.credentials.打开B站页面步骤:platform.id==='xiaohongshu'?ui.credentials.打开小红书页面步骤:ui.credentials.打开抖音页面步骤 }}
             <div class="cookie-guide-address"><input :data-cookie-url="platform.id" :value="platform.url" type="text" readonly :aria-label="platform.name+ui.credentials.Cookie获取网址" spellcheck="false" @focus="$event.target.select()"/><button type="button" class="button" @click="copyUrl(platform)">{{ ui.credentials.复制网址 }}</button></div>
           </li>
