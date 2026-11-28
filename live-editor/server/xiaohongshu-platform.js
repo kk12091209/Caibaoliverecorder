@@ -26,6 +26,7 @@ export class XiaohongshuPlatform {
       ffmpeg: options.ffmpeg,
       ...options.xiaohongshu,
     });
+    this.core.policy = options.policy;
     if (this.core.resolver instanceof XiaohongshuResolver && !this.core.resolver.session) this.core.resolver.session = this.session;
     this.targets = new Map();
     this.nextCheck = new Map();
@@ -119,6 +120,7 @@ export class XiaohongshuPlatform {
     const signal = AbortSignal.any([this.core.shutdown.signal, AbortSignal.timeout(15000)]);
     const resolved = await this.resolver.resolve(input.url, {signal});
     return this.change(resolved.uid, async () => {
+      this.core.policy?.assertAllowed(this.id,resolved.uid);
       if ((this.changedIntent.get(resolved.uid) || 0) > version) throw Error('小红书监控操作已变化，请重新添加。');
       const previous = this.targets.get(resolved.uid);
       if (!previous && this.targets.size >= 64) throw Error('最多同时监控 64 个小红书主播。');
@@ -148,6 +150,7 @@ export class XiaohongshuPlatform {
       const target = this.targets.get(key.slice(userPrefix.length));
       if (!target) throw Error('小红书监控主播不存在。');
       if (action === 'remove' && input.confirmed !== true) throw Error('请确认移除这个监控主播。');
+      if(action==='start'||action==='auto'&&input.enabled===true)this.core.policy?.assertAllowed(this.id,target.uid);
       if (action !== 'auto') {
         target.enabled = action === 'start';
         this.save();
@@ -156,7 +159,7 @@ export class XiaohongshuPlatform {
         switch (action) {
           case 'start': await this.core.startRoom(target.roomId); break;
           case 'stop': await this.core.stopRoom(target.roomId); break;
-          case 'remove': await this.core.removeRoom(target.roomId, true); break;
+          case 'remove': if(this.core.entries.has(target.roomId))await this.core.removeRoom(target.roomId, true); break;
           case 'auto': await this.core.setAuto(target.roomId, input.enabled); break;
         }
       }
@@ -178,6 +181,7 @@ export class XiaohongshuPlatform {
   async attach(target, metadata, previousRoom = target.roomId) {
     this.core.assertOpen();
     if (metadata.ownerId !== target.uid) throw Error('小红书主页与直播间的主播身份不一致。');
+    this.core.policy?.assertAllowed(this.id,target.uid);
     target.roomId = metadata.roomId;
     this.targets.set(target.uid, target);
     this.save();
@@ -205,7 +209,7 @@ export class XiaohongshuPlatform {
   }
 
   schedule() {
-    if (!this.core.started || this.core.closed || this.paused || this.checkTimer || !this.hasEnabledTargets) return;
+    if (!this.core.started || this.core.closed || this.paused || this.checkTimer || !this.targets.size) return;
     this.checkTimer = setTimeout(() => {
       this.checkTimer = null;
       void this.checkProfiles().finally(() => this.schedule());
@@ -215,6 +219,17 @@ export class XiaohongshuPlatform {
   checkProfiles() {
     if (this.core.closed || this.paused || !this.resolver.profileStatus) return Promise.resolve();
     if (this.checking) return this.checking;
+    const restricted = [...this.targets.values()].find(item => {
+      const room=this.core.entries.get(item.roomId);
+      return this.core.policy?.blocked(this.id,item.uid)&&!room?.recording&&!(room&&this.core.continuesBroadcast(room));
+    });
+    if(restricted){
+      this.checking=this.anchorAction(userPrefix+restricted.uid,'remove',{confirmed:true})
+        .then(()=>this.core.policy.removed(restricted.name))
+        .catch(error=>this.core.reportPollError(error))
+        .finally(()=>{this.checking=null;});
+      return this.checking;
+    }
     const now = Date.now();
     const due = item => this.nextCheck.get(item.uid) ?? 0;
     const target = [...this.targets.values()]

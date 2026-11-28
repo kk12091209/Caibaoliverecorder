@@ -32,6 +32,10 @@ export function monitoredAnchorStatus(anchor) {
   const { enabled, streaming } = anchor;
   const recording = hasRecordingOutput(anchor);
   const copy = ui.anchors;
+  if(anchor.policyPending){
+    const label=copy.本场结束后移除;
+    return {recording,label,detail:label,warning:''};
+  }
   let detail = (enabled && anchor.recordingHealth?.message) ||
     (anchor.legacy ? roomStatus(anchor) : anchor.state || '');
   const idleFollow = anchor.platform === 'douyin' && !anchor.legacy &&

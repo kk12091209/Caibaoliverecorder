@@ -6,6 +6,7 @@ import { discoverRoomNumber, numericRoomId } from './room-lookup.js';
 export class MultiPlatformRecorder {
   constructor(store, options = {}) {
     this.store = store;
+    this.policy = options.policy;
     this.bilibili = new BilibiliPlatform(store, options);
     this.douyin = new DouyinPlatform(store, options);
     this.xiaohongshu = new XiaohongshuPlatform(store, options);
@@ -45,10 +46,12 @@ export class MultiPlatformRecorder {
       douyinOnline: this.douyin.online,
       xiaohongshuOnline: this.xiaohongshu.online,
       error: this.bilibili.error,
+      policy: this.policy?.snapshot(),
     };
   }
 
   start() {
+    this.policy?.start();
     this.douyin.start();
     this.xiaohongshu.start();
     return this.bilibili.start();
@@ -166,6 +169,6 @@ export class MultiPlatformRecorder {
 
   async close() {
     this.bilibili.close();
-    await Promise.all([this.douyin.close(),this.xiaohongshu.close()]);
+    await Promise.all([this.policy?.close(),this.douyin.close(),this.xiaohongshu.close()]);
   }
 }

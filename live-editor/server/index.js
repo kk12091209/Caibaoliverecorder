@@ -30,6 +30,7 @@ import { SessionDeletion } from './session-deletion.js';
 import { WaveformService } from './waveform.js';
 import { DensityService } from './density.js';
 import { MultiPlatformRecorder } from './multi-platform-recorder.js';
+import { RecordingPolicy } from './recording-policy.js';
 import { serveBilibiliHls } from './bilibili-hls-bridge.js';
 import { resolveRuntimeTool, resolveProjectRoot } from './runtime-paths.js';
 import { ServiceRuntime } from './service-runtime.js';
@@ -80,7 +81,11 @@ async function createManagedApp(options,runtime) {
   store.giftIcons=new GiftIcons(store,{ffmpeg});
   const waveform=new WaveformService(store,media),density=new DensityService(store),stylePreview=new DanmakuStylePreview(media);
   store.density=density;
-  const recorder=new MultiPlatformRecorder(store,{credentials,executable,ffmpeg,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,xiaohongshu:options.xiaohongshu,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver});
+  const policy=!options.noRecorder||options.recordingPolicyOptions ? new RecordingPolicy(store,{
+    channel:()=>store.setting('update-beta-enabled')===true?'beta':'stable', ...options.recordingPolicyOptions,
+  }) : undefined;
+  if(policy)await policy.restore();
+  const recorder=new MultiPlatformRecorder(store,{credentials,executable,ffmpeg,port:Number(options.recorderPort??process.env.RECORDER_PORT??0),editorPort:port,douyin:options.douyin,xiaohongshu:options.xiaohongshu,douyinFollow:options.douyinFollow,bilibiliResolver:options.bilibiliResolver,policy});
   const lotteries=new LotteryRecorder(store,options.lotteryOptions);
   const cookieValidation=new PlatformCookieValidation(credentials,recorder.platforms,{diagnostics});
   const credentialSnapshot=()=>({...credentials.snapshot(),checks:Object.fromEntries(COOKIE_PLATFORMS.map(platform=>[platform,cookieValidation.status(platform)])),bilibiliCore:{...recorder.bilibili.credentialStatus}});

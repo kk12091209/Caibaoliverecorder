@@ -32,6 +32,9 @@ execFileSync(
     'LICENSE',
     'README.md',
     'docs',
+    '-C',
+    '../live-editor/shared',
+    'recording-policy.js',
   ],
   { cwd: root, stdio: 'inherit', env: { ...process.env, COPYFILE_DISABLE: '1' } },
 )

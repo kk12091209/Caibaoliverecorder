@@ -46,6 +46,19 @@ DOWNLOADER_BUILD=<build-id> docker compose -f compose.downloader.yaml up -d --no
 
 ## 浏览器缓存与私有数据
 
+录包机规则管理页使用 `/admin/recorder-policy`。可从
+`deploy/recording-policy.caddy.example` 配置 Caddy 的专用路由，与
+`maintainer.auth` 一并放到 `/srv/caibao/recorder-policy/`。维护者密码在
+`maintainer.auth` 中只保存 Caddy bcrypt 哈希。管理服务通过内部 Docker 网络
+监听 8795，避免将管理端口发布到宿主机。维护者凭据由 Caddy 校验。
+
+使用 Node 22.18 或以上版本运行 `server/recording-policy.mjs`。为该服务单独挂载
+`CAIBO_POLICY_KEY_FILE` 指向的名单签名私钥，和
+`CAIBO_POLICY_DIRECTORY` 指向的可写名单目录。Caddy 以只读方式从
+`/srv/caibao/recorder-policy/public/` 提供两份签名清单。
+`CAIBO_POLICY_CHANNEL=beta` 时，页面只允许修改测试名单。缺少清单文件的
+通道从已签名的空名单开始。回退某次名单修改时，通过页面发布新的版本号。
+
 保留下载 Worker 的 URL 和旧版兼容行为；修改 Worker 协议时同时验证已有缓存的用户。保留 Caddy 下载授权、流式刷新、Range 和独立 catalog 路由，不能用简单的全站静态替换覆盖它们。
 
 已移除的快递助手仍返回 410。私有数据目录的访问拦截与打包排除继续保留，但不重新引入该业务、测试密钥或历史数据。

@@ -24,6 +24,7 @@ namespace BililiveRecorder.Core
 
         bool Recording { get; }
         bool RecordingHasOutput { get; }
+        bool RecordingPolicyContinuation { get; }
         bool Streaming { get; }
         bool DanmakuConnected { get; }
         bool AutoRecordForThisSession { get; }

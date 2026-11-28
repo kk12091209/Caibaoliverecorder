@@ -15,7 +15,13 @@ export async function handleSystemRoutes({req,res,url,p},{updates,credentials,re
     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||!('key' in input))throw new Error('版本提醒设置无效。');
     return json(res,updates.ignoreVersion(input.key));
   }
-  if(p==='/api/updates/channel'&&req.method==='POST'){const input=await body(req);return json(res,await updates.setBetaEnabled(input?.betaEnabled));}
+  if(p==='/api/updates/channel'&&req.method==='POST'){
+    const input=await body(req), result=await updates.setBetaEnabled(input?.betaEnabled);
+    void recorder.policy?.check({force:true});return json(res,result);
+  }
+  if(p==='/api/recording-policy/check'&&req.method==='POST'){
+    await body(req);return json(res,await recorder.policy?.check({force:true})??{});
+  }
   if(p==='/api/updates/settings'&&req.method==='POST'){const input=await body(req);return json(res,updates.setEnabled(input.enabled));}
   if(p==='/api/platform-credentials'&&req.method==='GET')return json(res,credentialSnapshot());
   if((match=/^\/api\/platform-credentials\/(bilibili|douyin|xiaohongshu)\/(save|delete|verify|unlock|acknowledge)$/.exec(p))&&req.method==='POST'){

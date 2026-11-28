@@ -13,10 +13,11 @@ export class DouyinUserFollow{
     for(const saved of Array.isArray(savedUsers)?savedUsers:[]){const uid=decimal(saved?.uid);if(!uid||this.targets.size>=64)continue;this.targets.set(uid,{uid,name:String(saved.name||'抖音用户').slice(0,100),secUid:String(saved.secUid||''),profile:String(saved.profile||''),ownWebRid:decimal(saved.ownWebRid),enabled:saved.enabled===true,generation:0,nextAt:0,state:saved.enabled?'监控中，等待开播或连麦':'已停止',failures:0});}
     recorder.followCaptured=room=>{for(const target of this.targets.values())if(target.active?.webRid===room.webRid)this.attachMaterial(target);};
   }
-  get snapshot(){return [...this.targets.values()].map(target=>({uid:target.uid,name:target.name,profile:target.profile,ownWebRid:target.ownWebRid||'',enabled:target.enabled,streaming:target.enabled && target.streaming === true,state:this.recorder.entries.get(target.active?.webRid)?.recoveryReason||target.state,kind:target.active?.kind||'',webRid:target.active?.webRid||'',host:target.active?.host||'',recording:!!target.active&&!!this.recorder.entries.get(target.active.webRid)?.recording,error:this.recorder.entries.get(target.active?.webRid)?.error||'',chatError:this.recorder.entries.get(target.active?.webRid)?.chatError||'',history:this.store.all('SELECT * FROM douyin_follow_intervals WHERE uid=? ORDER BY discovered DESC LIMIT 10',target.uid).map(row=>({...row,materials:this.store.all('SELECT session FROM douyin_follow_materials WHERE interval=?',row.id).map(item=>item.session)}))}));}
+  get snapshot(){return [...this.targets.values()].map(target=>({uid:target.uid,name:target.name,profile:target.profile,ownWebRid:target.ownWebRid||'',enabled:target.enabled,streaming:target.enabled && target.streaming === true,state:this.recorder.entries.get(target.active?.webRid)?.recoveryReason||target.state,kind:target.active?.kind||'',webRid:target.active?.webRid||'',host:target.active?.host||'',recording:!!target.active&&!!this.recorder.entries.get(target.active.webRid)?.recording,policyPending:!!this.recorder.policy?.blocked('douyin',target.uid)&&this.continuesBroadcast(target),error:this.recorder.entries.get(target.active?.webRid)?.error||'',chatError:this.recorder.entries.get(target.active?.webRid)?.chatError||'',history:this.store.all('SELECT * FROM douyin_follow_intervals WHERE uid=? ORDER BY discovered DESC LIMIT 10',target.uid).map(row=>({...row,materials:this.store.all('SELECT session FROM douyin_follow_materials WHERE interval=?',row.id).map(item=>item.session)}))}));}
   save(){this.store.setting('douyin-follow-users',[...this.targets.values()].map(({uid,secUid,name,profile,ownWebRid,enabled})=>({uid,secUid,name,profile,ownWebRid,enabled})));}
   register(identity,{enabled=false}={}){
     if(this.closed)throw Error('录制服务已关闭。');if(!decimal(identity?.uid))throw Error('主播身份无效。');
+    this.recorder.policy?.assertAllowed('douyin',identity.uid);
     let target=this.targets.get(identity.uid);
     if(!target){if(this.targets.size>=64)throw Error('最多同时监控64个抖音主播。');target={...identity,enabled,generation:0,nextAt:0,state:enabled?'监控中，等待开播或连麦':'已停止',failures:0};this.targets.set(identity.uid,target);}
     else {for(const key of ['name','secUid','profile','ownWebRid'])if(identity[key])target[key]=identity[key];}
@@ -37,11 +38,22 @@ export class DouyinUserFollow{
   schedule(){if(this.closed||this.paused||!this.started||this.timer)return;this.timer=setTimeout(async()=>{this.timer=null;try{await this.poll();}catch{this.store.diagnostics?.record('连麦跟录','监控循环暂时失败，将继续重试。',{level:'警告'});}finally{this.schedule();}},1000);this.timer.unref?.();}
   async enable(uid,enabled){
     const target=this.targets.get(uid);if(!target||this.closed)throw Error('跟随用户不存在。');if(typeof enabled!=='boolean')throw Error('请明确选择是否开启监控。');
+    if(enabled)this.recorder.policy?.assertAllowed('douyin',uid);
     target.enabled=enabled;target.streaming=false;target.generation++;target.abort?.abort();target.nextAt=0;target.failures=0;target.exitSince=null;target.exitCount=0;this.save();
     if(!enabled)await this.finish(target,'用户停止');target.state=enabled?'监控中，等待开播或连麦':'已停止';
     if(enabled)void this.poll().catch(()=>{});
   }
   async remove(uid,confirmed){if(confirmed!==true)throw Error('请确认移除跟随用户。');await this.enable(uid,false);this.targets.delete(uid);this.save();}
+  continuesBroadcast(target){
+    const room=this.recorder.entries.get(target.active?.webRid);
+    return !!room&&room.followers.get(target.uid)===target.active.roomId&&
+      (room.recording||this.recorder.continuesBroadcast(room));
+  }
+  async removeRestricted(target){
+    if(!this.recorder.policy?.blocked('douyin',target.uid)||this.targets.get(target.uid)!==target)return;
+    await this.remove(target.uid,true);
+    this.recorder.policy.removed(target.name);
+  }
   attachMaterial(target){
     if(!target.active)return;const room=this.recorder.entries.get(target.active.webRid);
     if(room?.session&&room.actualRoom===target.active.roomId){this.store.run('INSERT OR IGNORE INTO douyin_follow_materials(interval,session) VALUES(?,?)',target.active.id,room.session);if(room.recording)this.store.run('UPDATE douyin_follow_intervals SET started=COALESCE(started,?) WHERE id=?',this.now(),target.active.id);}
@@ -63,6 +75,10 @@ export class DouyinUserFollow{
         (ownOffline.roomId===''||ownOffline.roomId===active.roomId);
       if(result.state==='guest-confirmed'||result.state==='self-live'&&result.metadata){
         const m=result.metadata,kind=result.state==='self-live'?'self':'guest';if(!decimal(m?.webRid)||!decimal(m?.roomId)||!m.streaming||(m.ownerId===target.uid)!==(kind==='self'))throw Error('invalid verified room');
+        if(this.recorder.policy?.blocked('douyin',target.uid)&&
+          (active?.webRid!==m.webRid||active.roomId!==m.roomId||!this.continuesBroadcast(target))){
+          await this.removeRestricted(target);return;
+        }
         target.streaming=true;
         if(kind==='self'&&(target.ownWebRid!==m.webRid||target.name!==m.name)){target.ownWebRid=m.webRid;target.name=m.name;this.save();}
         target.lastVerified=this.now();target.exitCount=0;target.exitSince=null;
@@ -111,7 +127,11 @@ export class DouyinUserFollow{
   }
   poll(force=false){
     if(this.closed||this.paused||!this.started)return Promise.resolve();if(this.polling)return this.polling;
-    this.polling=(async()=>{const targets=[...this.targets.values()].filter(target=>target.enabled&&(force||this.now()>=target.nextAt));let cursor=0;
+    this.polling=(async()=>{
+      if(this.recorder.policy?.hasRules('douyin')){
+        for(const target of this.targets.values())if(!this.continuesBroadcast(target))await this.removeRestricted(target);
+      }
+      const targets=[...this.targets.values()].filter(target=>target.enabled&&(force||this.now()>=target.nextAt));let cursor=0;
       const work=async()=>{while(cursor<targets.length&&!this.closed&&!this.paused)await this.check(targets[cursor++]);};await Promise.all([work(),work()]);
     })().finally(()=>this.polling=null);return this.polling;
   }

@@ -33,7 +33,7 @@ export class BilibiliRoomResolver {
     if(result.code!==0||!Number.isInteger(info?.room_id)||info.room_id<=0||info.room_id>2147483647||!(info.uid>0))throw new Error('B 站暂时无法查询，请稍后重试。');
     let name='';
     try{const anchor=await this.query('live_user/v1/UserInfo/get_anchor_in_room?roomid='+info.room_id,signal);if(anchor.code===0&&typeof anchor.data?.info?.uname==='string')name=anchor.data.info.uname;}catch{ /* The confirmed room remains selectable when its nickname lookup fails. */ }
-    return {roomId:info.room_id,name:name||`直播间 ${info.room_id}`,title:String(info.title||''),streaming:info.live_status===1};
+    return {roomId:info.room_id,uid:String(info.uid),name:name||`直播间 ${info.room_id}`,title:String(info.title||''),streaming:info.live_status===1};
   }
 }
 

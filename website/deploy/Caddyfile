@@ -95,6 +95,7 @@ caibao.media {
             }
         }
     }
+    import /srv/caibao/recorder-policy/*.caddy
     handle /releases/* {
         uri strip_prefix /releases
         root * /srv/caibao/catalog

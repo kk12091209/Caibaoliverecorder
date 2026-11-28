@@ -748,6 +748,16 @@ async function refreshDetail(force=false){
   }
 }
 async function refresh(){await stateTransport.refresh();await refreshDetail(true);}
+const syncingRecordingPolicy=ref(false);
+async function syncRecordingPolicy(){
+  syncingRecordingPolicy.value=true;
+  try{
+    const result=await api('recording-policy/check',{});
+    tell(result.error||ui.workbench.已同步录制规则,result.error?'error':'success');
+    await stateTransport.refresh();
+  }catch(error){tell(error.message);}
+  finally{syncingRecordingPolicy.value=false;}
+}
 async function choose(id){
   if(selected.value===id){closeContext();resetSelection();return;}
   selectionGeneration++;senderFilter.value=null;detailError.value='';resetJobHistory();
@@ -890,6 +900,8 @@ onBeforeUnmount(()=>{disposePreview();disposing=true;clearTimeout(windowSignalTi
         <section class="room-section" :aria-label="ui.workbench.监控主播"><h2><Radio :size="17"/>{{ ui.workbench.监控主播 }}</h2>
           <form class="room-form" @submit.prevent="addRoom"><input v-model="roomUrl" :aria-label="ui.workbench.主播直播间或抖音名片分享内容" :placeholder="ui.workbench.链接或分享内容" :disabled="addingRoom"/><button class="button primary small" type="submit" :disabled="addingRoom||!state.recorder.online||!roomUrl.trim()"><LoaderCircle v-if="addingRoom" class="spin" :size="15"/><span v-else>{{ ui.workbench.添加 }}</span></button></form>
           <p v-if="!state.recorder.online||!state.recorder.biliOnline&&state.recorder.error" class="room-offline" role="status">{{ state.recorder.error || ui.workbench.正在连接录制服务 }}</p>
+          <button v-if="state.recorder.policy?.channel==='beta'" class="button small subtle" type="button" :disabled="syncingRecordingPolicy" @click="syncRecordingPolicy">{{ ui.workbench.同步录制规则 }}</button>
+          <p v-if="state.recorder.policy?.notice" class="room-offline" role="status">{{ state.recorder.policy.notice }}</p>
           <MonitoredAnchors
             :anchors="state.anchors||[]"
             :recorder="state.recorder"

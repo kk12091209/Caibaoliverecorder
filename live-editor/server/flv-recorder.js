@@ -52,8 +52,14 @@ export class FlvRecorder {
     const session = room?.session && this.store.session(room.session);
     return session?.status === 'recording' ? session : null;
   }
-  wanted(room){return room.enabled||[...room.followers.values()].some(roomId=>roomId===room.metadata?.roomId);}
-  get rooms(){return [...this.entries.values()].map(room=>({platform:this.platform,roomId:this.platform+':'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,followOnly:room.followOnly===true,streaming:room.streaming,recording:room.recording,recordingEnabled:this.wanted(room),followUsers:room.followers.size,autoRecord:room.autoRecord,autoRecordForThisSession:this.wanted(room),error:room.error,chatError:this.chat.snapshot?.(room.sourceId)?.error||room.chatError,chatStatus:room.sourceId?(this.chat.snapshot?.(room.sourceId)??null):null,recordingHealth:room.recoveryReason?{state:'recovering',message:room.recoveryReason}:null,recordingProgress:room.progress?{...room.progress}:null}));}
+  wanted(room){return room.enabled||[...room.followers].some(([uid,roomId])=>roomId===room.metadata?.roomId&&
+    (!this.policy?.blocked(this.platform,uid)||this.continuesBroadcast(room)));}
+  continuesBroadcast(room,metadata=room.metadata){
+    return !!room.session&&metadata?.streaming===true&&room.actualRoom===metadata.roomId;
+  }
+  policyPending(room){return this.policy?.blocked(this.platform,room.metadata?.ownerId)&&
+    (room.recording||this.continuesBroadcast(room));}
+  get rooms(){return [...this.entries.values()].map(room=>({platform:this.platform,roomId:this.platform+':'+room.webRid,webRid:room.webRid,name:room.name,title:room.title,followOnly:room.followOnly===true,streaming:room.streaming,recording:room.recording,recordingEnabled:this.wanted(room),followUsers:room.followers.size,autoRecord:room.autoRecord,autoRecordForThisSession:this.wanted(room),error:room.error,chatError:this.chat.snapshot?.(room.sourceId)?.error||room.chatError,chatStatus:room.sourceId?(this.chat.snapshot?.(room.sourceId)??null):null,recordingHealth:room.recoveryReason?{state:'recovering',message:room.recoveryReason}:null,recordingProgress:room.progress?{...room.progress}:null,policyPending:!!this.policyPending(room)}));}
   async applyCredentials(){
     // Reauthenticate chat only; never interrupt the video writer on a login edit.
     const version=++this.credentialVersion;
@@ -82,6 +88,8 @@ export class FlvRecorder {
   save(){this.store.setting(this.platform+'-rooms',[...this.entries.values()].filter(room=>!room.followOnly).map(room=>({webRid:room.webRid,name:room.name,title:room.title,autoRecord:room.autoRecord,enabled:room.enabled})));}
   async acquireFollow(uid,metadata,isCurrent=()=>true){
     this.assertOpen();let room=this.entries.get(metadata.webRid);
+    this.policy?.assertAllowed(this.platform,uid);
+    if(!room || !this.continuesBroadcast(room,metadata))this.policy?.assertAllowed(this.platform,metadata.ownerId);
     if(!room){if(this.entries.size>=64)throw Error(this.label+'监控房间已达上限。');room=this.entry({...metadata,autoRecord:false,enabled:false});room.followOnly=true;this.entries.set(room.webRid,room);}
     if(room.actualRoom&&room.actualRoom!==metadata.roomId)await this.finish(room);
     this.assertOpen();if(!isCurrent())throw Error('跟随任务已变化。');room.metadata=metadata;room.name=metadata.name;room.title=metadata.title;room.streaming=metadata.streaming;room.followers.set(uid,metadata.roomId);room.nextPoll=this.now()+15000;this.maybeRecord(room);
@@ -104,10 +112,11 @@ export class FlvRecorder {
   assertOpen(){if(this.closed)throw new Error('录制服务已关闭。');}
   room(key){const room=this.entries.get(String(key).replace(this.platform+':',''));if(!room)throw new Error('直播间不存在。');return room;}
   async add(descriptor,autoRecord=true){
-    this.assertOpen();const existing=this.entries.get(descriptor.webRid);if(existing){if(existing.followOnly){existing.followOnly=false;existing.autoRecord=autoRecord;existing.enabled=autoRecord;this.save();this.maybeRecord(existing);}return this.rooms.find(room=>room.webRid===descriptor.webRid);}
+    this.assertOpen();const existing=this.entries.get(descriptor.webRid);if(existing){this.policy?.assertAllowed(this.platform,descriptor.metadata?.ownerId??existing.metadata?.ownerId);if(existing.followOnly){existing.followOnly=false;existing.autoRecord=autoRecord;existing.enabled=autoRecord;this.save();this.maybeRecord(existing);}return this.rooms.find(room=>room.webRid===descriptor.webRid);}
     if(this.entries.size>=64)throw new Error(this.label+'监控房间已达上限。');
     const metadata=descriptor.metadata||await this.resolver.room(descriptor.webRid,{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(15000)])});this.assertOpen();
     this.validateMetadata?.({webRid:descriptor.webRid},metadata);
+    this.policy?.assertAllowed(this.platform,metadata.ownerId);
     // Another concurrent request may have added this same room.
     if(!this.entries.has(descriptor.webRid)){if(this.entries.size>=64)throw new Error(this.label+'监控房间已达上限。');const room=this.entry({...metadata,autoRecord,enabled:autoRecord});room.metadata=metadata;room.streaming=metadata.streaming;room.nextPoll=this.now()+15000;this.entries.set(room.webRid,room);this.save();this.maybeRecord(room);}
     return this.rooms.find(room=>room.webRid===descriptor.webRid);
@@ -126,10 +135,16 @@ export class FlvRecorder {
           if(room.sourceId)this.chat.update?.(room.sourceId,{cookie:metadata.cookie,userUniqueId:metadata.userUniqueId},{reauthenticate:room.credentialsPending===true});
           room.credentialsPending=false;
           room.nextPoll=this.now()+(metadata.streaming?15000:30000);
-          await this.onRoomMetadata?.(room,metadata);
-          if(this.closed||version!==this.credentialVersion)continue;
           const capturingRoom = room.actualRoom || room.openingRoomId;
           if(!metadata.streaming||capturingRoom&&capturingRoom!==metadata.roomId){await this.finish(room);}
+          if(this.policy?.blocked(this.platform,metadata.ownerId)){
+            if(!this.policyPending(room)&&!room.followOnly){
+              await this.removeRoom(room.webRid,true);
+              this.policy.removed(room.name);
+              continue;
+            }
+          }else await this.onRoomMetadata?.(room,metadata);
+          if(this.closed||version!==this.credentialVersion)continue;
           this.maybeRecord(room);
         }catch(error){if(!this.closed){this.store.diagnostics?.record(this.label+`开播检查 ${room.webRid}`,error,{level:'警告'});room.error=this.label+'连接失败，正在重试。';room.nextPoll=this.now()+15000;}}
       }};
@@ -138,6 +153,10 @@ export class FlvRecorder {
   }
   maybeRecord(room){
     if(this.closed||this.paused||!this.started||room.active||room.blocked||!this.wanted(room)||!room.streaming||this.now()<room.retryAt)return;
+    if(!this.continuesBroadcast(room)){
+      try{this.policy?.assertAllowed(this.platform,room.metadata?.ownerId);}
+      catch(error){room.error=error.message;return;}
+    }
     if(!room.metadata?.stream&&!room.metadata?.streams?.length){this.store.diagnostics?.record(this.label+'录制',`房间 ${room.webRid}：未提供可录制的画质或线路，继续监控`,{level:'警告'});room.error='已开播，平台暂未提供可录制的线路。';return;}
     room.active=this.capture(room).catch(error=>{this.store.diagnostics?.record(this.label+'录制',error,{level:'错误'});if(!this.closed)room.error='录像写入失败，请检查磁盘后重试。';room.blocked=true;}).finally(()=>{room.active=null;room.recording=false;room.nextPoll=0;});
   }
@@ -158,6 +177,11 @@ export class FlvRecorder {
     try{
       input=await openRecordingInput(metadata,this,signal,room.routePass);
       signal.throwIfAborted();
+      if(!this.continuesBroadcast(room,metadata)){
+        try{this.policy?.assertAllowed(this.platform,metadata.ownerId);}
+        catch(error){room.error=error.message;return;}
+        if(!this.wanted(room))return;
+      }
       room.routePass=0;room.error='';
       normalizer=input.normalizer;lastData=lastMedia=lastVideo=this.now();
       const wall=new Date(this.now()).toISOString(),directory=path.join(this.store.root,'originals',this.platform,room.webRid);
@@ -251,8 +275,8 @@ export class FlvRecorder {
       }
     }
   }
-  async startRoom(key){this.assertOpen();const room=this.room(key);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.recoveryFailures=0;room.recoveryReason='';clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
-  async setAuto(key,enabled){this.assertOpen();const room=this.room(key);room.followOnly=false;room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;if(!this.wanted(room))await this.finish(room);}this.save();await this.poll();}
+  async startRoom(key){this.assertOpen();const room=this.room(key);if(this.policy?.blocked(this.platform,room.metadata?.ownerId))this.policy.assertAllowed(this.platform,room.metadata.ownerId);room.followOnly=false;room.enabled=true;room.blocked=false;room.error='';room.recoveryFailures=0;room.recoveryReason='';clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.retryAt=0;room.nextPoll=0;this.save();await this.poll();this.maybeRecord(room);}
+  async setAuto(key,enabled){this.assertOpen();const room=this.room(key);if(enabled&&this.policy?.blocked(this.platform,room.metadata?.ownerId))this.policy.assertAllowed(this.platform,room.metadata.ownerId);room.followOnly=false;room.autoRecord=!!enabled;if(enabled){room.enabled=true;room.blocked=false;room.retryAt=0;room.nextPoll=0;}else if(!room.active){room.enabled=false;if(!this.wanted(room))await this.finish(room);}this.save();await this.poll();}
   async finish(room){
     room.routePass=0;
     clearTimeout(room.recoveryTimer);room.recoveryTimer=null;room.recoveryReason='';room.recoveryFailures=0;

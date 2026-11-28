@@ -38,6 +38,26 @@ test('FLV normalization changes timestamps only, preserving every compressed pac
  const bad=encoded();bad[24]=0x1c;assert.throws(()=>new DouyinFlv().feed(bad),/H.264/);
 });
 
+test('规则更新保留正在写入的抖音录制，下播收尾后只移除监控',async t=>{
+ const f=await fixture(t);
+ f.state.metadata.ownerId='900';
+ let restricted=false;
+ f.recorder.policy={blocked:(_platform,uid)=>restricted&&uid==='900',
+   assertAllowed(_platform,uid){if(this.blocked(_platform,uid))throw Error('限制录制');},removed(){}};
+ f.recorder.start();await f.recorder.add({webRid:'123'},true);
+ await until(()=>f.recorder.rooms[0]?.recording);
+ const session=f.store.sessions()[0],source=f.store.sources(session.id)[0];
+ restricted=true;await f.recorder.poll(true);
+ assert.equal(f.recorder.rooms[0]?.policyPending,true);
+ assert.equal(f.recorder.rooms[0]?.recording,true);
+ assert.equal(f.state.streams,1);
+ await assert.rejects(f.recorder.add({webRid:'123'},true),/限制录制/);
+ f.state.metadata.streaming=false;await f.recorder.poll(true);
+ assert.deepEqual(f.recorder.rooms,[]);
+ assert.ok((await fs.stat(source.path)).size>13);
+ assert.equal(f.store.sources(session.id)[0].closed,1);
+});
+
 test('Douyin recorder logs safe connection diagnostics and first persistence without disrupting the active video',async t=>{
  const f=await fixture(t),events=[];f.store.diagnostics={record:(...args)=>events.push(args)};
  f.recorder.start();await f.recorder.add({webRid:'123'},true);await until(()=>f.writes.length>0);

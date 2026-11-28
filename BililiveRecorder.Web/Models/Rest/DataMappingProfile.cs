@@ -16,6 +16,7 @@ namespace BililiveRecorder.Web.Models.Rest
                 .ForMember(x => x.AutoRecord, x => x.MapFrom(s => s.RoomConfig.AutoRecord))
                 .ForMember(x => x.IoStats, x => x.MapFrom(s => s.Stats))
                 .ForMember(x => x.RecordingStats, x => x.MapFrom(s => s.Stats))
+                .ForMember(x => x.RecordingPolicyOwnerId, x => x.MapFrom(s => s.Uid.ToString(System.Globalization.CultureInfo.InvariantCulture)))
                 ;
 
             this.CreateMap<RoomStats, RoomRecordingStatsDto>()

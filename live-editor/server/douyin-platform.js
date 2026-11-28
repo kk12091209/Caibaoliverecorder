@@ -14,6 +14,7 @@ export class DouyinPlatform {
     this.store = store;
     this.core = new DouyinRecorder(store, { credentials: options.credentials, ffmpeg: options.ffmpeg, ...options.douyin });
     this.following = new DouyinUserFollow(store, { recorder: this.core, ...options.douyinFollow });
+    this.core.policy = options.policy;
     this.roomTransfers = new Map();
     this.core.onRoomMetadata = (room, metadata) => this.adoptMonitoredRoom(room, metadata);
     this.core.anchorKeyForRecording = (room, metadata) => this.anchorKeyForRecording(room, metadata);

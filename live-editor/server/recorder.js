@@ -7,6 +7,8 @@ import { alive } from './service-runtime.js';
 import {BilibiliRooms,roomEnabled,defaultCoreConfig} from './bilibili-rooms.js';
 import {RecordingRecovery} from './recording-recovery.js';
 
+const confirmedOwner=room=>room?.recordingPolicyOwnerId??room?.uid;
+
 export const CHAT_ONLY_CONFIG={
   optionalRecordDanmaku:{hasValue:true,value:true},
   optionalRecordDanmakuSuperChat:{hasValue:true,value:true},
@@ -15,9 +17,10 @@ export const CHAT_ONLY_CONFIG={
 };
 
 export class Recorder {
-  constructor(store,{executable,port=17861,editorPort=17860,lifecycle={},credentials}={}) {
+  constructor(store,{executable,port=17861,editorPort=17860,lifecycle={},credentials,policy}={}) {
     this.store=store;this.executable=executable;this.port=port;this.editorPort=editorPort;
     this.credentials=credentials;this.credentialStatus={applied:false,error:''};
+    this.policy=policy;
     this.roomState=new BilibiliRooms(store);
     this.directory=path.join(store.root,'originals');this.rooms=this.roomState.snapshot();this.online=false;this.error='';this.log='';
     this.secret=store.setting('recorder-secret')||randomBytes(24).toString('hex');store.setting('recorder-secret',this.secret);
@@ -160,6 +163,7 @@ export class Recorder {
         ...process.env, BREC_SKIP_DISABLE_QUICK_EDIT:'1', BILILIVERECORDER_DISABLE_FILE_LOG:'1', BREC_EPHEMERAL_AUTH:'1',
         BREC_HLS_ENDPOINT:`http://127.0.0.1:${this.editorPort}/internal/recorder-hls`,
         BREC_HLS_TOKEN:this.webhookSecret,
+        ...(this.policy ? {CAIBO_RECORDING_POLICY_FILE:this.policy.coreFile} : {}),
       };
       const child=this.lifecycle.spawn(this.executable,['run','--http-bind',`http://127.0.0.1:${this.port}`,'--http-basic-user','editor','--http-basic-pass',this.secret,'--enable-file-browser','false',this.directory],{windowsHide:true,detached:true,stdio:['ignore','pipe','pipe'],env});
       this.store.diagnostics?.attach(child.stdout,'B站核心输出');this.store.diagnostics?.attach(child.stderr,'B站核心错误');
@@ -196,6 +200,7 @@ export class Recorder {
         await this.roomState.serial(raw.roomId,async()=>{if(this.roomState.get(raw.roomId)?.enabled===false){await this.restoreRoom(raw);repaired=true;}});
       }
       if(repaired)rooms=await this.api('room');
+      rooms=await this.applyRecordingPolicy(rooms);
       await this.recoverRecordings(rooms);
       this.assertOpen();this.rooms=this.roomState.capture(rooms,{prune:true}).map(room=>({...room,recordingHealth:this.recovery.health(room.roomId),recordingObservedAt:this.lifecycle.now()}));this.error='';
       for(const session of this.store.all("SELECT * FROM sessions WHERE room>0 AND status IN ('recording','waiting')")){
@@ -208,12 +213,29 @@ export class Recorder {
       }
     }catch(e){this.failed(e);}finally{this.pollBusy=false;}
   }
+  async applyRecordingPolicy(rooms) {
+    if (!this.policy?.hasRules('bilibili')) return rooms;
+    const kept = [];
+    for (const room of rooms) {
+      if (!this.policy.blocked('bilibili', confirmedOwner(room))) kept.push(room);
+      else if (room.recording || room.recordingPolicyContinuation) {
+        kept.push({...room, policyPending:true});
+      } else {
+        await this.removeRoom(room.roomId, true);
+        this.policy.removed(room.name || String(room.roomId));
+      }
+    }
+    return kept;
+  }
   async recoverRecordings(rooms){
     this.recovery.prune(new Set(rooms.map(room=>room.roomId)));
     for(const raw of rooms){
       if(this.closed||this.quitting)return;
       await this.roomState.serial(raw.roomId,async()=>{
         if(this.closed||this.quitting)return;
+        // The native core verifies the same broadcast before reconnecting.
+        // A forced stop here would clear its continuation permission.
+        if(raw.policyPending)return;
         const enabled=this.roomState.get(raw.roomId)?.enabled===true;
         this.recovery.observe(raw,enabled);
         if(!enabled)return;
@@ -295,19 +317,28 @@ export class Recorder {
   }
   async roomControl(id){if(!this.roomState.get(id))this.roomState.capture(await this.api('room'));this.assertOpen();const room=this.roomState.get(id);if(!room)throw new Error('直播间不存在或已移除。');return room;}
   async addRoom(input){
-    const id=await resolveRoom(input.url),automatic=input.autoRecord!==false;
+    let id=await resolveRoom(input.url);
+    const automatic=input.autoRecord!==false;
+    let identity;
+    if (this.policy?.hasRules('bilibili')) {
+      identity=await this.resolver.room(String(id),{signal:AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(10000)])});
+      id=identity?.roomId ?? id;
+    }
     const result=await this.roomState.serial(id,async()=>{
+      this.policy?.assertAllowed('bilibili', identity?.uid);
       const result=await this.api('room',{roomId:id,autoRecord:automatic});this.assertOpen();
       this.roomState.capture([result||{roomId:id,autoRecord:automatic,autoRecordForThisSession:automatic}]);
       this.roomState.set(result?.roomId||id,{autoRecord:automatic,enabled:automatic});return result;
     });await this.poll();return result;
   }
   async startRoom(id){return this.roomState.serial(id,async()=>{
+    if(this.policy?.hasRules('bilibili'))this.policy.assertAllowed('bilibili',confirmedOwner(await this.api(`room/${id}`)));
     this.recovery.forget(id);
     const room=await this.roomControl(id);this.roomState.set(id,{enabled:true});
     await this.api(`room/${id}/config`,{autoRecord:room.autoRecord});await this.api(`room/${id}/start`,{});this.assertOpen();
   });}
   async setAuto(id,enabled){return this.roomState.serial(id,async()=>{
+    if (enabled && this.policy?.hasRules('bilibili')) this.policy.assertAllowed('bilibili',confirmedOwner(await this.api(`room/${id}`)));
     if(enabled)this.recovery.forget(id);
     await this.roomControl(id);const current=this.rooms.find(room=>room.roomId===id);
     const room=this.roomState.set(id,{autoRecord:!!enabled,...(enabled?{enabled:true}:current?.recording?{}:{enabled:false})});

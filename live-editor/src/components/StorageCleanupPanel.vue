@@ -52,7 +52,7 @@ onMounted(inspect);
 </script>
 
 <template>
-  <section class="cleanup-settings cleanup-storage" :aria-label="copy.临时工作区">
+  <section v-if="snapshot?.workspaces.length" class="cleanup-settings cleanup-storage" :aria-label="copy.临时工作区">
     <strong>{{ copy.临时工作区 }}</strong>
     <p class="muted">{{ copy.历史残留说明 }}</p>
     <div class="directory-actions">
@@ -62,34 +62,35 @@ onMounted(inspect);
     <p v-if="busy" role="status">{{ copy.正在核对磁盘 }}</p>
     <p v-if="error" role="alert" class="cleanup-error">{{ error }}</p>
     <p v-if="status" role="status">{{ status }}</p>
-    <template v-if="snapshot">
-      <dl class="cleanup-storage-usage">
-        <template v-for="(entry, kind) in snapshot.usage" :key="kind">
-          <dt>{{ copy.占用分类[kind] }}</dt>
-          <dd>{{ entry.incomplete ? copy.至少(size(entry.bytes)) : size(entry.bytes) }}</dd>
-        </template>
-      </dl>
-      <p class="muted">{{ copy.本次运行已移除(size(snapshot.removedBytes)) }}</p>
-      <p v-if="!snapshot.workspaces.length">{{ copy.没有暂存残留 }}</p>
-      <details v-for="workspace in snapshot.workspaces" :key="workspace.name" class="cleanup-storage-item">
-        <summary>{{ workspace.name }} · {{ size(workspace.bytes) }} · {{ copy.状态[workspace.status] }}</summary>
-        <p><code>{{ workspace.path }}</code></p>
-        <p v-if="workspace.sessionId" class="muted">{{ copy.素材编号(workspace.sessionId) }}</p>
-        <button v-if="workspace.canOpen" type="button" class="button small" :disabled="busy" @click="open(workspace)">{{ copy.打开位置 }}</button>
-        <div v-for="file in workspace.files" :key="file.name" class="cleanup-row">
-          <div>
-            <code>{{ file.name }}</code>
-            <small>{{ size(file.bytes) }} · {{ copy.状态[file.status] }}</small>
-          </div>
-          <button v-if="file.confirmation" type="button" class="button small danger" :disabled="busy"
-            @click="selected = { workspace, file }">{{ copy.移除此文件 }}</button>
+    <dl class="cleanup-storage-usage">
+      <template v-for="(entry, kind) in snapshot.usage" :key="kind">
+        <dt>{{ copy.占用分类[kind] }}</dt>
+        <dd>{{ entry.incomplete ? copy.至少(size(entry.bytes)) : size(entry.bytes) }}</dd>
+      </template>
+    </dl>
+    <p class="muted">{{ copy.本次运行已移除(size(snapshot.removedBytes)) }}</p>
+    <details v-for="workspace in snapshot.workspaces" :key="workspace.name" class="cleanup-storage-item">
+      <summary>{{ workspace.name }} · {{ size(workspace.bytes) }} · {{ copy.状态[workspace.status] }}</summary>
+      <p><code>{{ workspace.path }}</code></p>
+      <p v-if="workspace.sessionId" class="muted">{{ copy.素材编号(workspace.sessionId) }}</p>
+      <button v-if="workspace.canOpen" type="button" class="button small" :disabled="busy" @click="open(workspace)">{{ copy.打开位置 }}</button>
+      <div v-for="file in workspace.files" :key="file.name" class="cleanup-row">
+        <div>
+          <code>{{ file.name }}</code>
+          <small>{{ size(file.bytes) }} · {{ copy.状态[file.status] }}</small>
         </div>
-        <div v-if="selected?.workspace === workspace" class="setting-info" role="group" :aria-label="copy.确认移除">
-          <p>{{ copy.确认提示(selected.file.name, size(selected.file.bytes)) }}</p>
-          <button type="button" class="button small" @click="selected = null">{{ ui.common.取消 }}</button>
-          <button type="button" class="button small danger" :disabled="busy" @click="remove">{{ copy.确认移除 }}</button>
-        </div>
-      </details>
-    </template>
+        <button v-if="file.confirmation" type="button" class="button small danger" :disabled="busy"
+          @click="selected = { workspace, file }">{{ copy.移除此文件 }}</button>
+      </div>
+      <div v-if="selected?.workspace === workspace" class="setting-info" role="group" :aria-label="copy.确认移除">
+        <p>{{ copy.确认提示(selected.file.name, size(selected.file.bytes)) }}</p>
+        <button type="button" class="button small" @click="selected = null">{{ ui.common.取消 }}</button>
+        <button type="button" class="button small danger" :disabled="busy" @click="remove">{{ copy.确认移除 }}</button>
+      </div>
+    </details>
   </section>
+  <div v-else-if="error" class="cleanup-storage directory-actions">
+    <p role="alert" class="cleanup-error">{{ error }}</p>
+    <button type="button" class="button small" @click="inspect()">{{ copy.重新检查 }}</button>
+  </div>
 </template>

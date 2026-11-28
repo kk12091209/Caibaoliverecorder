@@ -59,6 +59,9 @@ namespace BililiveRecorder.Core
         private bool nextRecordShouldUseRawMode = false;
 
         private IRecordTask? recordTask;
+        private string? liveTime;
+        private string? recordingLiveTime;
+        private string? lastRecordedLiveTime;
         private DateTimeOffset danmakuClientConnectTime;
         private int danmakuFailures;
         private DateTimeOffset danmakuRetryAfter;
@@ -123,6 +126,8 @@ namespace BililiveRecorder.Core
 
         public bool Recording => this.recordTask != null;
         public bool RecordingHasOutput => this.recordTask?.HasRecordedOutput == true;
+        public bool RecordingPolicyContinuation => this.Streaming && this.liveTime != null &&
+            this.liveTime == this.lastRecordedLiveTime;
 
         public RoomConfig RoomConfig { get; }
         public RoomStats Stats { get; } = new RoomStats();
@@ -180,6 +185,7 @@ namespace BililiveRecorder.Core
             lock (this.recordStartLock)
             {
                 this.AutoRecordForThisSession = false;
+                this.lastRecordedLiveTime = null;
 
                 if (this.recordTask == null)
                     return;
@@ -224,6 +230,11 @@ namespace BililiveRecorder.Core
                 this.Title = room.Room.Title;
                 this.AreaNameParent = room.Room.ParentAreaName;
                 this.AreaNameChild = room.Room.AreaName;
+                var liveStart = room.RawBilibiliApiJsonData?["room_info"]?["live_time"]?.ToString();
+                this.liveTime = room.Room.LiveStatus == 1 && !string.IsNullOrEmpty(liveStart) && liveStart != "0"
+                    ? liveStart : null;
+                if (this.lastRecordedLiveTime != this.liveTime)
+                    this.lastRecordedLiveTime = null;
                 this.Streaming = room.Room.LiveStatus == 1;
 
                 this.Name = room.User.BaseInfo.Name;
@@ -304,10 +315,17 @@ namespace BililiveRecorder.Core
                 {
                     try
                     {
-                        if (!skipFetchRoomInfo)
+                        if (!skipFetchRoomInfo || RecordingPolicy.FilePath != null && this.Uid <= 0)
                             await this.FetchRoomInfoAsync();
 
-                        await this.recordTask.StartAsync();
+                        if (!RecordingPolicy.Allows(this.Uid, this.RecordingPolicyContinuation))
+                        {
+                            this.recordTask = null;
+                            this.OnPropertyChanged(nameof(this.Recording));
+                            return;
+                        }
+                        this.recordingLiveTime = this.liveTime;
+                        await task.StartAsync();
                     }
                     catch (NoMatchingQnValueException)
                     {
@@ -573,6 +591,9 @@ namespace BililiveRecorder.Core
             lock (this.recordStartLock)
             {
                 id = this.recordTask?.SessionId ?? default;
+                if (this.AutoRecordForThisSession && this.Streaming && this.recordTask?.HasRecordedOutput == true &&
+                    this.recordingLiveTime != null && this.recordingLiveTime == this.liveTime)
+                    this.lastRecordedLiveTime = this.recordingLiveTime;
                 this.recordTask = null;
                 _ = Task.Run(async () =>
                 {
@@ -644,6 +665,8 @@ namespace BililiveRecorder.Core
                     break;
                 case Api.Danmaku.DanmakuMsgType.LiveEnd:
                     this.logger.Debug("推送直播结束");
+                    this.liveTime = null;
+                    this.lastRecordedLiveTime = null;
                     this.Streaming = false;
                     break;
                 case Api.Danmaku.DanmakuMsgType.RoomChange:
