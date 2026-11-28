@@ -10,9 +10,10 @@ namespace BililiveRecorder.Core.Recording
     {
         public static string? FilePath => Environment.GetEnvironmentVariable("CAIBO_RECORDING_POLICY_FILE");
 
-        public static bool Allows(long uid, bool continuesBroadcast)
+        public static bool Allows(long uid, bool continuesBroadcast) => Allows(FilePath, uid, continuesBroadcast);
+
+        internal static bool Allows(string? file, long uid, bool continuesBroadcast)
         {
-            var file = FilePath;
             if (string.IsNullOrEmpty(file))
                 return true;
 

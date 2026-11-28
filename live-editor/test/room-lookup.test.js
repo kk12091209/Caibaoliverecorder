@@ -11,7 +11,7 @@ test('numeric IDs preserve Douyin precision and normalize leading zeros without 
 
 test('Bilibili lookup resolves short room IDs and fetches anchor names without adding rooms or sending cookies',async()=>{
  const calls=[],resolver=new BilibiliRoomResolver({request:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify(url.includes('get_info')?{code:0,data:{room_id:420000,uid:123,live_status:1,title:'测试直播'}}:{code:0,data:{info:{uname:'B站主播'}}}));}});
- const room=await resolver.room('42');assert.deepEqual(room,{roomId:420000,name:'B站主播',title:'测试直播',streaming:true});assert.equal(calls.length,2);
+ const room=await resolver.room('42');assert.deepEqual(room,{roomId:420000,uid:'123',name:'B站主播',title:'测试直播',streaming:true});assert.equal(calls.length,2);
  assert.ok(calls[1].url.endsWith('roomid=420000'));for(const call of calls){assert.equal(call.options.redirect,'error');assert.equal(new Headers(call.options.headers).has('cookie'),false);}
  assert.equal(await resolver.room('57375952448'),null);assert.equal(calls.length,2);
 });
