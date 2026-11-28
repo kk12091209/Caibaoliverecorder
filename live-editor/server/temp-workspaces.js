@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 const MARKER = '.bili-temp-owner.json';
 const FORMAT = 'bili-editor-temp-v1';
 const NAME = /^bili-(probe|export|full)-[A-Za-z0-9_-]+$/;
+const recorderCompletionMarker = /^dotnet-suggest-registration-BililiveRecorder\.Cli, Version=\d+\.\d+\.\d+\.\d+, Culture=neutral, PublicKeyToken=null$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const jobIdValid = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 const retainedValid = value => value && typeof value === 'object' && !Array.isArray(value) && jobIdValid(value.jobId)&&(!Object.hasOwn(value,'ownerReleased')||typeof value.ownerReleased==='boolean');
@@ -367,6 +368,14 @@ export class TemporaryWorkspaces {
         continue;
       }
       if (!NAME.test(name)) {
+        if (name === 'system-commandline-sentinel-files') {
+          try {
+            checkDirectory(directory);
+            const entries = await fs.readdir(directory, { withFileTypes: true });
+            // System.CommandLine writes one completion registration marker per CLI build.
+            if (entries.every(file => file.isFile() && recorderCompletionMarker.test(file.name))) continue;
+          } catch { /* Leave unreadable directories visible for review. */ }
+        }
         workspaces.push({ name, path: directory, status: 'unverified', bytes: null, files: [], canOpen: validName(name) });
         continue;
       }

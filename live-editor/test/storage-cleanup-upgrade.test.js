@@ -81,6 +81,28 @@ test('r6 工作区跨更新恢复，已删除素材的已知文件可释放，�
   await fs.access(path.join(unverified,'final.mp4'));
 });
 
+test('录制核心命令补全标记计入目录用量，陌生内容仍留在待核对列表', async t => {
+  const f = await fixture(t), temporary = f.manager();
+  const directory = path.join(f.temp, 'system-commandline-sentinel-files');
+  const marker = path.join(directory, 'dotnet-suggest-registration-BililiveRecorder.Cli, Version=0.4.9.0, Culture=neutral, PublicKeyToken=null');
+  const contents = 'dotnet-suggest output';
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(marker, contents);
+  await temporary.cleanupStale();
+  const snapshot = await reviewStorageCleanup(f.store, temporary);
+  assert.equal(snapshot.usage.temporary.bytes, Buffer.byteLength(contents));
+  assert.deepEqual(snapshot.workspaces, []);
+  assert.equal(snapshot.removedBytes, 0);
+
+  const other = path.join(directory, 'unknown.mp4');
+  await fs.writeFile(other, 'preserve this');
+  await temporary.cleanupStale();
+  const withUnknown = await reviewStorageCleanup(f.store, temporary);
+  assert.equal(withUnknown.workspaces.find(item => item.path === directory)?.status, 'unverified');
+  assert.equal(await fs.readFile(marker, 'utf8'), contents);
+  assert.equal(await fs.readFile(other, 'utf8'), 'preserve this');
+});
+
 test('临时文件按项重试，重启后保留同路径的替换文件和新增文件', async t => {
   const f = await fixture(t), before = f.manager();
   const directory = await before.create('bili-export-', 'old-cut');
